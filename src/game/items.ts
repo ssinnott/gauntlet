@@ -257,8 +257,8 @@ export function itemName(it: Item, fl: Flavors, opts: { article?: boolean; count
     case 'wand': base = aware ? `${mk('Wand')} of ${kn}` : `${flav} ${mk('Wand')}`; break;
     case 'staff': base = aware ? `${mk('Staff')} of ${kn}` : `${flav} ${mk('Staff')}`; break;
     case 'rod': base = aware ? `${mk('Rod')} of ${kn}` : `${flav} ${mk('Rod')}`; break;
-    case 'ring': base = aware ? `${mk('Ring')} of ${kn}` : `${flav} ${mk('Ring')}`; break;
-    case 'amulet': base = aware ? `${mk('Amulet')} of ${kn}` : `${flav} ${mk('Amulet')}`; break;
+    case 'ring': base = !k.flavored ? mk(k.name) : aware ? `${mk('Ring')} of ${kn}` : `${flav} ${mk('Ring')}`; break;
+    case 'amulet': base = !k.flavored ? mk(k.name) : aware ? `${mk('Amulet')} of ${kn}` : `${flav} ${mk('Amulet')}`; break;
     case 'food': base = k.flavored ? (aware ? `${mk('Mushroom')} of ${kn}` : `${flav} ${mk('Mushroom')}`) : mk(k.name); break;
     case 'magic_book': base = `${mk('Magic Book')} ${k.name}`; break;
     case 'prayer_book': base = `${mk('Holy Book')} ${k.name}`; break;
@@ -299,7 +299,7 @@ export function itemName(it: Item, fl: Flavors, opts: { article?: boolean; count
   if (k.tval === 'gold') return s;
   if (opts.count !== false) {
     if (n !== 1) s = `${n} ${s}`;
-    else if (opts.article !== false) s = (art ? 'the ' : /^[aeiou]/i.test(s) ? 'an ' : 'a ') + s;
+    else if (opts.article !== false && !/^the /i.test(s)) s = (art ? 'the ' : /^[aeiou]/i.test(s) ? 'an ' : 'a ') + s;
   }
   return capitalize(s);
 }
