@@ -591,6 +591,7 @@ const HELP = [
   'IGNORE (O): set how choosy you are per kind of gear and stop picking up junk. Nothing unknown is ignored; {=g} always picks up.',
   'TOUCH: tap anywhere on a phone for a thumb pad and command buttons; menus get a navigation bar.',
   'Before you dive: a lantern, flasks of oil, Cure Light Wounds, Phase Door, and rations.',
+  'AUTOPLAY (ctrl+A, or the option in =) hands the hero to a bot that shops, explores, fights and dives. Any key takes it back.',
 ];
 export class HelpOverlay implements Overlay {
   draw(ctx: CanvasRenderingContext2D): void {

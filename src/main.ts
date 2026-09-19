@@ -17,6 +17,7 @@ import { tileAt, itemsAt, monsterAt, auxAt } from './game/level.ts';
 import { SPELL_BY_ID } from './game/data/spells.ts';
 import { CLASS_BY_ID } from './game/data/classes.ts';
 import { refreshBonuses } from './game/effectsCore.ts';
+import { autoplayStep, resetAutoplay } from './game/autoplay.ts';
 import { Input, dirOfKey, type KeyEvent, type PointerEvent2 } from './ui/input.ts';
 import { TouchPad } from './ui/touch.ts';
 import { type SaveMeta, type SaveRecord, listSaves, readSave, writeSave, deleteSave, migrateLegacySave, newSlotId } from './ui/storage.ts';
@@ -55,6 +56,8 @@ class App implements Ui2 {
   ctx = this.canvasApi.ctx;
   started = false;
   lastSave = 0;
+  /** Paces the autoplay bot and gives it its housekeeping counter. */
+  autoStep = 0;
   /** Saved heroes, newest first. Cached so hasSave() can stay synchronous for the title screen. */
   slots: SaveMeta[] = [];
   notice = '';
@@ -208,6 +211,8 @@ class App implements Ui2 {
   private begin(): void {
     this.overlays.length = 0;
     this.started = true;
+    this.autoStep = 0;
+    resetAutoplay();
     this.scoreRecorded = false;
     this.saveErrorShown = false;
     if (this.currentSlot) this.deletedSlots.delete(this.currentSlot);
@@ -234,8 +239,9 @@ class App implements Ui2 {
       this.renderer.camX = g.player.x * 24 - MAP_W / 2; this.renderer.camY = g.player.y * 24 - MAP_H / 2;
       this.target = null;
     }
-    if (g.inStore >= 0 && !this.overlays.some(o => o instanceof StoreScreen)) this.push(new StoreScreen(g.inStore));
+    if (g.inStore >= 0 && !g.options.autoplay && !this.overlays.some(o => o instanceof StoreScreen)) this.push(new StoreScreen(g.inStore));
     this.renderer.hero = syncHero(this.renderer.hero!, g.player);
+    if (g.player.dead) g.options.autoplay = false;
     if (g.player.dead && !this.overlays.some(o => o instanceof DeathScreen)) {
       if (this.currentSlot) { const id = this.currentSlot; this.currentSlot = null; this.deleteSlot(id); }
       this.overlays.length = 0;
@@ -330,8 +336,18 @@ class App implements Ui2 {
     if (g.player.dead) { this.afterAction(); return; }
     // Continuous actions run on a timer so the player can watch (and interrupt with any key).
     if (keys.length && (g.running || g.resting || g.travel || g.repeating)) { g.running = null; g.resting = 0; g.travel = null; g.repeating = null; }
+    // Autoplay hands the hero back the moment the player touches anything (ctrl+A toggles instead).
+    if (g.options.autoplay && (clicks.some(c => c.kind === 'down') || keys.some(e => !(e.ctrl && e.key.toLowerCase() === 'a')))) this.stopAutoplay();
     for (const e of keys) this.handleKey(e);
     for (const c of taps) if (c.kind === 'down') this.handleClick(c.x, c.y, c.button);
+    if (g.options.autoplay) {
+      if (!this.renderer.busy() && this.frame % 6 === 0) { autoplayStep(g, this.autoStep++); this.afterAction(); }
+      this.renderer.hilite = g.travel ? g.travel.slice(0, 40) : [];
+      this.renderer.update(g);
+      this.pumpAudio();
+      if (this.frame - this.lastSave > 60 * 60) this.save();
+      return;
+    }
     if (!keys.length && !this.renderer.busy()) {
       const rep = this.input.repeat(now, this.input.keys.has('Shift'));
       if (rep && !g.running && !g.travel && !g.resting) this.handleKey(rep);
@@ -348,6 +364,13 @@ class App implements Ui2 {
     this.renderer.update(this.g);
     this.pumpAudio();
     if (this.frame - this.lastSave > 60 * 60) this.save();
+  }
+  stopAutoplay(): void {
+    const g = this.g;
+    if (!g.options.autoplay) return;
+    g.options.autoplay = false;
+    g.running = null; g.resting = 0; g.travel = null; g.repeating = null;
+    g.msg.add('You take back control.', '#ffd040');
   }
   private repeatStep(): void {
     const g = this.g, r = g.repeating!;
@@ -424,6 +447,7 @@ class App implements Ui2 {
         case 'l': this.push(new LocateMode({ x: p.x, y: p.y })); return;
         case 'e': this.exportSave(); return;
         case 'k': this.push(new KnowledgeOverlay()); return;
+        case 'a': g.options.autoplay = !g.options.autoplay; this.autoStep = 0; g.msg.add(g.options.autoplay ? 'The hero takes over. (any key to stop)' : 'You take back control.', '#ffd040'); return;
         case 'o': g.showIgnored = !g.showIgnored; g.msg.add(g.showIgnored ? 'You take another look at what you have been ignoring.' : 'You go back to ignoring the junk.'); return;
       }
       return;

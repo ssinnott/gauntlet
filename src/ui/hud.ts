@@ -100,6 +100,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: Game, frame: number): 
     bx += bw + 3;
   }
   y = by + 14;
+  if (g.options.autoplay) { drawText(ctx, 'AUTOPLAY (ANY KEY STOPS)', x, y, { size: 1, color: '#ffd040' }); y += 10; }
   if (p.searching) { drawText(ctx, 'SEARCHING', x, y, { size: 1, color: '#c0c0ff' }); y += 10; }
   if (g.resting) { drawText(ctx, 'RESTING', x, y, { size: 1, color: '#c0c0ff' }); y += 10; }
   if (newSpellCount(g) > 0) { drawText(ctx, 'STUDY! (G)', x, y, { size: 1, color: '#a0ffa0' }); y += 10; }

@@ -50,6 +50,12 @@ reveals what is being left behind.
 On a phone, touch anywhere: a thumb pad and three pages of command buttons appear, and the menus
 get a navigation bar. The `touchControls` option forces them on with a mouse.
 
+`ctrl+A` (or the **Autoplay** game option under `=`) hands the hero to a bot: it shops for rations,
+Cure Light Wounds and Phase Door, walks into the dungeon, explores what it has not seen, throws oil
+and fires arrows at what comes, rests when it is safe, drinks when it is not, and takes the stairs
+down once it knows where they are. It plays with the same commands you have and knows only what you
+know -- no revealed map, no free healing -- so it dies like anyone else. Any key takes control back.
+
 Birth offers rolled or point-bought stats, a short history, and the birth options: connected
 stairs, ironman, no selling, smart monsters, persistent levels and random artifacts. Persistent
 levels do not sit still while you are away -- things wander, things arrive, and the generators keep
@@ -90,6 +96,7 @@ src/game/                pure game logic: no DOM anywhere below here
   save.ts                JSON save/restore
   lore.ts                monster memory; recall.ts writes it up; dump.ts the character dump
   options.ts             birth and game options; scores.ts the Hall of Heroes
+  autoplay.ts            the bot behind the Autoplay option (shared with the headless simulator)
   gen/vaults.ts          hand-drawn lesser and greater vaults in Angband's vault.txt glyphs
   data/                  monsters (510), objects (430 kinds, 112 egos, 121 artifacts), spells (176 in four realms), races, classes
 src/ui/                  everything that draws, and everything that touches the browser
@@ -103,7 +110,7 @@ src/ui/                  everything that draws, and everything that touches the 
   screens.ts             menus, prompts, inventory, stores, spells, character sheet, map, help
   screens2.ts            knowledge browser, recall, options, high scores, locate, the birth screen
 src/lib/                 the vendored engine (do not edit here; fix upstream and subtree pull)
-tools/                   dev server, bundler, headless simulator, browser smoke test
+tools/                   dev server, bundler, headless simulator (fuzz + autoplay), browser smoke test
 ```
 
 ## Checks

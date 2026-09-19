@@ -26,6 +26,7 @@ import type { Item } from '../src/game/types.ts';
 import { characterDump } from '../src/game/dump.ts';
 import { describeRace } from '../src/game/recall.ts';
 import { bashDoor, jamDoor, disarm, passTurn } from '../src/game/commands.ts';
+import { autoplayStep } from '../src/game/autoplay.ts';
 import { createMonster } from '../src/game/monster.ts';
 
 const SEEDS = Number(process.argv[2] || 6);
@@ -452,6 +453,38 @@ for (let seed = 1; seed <= SEEDS; seed++) {
 console.log(`play: ${SEEDS} runs, ${deaths} deaths, deepest ${maxDepth}, ${totalKills} kills`);
 ok(totalKills > 0, 'nobody killed anything');
 ok(maxDepth > 0, 'nobody entered the dungeon');
+// 3. Autoplay: the bot the `=` menu (and ctrl+A) turns on, playing honestly with no cheats.
+{
+  let botDeaths = 0, botDepth = 0, botKills = 0, botGold = 0;
+  const runs = Math.max(2, Math.min(SEEDS, 4));
+  for (let seed = 1; seed <= runs; seed++) {
+    const cls = CLASSES[(seed * 5) % CLASSES.length], race = RACES[(seed * 2) % RACES.length];
+    let g: Game;
+    try { g = createGame('Bot' + seed, race.id, cls.id, seed % 2 ? 'female' : 'male', seed * 104729); }
+    catch (e) { failures++; console.log(`  FAIL: autoplay createGame seed ${seed}: ${(e as Error).stack}`); continue; }
+    let step = 0;
+    try {
+      for (step = 0; step < TURNS && !g.player.dead; step++) {
+        autoplayStep(g, step);
+        if (g.levelChange) enterLevel(g, g.levelChange.depth, g.levelChange.by);
+        if (step % 25 === 0) check(g, `autoplay seed ${seed} step ${step}`);
+      }
+    } catch (e) {
+      failures++;
+      console.log(`  FAIL: autoplay seed ${seed} (${cls.id}) crashed at step ${step} depth ${g.level.depth}: ${(e as Error).stack}`);
+      continue;
+    }
+    if (g.player.dead) botDeaths++;
+    botDepth = Math.max(botDepth, g.player.maxDepth);
+    botKills += g.player.kills;
+    botGold += g.player.gold;
+    console.log(`  bot ${seed}: ${race.name} ${cls.name} lv ${g.player.lev}, depth ${g.level.depth} (max ${g.player.maxDepth}), ${g.player.kills} kills, ${g.player.gold} gold, ${g.player.dead ? 'died: ' + g.player.deathCause : 'alive'}`);
+  }
+  console.log(`autoplay: ${runs} runs, ${botDeaths} deaths, deepest ${botDepth}, ${botKills} kills, ${botGold} gold in hand`);
+  ok(botDepth > 0, 'autoplay never found the way into the dungeon');
+  ok(botKills > 0, 'autoplay never killed anything');
+}
+
 const unused = itemName;
 void unused;
 console.log(failures ? `\nSIM FAILED (${failures})` : '\nSIM OK');

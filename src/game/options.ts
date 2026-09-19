@@ -35,10 +35,12 @@ export interface Options {
   touchControls: boolean;
   /** Honour the ignore settings: ignored items are not picked up and not drawn. */
   ignoreItems: boolean;
+  /** The bot plays the hero: it fights, explores, shops and dives on its own. */
+  autoplay: boolean;
 }
-export const DEFAULT_OPTIONS: Options = { connectedStairs: true, ironman: false, noSelling: false, smartMonsters: false, persistentLevels: false, randarts: false, autoPickup: true, damageNumbers: true, disturbNear: true, confirmUnknown: false, confirmTraps: true, verboseLore: false, sound: true, voice: true, touchControls: false, ignoreItems: true };
+export const DEFAULT_OPTIONS: Options = { connectedStairs: true, ironman: false, noSelling: false, smartMonsters: false, persistentLevels: false, randarts: false, autoPickup: true, damageNumbers: true, disturbNear: true, confirmUnknown: false, confirmTraps: true, verboseLore: false, sound: true, voice: true, touchControls: false, ignoreItems: true, autoplay: false };
 export const BIRTH_OPTIONS: (keyof Options)[] = ['connectedStairs', 'ironman', 'noSelling', 'smartMonsters', 'persistentLevels', 'randarts'];
-export const GAME_OPTIONS: (keyof Options)[] = ['autoPickup', 'damageNumbers', 'disturbNear', 'confirmUnknown', 'confirmTraps', 'verboseLore', 'sound', 'voice', 'touchControls', 'ignoreItems'];
+export const GAME_OPTIONS: (keyof Options)[] = ['autoPickup', 'damageNumbers', 'disturbNear', 'confirmUnknown', 'confirmTraps', 'verboseLore', 'sound', 'voice', 'touchControls', 'ignoreItems', 'autoplay'];
 export const OPTION_TEXT: Record<keyof Options, [string, string]> = {
   connectedStairs: ['Connected stairs', 'Arrive on a staircase of the kind you took'],
   ironman: ['Ironman', 'No up staircases and no recall to town; the only way is down'],
@@ -51,6 +53,7 @@ export const OPTION_TEXT: Record<keyof Options, [string, string]> = {
   disturbNear: ['Disturb on sight', 'Stop running and resting when a monster appears'],
   confirmUnknown: ['Confirm unknown items', 'Ask before quaffing or reading something unidentified'],
   confirmTraps: ['Confirm traps', 'Ask before stepping onto a visible trap'],
+  autoplay: ['Autoplay', 'Let the bot play your hero; any key takes back control (ctrl+A)'],
   verboseLore: ['Verbose lore', 'Show a monster\'s description the first time you meet it'],
   sound: ['Sound', 'Arcade sound effects'],
   voice: ['Narrator', 'The arcade voice announces what befalls you'],
