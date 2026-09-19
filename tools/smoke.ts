@@ -67,9 +67,29 @@ await page.waitForTimeout(300);
 await page.screenshot({ path: path.join(OUT, 'smoke-inventory.png') });
 await page.evaluate(() => (window as any).__game.api.key('Escape'));
 
+// Knowledge browser, options and the character sheet render; the birth screen shows its stat step.
+await page.evaluate(() => (window as any).__game.api.key('~'));
+await page.waitForTimeout(200);
+await page.screenshot({ path: path.join(OUT, 'smoke-knowledge.png') });
+const knowledgeColours = await colours();
+await page.evaluate(() => { const api = (window as any).__game.api; api.key('Escape'); api.key('='); });
+await page.waitForTimeout(200);
+await page.screenshot({ path: path.join(OUT, 'smoke-options.png') });
+await page.evaluate(() => { const api = (window as any).__game.api; api.key('Escape'); api.key('C'); });
+await page.waitForTimeout(200);
+await page.screenshot({ path: path.join(OUT, 'smoke-charsheet.png') });
+await page.evaluate(() => (window as any).__game.api.key('Escape'));
+const dumpLen = await page.evaluate(() => (window as any).__game.api.dump().length);
+
 // Save round trip through localStorage.
 await page.evaluate(() => (window as any).__game.api.key('s', false, true));
 const hasSave = await page.evaluate(() => !!localStorage.getItem('gauntlet-of-angband.save.v1'));
+const hasLore = await page.evaluate(() => !!localStorage.getItem('gauntlet-of-angband.lore.v1'));
+
+// A second hero made through the full birth API with point-bought stats and birth options.
+await page.evaluate(() => (window as any).__game.api.newGame2('Smoke2', 'ent', 'necromancer', 'female', { stats: { STR: 12, INT: 17, WIS: 10, DEX: 10, CON: 12, CHR: 10 }, options: { ironman: true, smartMonsters: true }, history: 'Grown in a test.' }));
+await page.waitForTimeout(300);
+const state3 = await page.evaluate(() => { const g = (window as any).__game.api.game; return { cls: g.player.cls, ironman: g.options.ironman, int: g.player.statBase.INT, hp: g.player.chp }; });
 
 await browser.close();
 server.close();
@@ -83,5 +103,9 @@ ok(state1.depth === 0 && state1.hp > 0, `character created in town at ${state1.x
 ok(state2.depth === 1, `descended to dungeon level ${state2.depth} (${state2.monsters} monsters, ${state2.items} objects, turn ${state2.turn})`);
 ok(dungeonColours > 30, `dungeon drew (${dungeonColours} colours)`);
 ok(hasSave, 'ctrl+S wrote a save to localStorage');
+ok(hasLore, 'monster memory persisted to localStorage');
+ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);
+ok(dumpLen > 200, `character dump has ${dumpLen} characters`);
+ok(state3.cls === 'necromancer' && state3.ironman === true && state3.int >= 17 && state3.hp > 0, `birth with point-buy and birth options works (${JSON.stringify(state3)})`);
 console.log(bad ? '\nSMOKE FAILED' : '\nSMOKE OK: the game runs in a browser with no build step. Screenshots in dist/.');
 process.exit(bad ? 1 : 0);

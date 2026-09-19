@@ -1,13 +1,14 @@
 // The effect executor: everything a potion, scroll, wand, staff, rod, spell, mushroom or
 // activation can do. Returns whether the effect was noticeable (which identifies the item).
 import { type Effect, type Pos, type Stat, type Item, type Timed, type Element, T, F, DIR_DX, DIR_DY, STATS, TRAP_KINDS, isWall } from './types.ts';
-import { tileAt, setTile, addFlag, hasFlag, inBounds, isCleanFloor, monsterAt, updateView, playerCanSee, setAux, itemsAt } from './level.ts';
+import { tileAt, setTile, addFlag, hasFlag, inBounds, isCleanFloor, monsterAt, updateView, playerCanSee, setAux, itemsAt, projectPath } from './level.ts';
+import { MONSTER_BY_ID as MONSTER_BY_ID_E } from './data/monsters.ts';
 import { raceOf, hasMFlag, monsterName, removeMonster, createMonster, nearFloor, pickRace } from './monster.ts';
 import { project, targetFromDir, nearestVisibleMonster } from './projection.ts';
 import { monsterTakeHit, takeHit, gainExp, loseExp } from './combat.ts';
 import { setTimed, refreshBonuses, teleportPlayer, movePlayerTo } from './effectsCore.ts';
 import { restoreStat, gainStat, drainStat } from './player.ts';
-import { kindOf, itemFlags, isWeapon, isArmor, isAmmo, identify, itemName, makeObject, isKnown, makeItem } from './items.ts';
+import { kindOf, itemFlags, isWeapon, isArmor, isAmmo, identify, itemName, makeObject, isKnown, makeItem, isWearable } from './items.ts';
 import { damroll, randint0, randint1, oneIn, distance } from './util.ts';
 import { lightArea, dropNear, disturb } from './world.ts';
 import { FOOD_MAX, FOOD_FULL } from '../constants.ts';
@@ -22,6 +23,10 @@ export interface EffectCtx {
   chosen?: Item;
   /** Damage multiplier for level-scaled bolts (player level / 5 for magic missile, etc). */
   power?: number;
+  /** Race chosen for Banishment (the UI prompts); the nearest visible monster's race otherwise. */
+  race?: string;
+  /** Word of Recall: the player agreed to reset the recall depth to the current one. */
+  resetRecall?: boolean;
 }
 
 /** Does this effect ask for a direction? */
@@ -29,7 +34,7 @@ export function needsDir(e: Effect): boolean {
   switch (e.kind) {
     case 'seq': return e.effects.some(needsDir);
     case 'bolt': case 'ball': case 'breath': case 'light_line': case 'stone_to_mud': case 'sleep_monster': case 'slow_monster': case 'confuse_monster': case 'scare_monster':
-    case 'haste_monster': case 'heal_monster': case 'clone_monster': case 'polymorph': case 'teleport_other': case 'drain_life': case 'door_destruction': case 'trap_destruction': case 'wonder': return e.kind !== 'door_destruction' && e.kind !== 'trap_destruction';
+    case 'haste_monster': case 'heal_monster': case 'clone_monster': case 'polymorph': case 'teleport_other': case 'drain_life': case 'vampiric': case 'crush': case 'unbar': case 'wonder': return true;
     default: return false;
   }
 }
@@ -93,7 +98,9 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
     }
     case 'recall': {
       if (p.timed.recall) { setTimed(g, 'recall', 0); return true; }
+      if (g.options.ironman) { g.msg.add('Nothing happens: there is no way back for you.'); return true; }
       if (lv.depth === 0 && p.maxDepth === 0) { g.msg.add('Nothing happens: you have never been below the town.'); return false; }
+      if (ctx.resetRecall && lv.depth > 0) { p.maxDepth = lv.depth; g.msg.add(`Your recall depth is now ${lv.depth * 50} ft.`); }
       if (lv.depth > 0) p.recallDepth = 0; else p.recallDepth = Math.max(1, p.maxDepth);
       setTimed(g, 'recall', 15 + randint1(20)); return true;
     }
@@ -113,6 +120,16 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
             m.detected = true; m.visible = true; any = true;
           }
           if (any) g.msg.add(w === 'evil' ? 'You sense the presence of evil creatures!' : w === 'invisible' ? 'You sense the presence of invisible creatures!' : 'You sense the presence of monsters!');
+        }
+        if (w === 'living') {
+          let n = 0;
+          for (const m of lv.monsters) { if (!inRange(m.x, m.y)) continue; const r = raceOf(m); if (hasMFlag(r, 'UNDEAD') || hasMFlag(r, 'DEMON') || r.sprite === 'golem' || r.sprite === 'vortex' || r.sprite === 'elemental' || hasMFlag(r, 'GENERATOR')) continue; m.detected = true; m.visible = true; n++; }
+          if (n) { g.msg.add('You sense the presence of living creatures!'); any = true; }
+        }
+        if (w === 'enchanted') {
+          let n = 0;
+          for (const fi of lv.items) { if (!inRange(fi.x, fi.y)) continue; const it = fi.item; if (it.artifact || it.ego || it.toHit > 0 || it.toDam > 0 || it.toAc > 0 || it.pval > 0 && isWearable(kindOf(it))) { addFlag(lv, fi.x, fi.y, F.MARK); n++; } }
+          if (n) { g.msg.add('You sense the presence of magic objects!'); any = true; }
         }
         if (w === 'objects' || w === 'gold' || w === 'all') {
           let n = 0;
@@ -169,10 +186,10 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
       refreshBonuses(g);
       return true;
     }
-    case 'identify': { const it = ctx.chosen; if (!it) return false; identify(it, g.flavors); g.msg.add(`You have ${itemName(it, g.flavors)}.`); refreshBonuses(g); return true; }
+    case 'identify': { const it = ctx.chosen; if (!it) return false; identify(it, g.flavors); noteItemKnown(g, it); g.msg.add(`You have ${itemName(it, g.flavors)}.`); refreshBonuses(g); return true; }
     case 'remove_curse': {
       let any = false;
-      for (const s of Object.keys(p.equip) as (keyof typeof p.equip)[]) { const it = p.equip[s]; if (!it || !it.cursed) continue; if (itemFlags(it).has('HEAVY_CURSE') && !e.heavy) continue; it.cursed = false; it.flags = it.flags.filter(f => f !== 'CURSED' && f !== 'HEAVY_CURSE'); any = true; }
+      for (const s of Object.keys(p.equip) as (keyof typeof p.equip)[]) { const it = p.equip[s]; if (!it || !it.cursed) continue; if (itemFlags(it).has('PERMA_CURSE')) continue; if (itemFlags(it).has('HEAVY_CURSE') && !e.heavy) continue; it.cursed = false; it.flags = it.flags.filter(f => f !== 'CURSED' && f !== 'HEAVY_CURSE'); any = true; }
       if (any) g.msg.add('You feel as if someone is watching over you.', '#a0ffa0');
       return any;
     }
@@ -203,6 +220,33 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
       return project(g, p.x, p.y, t.x, t.y, 'missile', { dam: kind === 'teleport_other' ? 100 : kind === 'heal' ? 40 : p.lev * 2 + 10, source: 'player', kind });
     }
     case 'drain_life': { const t = tgt(); return project(g, p.x, p.y, t.x, t.y, 'nether', { dam: e.dam, source: 'player', kind: 'drain' }); }
+    case 'vampiric': {
+      const t = tgt();
+      const before = p.chp;
+      const path = projectPathTo(g, t);
+      const m = path ? monsterAt(lv, path.x, path.y) : null;
+      if (!m) { g.msg.add('You draw on nothing.'); return false; }
+      const r = raceOf(m);
+      if (hasMFlag(r, 'UNDEAD') || hasMFlag(r, 'DEMON') || r.sprite === 'golem' || r.sprite === 'vortex' || r.sprite === 'elemental' || hasMFlag(r, 'GENERATOR')) { g.msg.add(`${monsterName(m)} is unaffected!`); return true; }
+      const dam = Math.min(e.dam, m.hp);
+      g.msg.add(`You draw the life from ${monsterName(m, false)}!`, '#ff80ff');
+      monsterTakeHit(g, m, dam, '');
+      p.chp = Math.min(p.mhp, p.chp + dam);
+      if (p.chp > before) g.msg.add('You feel better.', '#a0ffa0');
+      return true;
+    }
+    case 'crush': {
+      const t = tgt();
+      const path = projectPathTo(g, t);
+      const m = path ? monsterAt(lv, path.x, path.y) : null;
+      if (!m) { g.msg.add('There is nothing there to crush.'); return false; }
+      if (hasMFlag(raceOf(m), 'UNIQUE') || m.hp > p.lev * e.mult) { g.msg.add(`${monsterName(m)} resists your grip.`); return true; }
+      g.msg.add(`You crush ${monsterName(m, false)}!`, '#ff80ff');
+      monsterTakeHit(g, m, m.hp, 'is crushed');
+      return true;
+    }
+    case 'dispel_curse': return runEffect(g, { kind: 'remove_curse', heavy: true }, ctx);
+    case 'unbar': { const t = tgt(); return project(g, p.x, p.y, t.x, t.y, 'missile', { dam: 0, source: 'player', kind: 'kill_door', beam: true, range: 20 }); }
     case 'dispel': {
       let any = false;
       for (const m of lv.monsters.slice()) {
@@ -218,40 +262,41 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
     }
     case 'turn_undead': { let any = false; for (const m of lv.monsters) { if (!m.visible || !hasMFlag(raceOf(m), 'UNDEAD')) continue; if (raceOf(m).depth > randint1(p.lev * 3)) continue; m.afraid = 10 + randint1(20); g.msg.add(`${monsterName(m)} flees in terror!`); any = true; } return any; }
     case 'banish': {
-      // Banish every monster of the race of the nearest visible one (a stand-in for the symbol prompt).
-      const m = nearestVisibleMonster(g);
-      if (!m) { g.msg.add('There is nothing to banish.'); return false; }
-      const race = m.race;
+      // Banish every monster of the chosen race (the UI asks; the nearest visible monster's race otherwise).
+      let race = ctx.race;
+      if (!race) { const m = nearestVisibleMonster(g); if (!m) { g.msg.add('There is nothing to banish.'); return false; } race = m.race; }
       let n = 0;
-      for (const o of lv.monsters.slice()) if (o.race === race && !hasMFlag(raceOf(o), 'UNIQUE')) { removeMonster(g, o); n++; takeHit(g, randint1(4), 'the strain of casting Banishment'); }
-      g.msg.add(n ? `Every ${raceOf(m).name} on the level vanishes!` : 'Nothing happens.');
+      for (const o of lv.monsters.slice()) if (o.race === race && !hasMFlag(raceOf(o), 'UNIQUE') && !hasMFlag(raceOf(o), 'QUESTOR')) { removeMonster(g, o); n++; takeHit(g, randint1(4), 'the strain of casting Banishment'); }
+      const rname = MONSTER_BY_ID_E[race]?.name || 'monster';
+      g.msg.add(n ? `Every ${rname} on the level vanishes!` : 'Nothing happens.');
       return n > 0;
     }
-    case 'mass_banish': { let n = 0; for (const o of lv.monsters.slice()) if (distance(p.x, p.y, o.x, o.y) <= 20 && !hasMFlag(raceOf(o), 'UNIQUE')) { removeMonster(g, o); n++; takeHit(g, randint1(3), 'the strain of casting Mass Banishment'); } g.msg.add(n ? 'The monsters around you vanish!' : 'Nothing happens.'); return n > 0; }
-    case 'destruction': case 'earthquake': {
-      const R = e.kind === 'destruction' ? 15 : 8;
+    case 'mass_banish': { let n = 0; for (const o of lv.monsters.slice()) if (distance(p.x, p.y, o.x, o.y) <= 20 && !hasMFlag(raceOf(o), 'UNIQUE') && !hasMFlag(raceOf(o), 'QUESTOR')) { removeMonster(g, o); n++; takeHit(g, randint1(3), 'the strain of casting Mass Banishment'); } g.msg.add(n ? 'The monsters around you vanish!' : 'Nothing happens.'); return n > 0; }
+    case 'destruction': {
+      if (lv.depth === 0) { g.msg.add('The ground trembles, but the town stands.'); return false; }
+      const R = 15;
       for (let y = p.y - R; y <= p.y + R; y++) for (let x = p.x - R; x <= p.x + R; x++) {
         if (!inBounds(lv, x, y) || (x === p.x && y === p.y) || distance(p.x, p.y, x, y) > R) continue;
-        if (hasFlag(lv, x, y, F.VAULT) || tileAt(lv, x, y) === T.PERM || lv.depth === 0) continue;
-        if (e.kind === 'earthquake' && !oneIn(3)) continue;
+        if (hasFlag(lv, x, y, F.VAULT) || tileAt(lv, x, y) === T.PERM) continue;
         const m = monsterAt(lv, x, y);
-        if (m) { if (e.kind === 'destruction' && !hasMFlag(raceOf(m), 'UNIQUE')) removeMonster(g, m); else if (e.kind === 'earthquake') { monsterTakeHit(g, m, damroll(4, 8), 'is crushed', true); continue; } else continue; }
-        for (const fi of itemsAt(lv, x, y)) lv.items.splice(lv.items.indexOf(fi), 1);
+        if (m) { if (!hasMFlag(raceOf(m), 'UNIQUE') && !hasMFlag(raceOf(m), 'QUESTOR')) removeMonster(g, m); else continue; }
+        for (const fi of itemsAt(lv, x, y)) if (!fi.item.artifact) lv.items.splice(lv.items.indexOf(fi), 1);
         const r = randint0(100);
         setTile(lv, x, y, r < 20 ? T.GRANITE : r < 50 ? T.QUARTZ : r < 70 ? T.MAGMA : T.FLOOR);
-        lv.flags[y * lv.w + x] &= ~(F.MARK | F.GLOW | F.ROOM);
+        lv.flags[y * lv.w + x] &= ~(F.MARK | F.GLOW | F.ROOM | F.GLYPH);
       }
-      g.msg.add(e.kind === 'destruction' ? 'There is a searing blast of light!' : 'The ground shakes violently!', '#ffd040');
+      g.msg.add('There is a searing blast of light!', '#ffd040');
       g.fx.push({ type: 'shake', amount: 10 });
-      if (e.kind === 'destruction' && !b.flags.has('RES_BLIND') && !b.flags.has('RES_LITE')) setTimed(g, 'blind', p.timed.blind + 10 + randint1(10));
+      if (!b.flags.has('RES_BLIND') && !b.flags.has('RES_LITE')) setTimed(g, 'blind', p.timed.blind + 10 + randint1(10));
       g.flowDirty = true;
       updateView(lv, p.x, p.y, b.lightRadius, p.timed.blind > 0);
       return true;
     }
+    case 'earthquake': { if (lv.depth === 0) { g.msg.add('The ground trembles, but the town stands.'); return false; } g.msg.add('The ground shakes violently!', '#ffd040'); earthquakeAt(g, p.x, p.y, 8); return true; }
     case 'summon': {
       let n = 0;
       for (let i = 0; i < e.count; i++) {
-        const pos = nearFloor(lv, p.x, p.y, 3); if (!pos) continue;
+        const pos = nearFloor(lv, p.x, p.y, 3, p); if (!pos || hasFlag(lv, pos.x, pos.y, F.GLYPH)) continue;
         const race = pickRace(g, lv.depth + 1, r => e.what === 'undead' ? hasMFlag(r, 'UNDEAD') : e.what === 'animal' ? hasMFlag(r, 'ANIMAL') : !hasMFlag(r, 'UNIQUE'));
         if (race) { createMonster(g, race.id, pos.x, pos.y, false); n++; }
       }
@@ -271,7 +316,7 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
     case 'create_doors': { let n = 0; for (let d = 1; d <= 9; d++) { if (d === 5) continue; const x = p.x + DIR_DX[d], y = p.y + DIR_DY[d]; if (isCleanFloor(lv, x, y)) { setTile(lv, x, y, T.DOOR_CLOSED); addFlag(lv, x, y, F.MARK); n++; } } g.flowDirty = true; return n > 0; }
     case 'create_stairs': { if (lv.depth === 0 || hasFlag(lv, p.x, p.y, F.VAULT) || tileAt(lv, p.x, p.y) !== T.FLOOR) { g.msg.add('The floor here is unsuitable.'); return false; } setTile(lv, p.x, p.y, oneIn(2) ? T.STAIRS_DOWN : T.STAIRS_UP); g.msg.add('A staircase appears under you!'); return true; }
     case 'acquirement': { for (let i = 0; i < e.count; i++) { const it = makeObject(lv.depth + 10, true, true); if (it) dropNear(g, it, p.x, p.y); } g.msg.add('Something wonderful appears at your feet!', '#ffd040'); return true; }
-    case 'glyph': { if (tileAt(lv, p.x, p.y) !== T.FLOOR) { g.msg.add('The floor here cannot hold a glyph.'); return false; } addFlag(lv, p.x, p.y, F.TEMP); g.msg.add('You inscribe a glyph of warding.'); return true; }
+    case 'glyph': { if (tileAt(lv, p.x, p.y) !== T.FLOOR || itemsAt(lv, p.x, p.y).length) { g.msg.add('The floor here cannot hold a glyph.'); return false; } if (hasFlag(lv, p.x, p.y, F.GLYPH)) { g.msg.add('There is already a glyph here.'); return false; } addFlag(lv, p.x, p.y, F.GLYPH | F.MARK); g.msg.add('You inscribe a glyph of warding.', '#a0ffa0'); return true; }
     case 'brand_weapon': { const it = p.equip.weapon; if (!it || it.artifact || it.ego) { g.msg.add('The branding failed.'); return false; } it.flags.push(e.brand); it.ego = undefined; g.msg.add(`Your ${itemName(it, g.flavors, { article: false, plainKind: true })} gleams with ${e.brand === 'BRAND_FIRE' ? 'fire' : e.brand === 'BRAND_COLD' ? 'frost' : e.brand === 'BRAND_POIS' ? 'venom' : e.brand === 'BRAND_ELEC' ? 'lightning' : 'acid'}!`, '#a0ffa0'); return true; }
     case 'brand_ammo': { const it = ctx.chosen; if (!it || !isAmmo(kindOf(it)) || it.ego) { g.msg.add('The branding failed.'); return false; } it.flags.push(e.brand); it.known = true; g.msg.add(`Your ${itemName(it, g.flavors, { article: false, count: false })} are branded!`, '#a0ffa0'); return true; }
     case 'wonder': { const r = randint0(5); const effs: Effect[] = [{ kind: 'bolt', element: 'fire', dice: [9, 8] }, { kind: 'ball', element: 'cold', dam: 60, radius: 2 }, { kind: 'teleport_other' }, { kind: 'light_line', dice: [6, 8] }, { kind: 'summon', count: 1 }]; return runEffect(g, effs[r], ctx); }
@@ -279,6 +324,37 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
     case 'damage_self': takeHit(g, damroll(e.dice[0], e.dice[1]), e.text); g.msg.add(e.text, '#ff8080'); return true;
     case 'probe': { let any = false; for (const m of lv.monsters) if (m.visible) { const r = raceOf(m); g.msg.add(`${monsterName(m)}: ${m.hp}/${m.maxhp} hp, AC ${r.ac}, speed ${r.speed >= 0 ? '+' : ''}${r.speed}, ${r.flags.filter(f => f.startsWith('IM_')).map(f => f.slice(3).toLowerCase()).join(' ') || 'no'} immunities.`); any = true; } return any; }
   }
+}
+/** An earthquake centred on (cx, cy): a third of the grids in the radius turn to rock or floor; monsters caught are crushed, the player may be hurt. */
+export function earthquakeAt(g: Game, cx: number, cy: number, R: number): void {
+  const lv = g.level, p = g.player, b = g.bonuses;
+  if (lv.depth === 0) return;
+  for (let y = cy - R; y <= cy + R; y++) for (let x = cx - R; x <= cx + R; x++) {
+    if (!inBounds(lv, x, y) || distance(cx, cy, x, y) > R || !oneIn(3)) continue;
+    if (hasFlag(lv, x, y, F.VAULT) || tileAt(lv, x, y) === T.PERM) continue;
+    if (x === p.x && y === p.y) { if (!b.flags.has('FEATHER') && oneIn(2)) { g.msg.add('You are pummeled by falling rock!', '#ff8080'); takeHit(g, damroll(3, 8), 'an earthquake'); } continue; }
+    const m = monsterAt(lv, x, y);
+    if (m) { if (hasMFlag(raceOf(m), 'PASS_WALL') || hasMFlag(raceOf(m), 'KILL_WALL')) continue; if (m.visible) g.msg.add(`${monsterName(m)} is crushed by falling rock!`); monsterTakeHit(g, m, damroll(4, 8), 'is crushed', true); if (lv.monsters.includes(m)) continue; }
+    for (const fi of itemsAt(lv, x, y)) if (!fi.item.artifact) lv.items.splice(lv.items.indexOf(fi), 1);
+    const r = randint0(100);
+    setTile(lv, x, y, r < 20 ? T.GRANITE : r < 50 ? T.QUARTZ : r < 70 ? T.MAGMA : T.FLOOR);
+    lv.flags[y * lv.w + x] &= ~(F.MARK | F.GLOW | F.ROOM | F.GLYPH);
+  }
+  g.fx.push({ type: 'shake', amount: 10 });
+  g.flowDirty = true;
+  updateView(lv, p.x, p.y, b.lightRadius, p.timed.blind > 0);
+}
+/** The first grid a bolt would reach toward `t` that holds a monster, or null. */
+function projectPathTo(g: Game, t: Pos): Pos | null {
+  const p = g.player;
+  const path = projectPath(g.level, p.x, p.y, t.x, t.y, 20, true);
+  for (const q of path) { if (monsterAt(g.level, q.x, q.y)) return q; if (isWall(tileAt(g.level, q.x, q.y))) break; }
+  return null;
+}
+/** Remember identified artifacts and egos so they are recognised later. */
+export function noteItemKnown(g: Game, it: Item): void {
+  if (it.artifact && !g.artifactsSeen.includes(it.artifact)) g.artifactsSeen.push(it.artifact);
+  if (it.ego && !g.egosKnown.includes(it.ego)) g.egosKnown.push(it.ego);
 }
 const ENCHANT_TABLE = [0, 10, 50, 100, 200, 300, 400, 500, 650, 800, 950, 987, 993, 995, 998, 1000];
 const STAT_LOW: Record<Stat, string> = { STR: 'weak', INT: 'stupid', WIS: 'naive', DEX: 'clumsy', CON: 'sickly', CHR: 'ugly' };

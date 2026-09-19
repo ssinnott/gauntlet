@@ -77,7 +77,7 @@ export function makeItem(kindId: string, number = 1): Item {
   if ((k.flags || []).includes('CURSED')) it.cursed = true;
   if (k.tval === 'chest') it.pval = Math.max(1, k.pval || 1);
   // Simple kinds are known on sight.
-  if (!k.flavored && ['food', 'flask', 'spike', 'key', 'gold', 'junk', 'magic_book', 'prayer_book', 'chest', 'shot', 'arrow', 'bolt', 'light', 'digger'].includes(k.tval) && !k.charges) it.known = !['shot', 'arrow', 'bolt', 'digger'].includes(k.tval);
+  if (!k.flavored && ['food', 'flask', 'spike', 'key', 'gold', 'junk', 'magic_book', 'prayer_book', 'nature_book', 'necro_book', 'shot', 'arrow', 'bolt', 'light', 'digger'].includes(k.tval) && !k.charges) it.known = !['shot', 'arrow', 'bolt', 'digger'].includes(k.tval);
   return it;
 }
 
@@ -146,7 +146,12 @@ export function applyMagic(it: Item, level: number, good: boolean, great: boolea
     if (k.id === 'torch') it.timeout = Math.max(500, (k.recharge || 5000) - randint0(2000));
     if (k.id === 'lantern') it.timeout = Math.max(1000, (k.recharge || 15000) - randint0(7500));
   } else if (k.tval === 'chest') {
+    // Chest level sets the lock and the trap (Angband's chest_traps table by level).
     it.pval = Math.max(1, Math.min(55, Math.floor(level / 2) + randint1(4)));
+    it.toHit = oneIn(4) ? 0 : 1;
+    const lv = it.pval;
+    const r = randint0(100);
+    it.toDam = lv < 5 ? (r < 60 ? 0 : 1) : lv < 15 ? (r < 40 ? 0 : r < 60 ? 1 : r < 80 ? 2 : 3) : lv < 30 ? (r < 30 ? 0 : r < 45 ? 4 : r < 60 ? 5 : r < 75 ? 2 : r < 90 ? 3 : 6) : (r < 20 ? 0 : r < 35 ? 7 : r < 50 ? 8 : r < 65 ? 6 : r < 80 ? 4 : 5);
   }
   if (it.cursed) it.flags.push('CURSED');
 }
@@ -192,7 +197,7 @@ export function makeArtifact(it: Item, a: ArtifactKind): void {
 export function makeObject(level: number, good: boolean, great: boolean): Item | null {
   let lev = level;
   if (oneIn(10)) lev = Math.min(100, lev + Math.floor(lev / 4) + randint1(10));
-  const cands = OBJECTS.filter(k => k.tval !== 'gold' && k.tval !== 'junk' && k.level <= lev && (!good || isWeapon(k) || isArmor(k) || k.tval === 'bow' || k.tval === 'ring' || k.tval === 'amulet' || k.tval === 'light' || k.tval === 'magic_book' || k.tval === 'prayer_book' || (k.tval === 'potion' && k.level >= 20) || (k.tval === 'scroll' && k.level >= 20)));
+  const cands = OBJECTS.filter(k => k.tval !== 'gold' && k.tval !== 'junk' && k.level <= lev && (!good || isWeapon(k) || isArmor(k) || k.tval === 'bow' || k.tval === 'ring' || k.tval === 'amulet' || k.tval === 'light' || k.tval === 'magic_book' || k.tval === 'prayer_book' || k.tval === 'nature_book' || k.tval === 'necro_book' || (k.tval === 'potion' && k.level >= 20) || (k.tval === 'scroll' && k.level >= 20)));
   const k = weightedPick(cands, c => 100 / c.rarity * (c.level >= lev - 10 ? 1.5 : 1));
   if (!k) return null;
   const it = makeItem(k.id, 1);
@@ -206,13 +211,14 @@ export function makeObject(level: number, good: boolean, great: boolean): Item |
   return it;
 }
 
-export function makeGold(level: number): Item {
+export function makeGold(level: number, noSelling = false): Item {
   const golds = OBJECTS.filter(k => k.tval === 'gold').sort((a, b) => a.cost - b.cost);
   let i = Math.min(golds.length - 1, Math.floor((randint1(Math.max(1, level + 2)) + 2) / 2));
   if (oneIn(20)) i = Math.min(golds.length - 1, i + 1);
   const k = golds[Math.max(0, i)];
   const it = makeItem(k.id, 1);
   it.pval = Math.floor(k.cost * (randint1(8) + 3 + level / 3) / 4) + randint1(8);
+  if (noSelling) it.pval = Math.floor(it.pval * 5 * (1 + Math.min(1, level / 50)));
   it.known = true;
   return it;
 }
@@ -235,7 +241,7 @@ export function itemDice(it: Item): [number, number] {
 }
 export function itemAc(it: Item): number { const a = artifactOf(it); return a?.ac ?? kindOf(it).ac ?? 0; }
 
-export function itemName(it: Item, fl: Flavors, opts: { article?: boolean; count?: boolean; full?: boolean; plainKind?: boolean } = {}): string {
+export function itemName(it: Item, fl: Flavors, opts: { article?: boolean; count?: boolean; full?: boolean; plainKind?: boolean; egosKnown?: string[] } = {}): string {
   const k = kindOf(it);
   const aware = isAware(fl, it.kind);
   const known = it.known && aware;
@@ -251,17 +257,20 @@ export function itemName(it: Item, fl: Flavors, opts: { article?: boolean; count
     case 'wand': base = aware ? `${mk('Wand')} of ${kn}` : `${flav} ${mk('Wand')}`; break;
     case 'staff': base = aware ? `${mk('Staff')} of ${kn}` : `${flav} ${mk('Staff')}`; break;
     case 'rod': base = aware ? `${mk('Rod')} of ${kn}` : `${flav} ${mk('Rod')}`; break;
-    case 'ring': base = aware ? `${mk('Ring')} of ${kn}` : `${flav} ${mk('Ring')}`; break;
-    case 'amulet': base = aware ? `${mk('Amulet')} of ${kn}` : `${flav} ${mk('Amulet')}`; break;
+    case 'ring': base = !k.flavored ? mk(k.name) : aware ? `${mk('Ring')} of ${kn}` : `${flav} ${mk('Ring')}`; break;
+    case 'amulet': base = !k.flavored ? mk(k.name) : aware ? `${mk('Amulet')} of ${kn}` : `${flav} ${mk('Amulet')}`; break;
     case 'food': base = k.flavored ? (aware ? `${mk('Mushroom')} of ${kn}` : `${flav} ${mk('Mushroom')}`) : mk(k.name); break;
     case 'magic_book': base = `${mk('Magic Book')} ${k.name}`; break;
     case 'prayer_book': base = `${mk('Holy Book')} ${k.name}`; break;
+    case 'nature_book': base = `${mk('Nature Book')} ${k.name}`; break;
+    case 'necro_book': base = `${mk('Necromantic Tome')} ${k.name}`; break;
     case 'gold': base = `${it.pval} gold pieces worth of ${k.name}`; break;
+    case 'chest': base = mk(k.name); if (it.known) base += it.toHit > 0 ? ' (locked)' : it.toDam > 0 ? ' (trapped)' : ' (unlocked)'; break;
     default: base = mk(k.name);
   }
   const art = artifactOf(it);
   if (art) base = `${base} ${art.name}`;
-  else if (it.ego && known) base = `${base} ${egoOf(it)!.name}`;
+  else if (it.ego && (known || (opts.egosKnown && opts.egosKnown.includes(it.ego)))) base = `${base} ${egoOf(it)!.name}`;
   if (opts.plainKind) return base;
   let s = base;
   const dice = itemDice(it);
@@ -290,7 +299,7 @@ export function itemName(it: Item, fl: Flavors, opts: { article?: boolean; count
   if (k.tval === 'gold') return s;
   if (opts.count !== false) {
     if (n !== 1) s = `${n} ${s}`;
-    else if (opts.article !== false) s = (art ? 'the ' : /^[aeiou]/i.test(s) ? 'an ' : 'a ') + s;
+    else if (opts.article !== false && !/^the /i.test(s)) s = (art ? 'the ' : /^[aeiou]/i.test(s) ? 'an ' : 'a ') + s;
   }
   return capitalize(s);
 }
@@ -313,7 +322,7 @@ export function pluralName(n: number, s: string): string {
 export function canStack(a: Item, b: Item, fl: Flavors): boolean {
   if (a.kind !== b.kind || a.artifact || b.artifact) return false;
   const k = kindOf(a);
-  if (!k.stackable && !(k.tval === 'wand' || k.tval === 'staff' || k.tval === 'rod' || k.tval === 'magic_book' || k.tval === 'prayer_book')) {
+  if (!k.stackable && !(k.tval === 'wand' || k.tval === 'staff' || k.tval === 'rod' || k.tval === 'magic_book' || k.tval === 'prayer_book' || k.tval === 'nature_book' || k.tval === 'necro_book')) {
     if (!(isAmmo(k) || k.tval === 'potion' || k.tval === 'scroll' || k.tval === 'food' || k.tval === 'flask' || k.tval === 'spike' || k.tval === 'key' || k.tval === 'light')) return false;
   }
   if (a.toHit !== b.toHit || a.toDam !== b.toDam || a.toAc !== b.toAc || a.pval !== b.pval || a.ego !== b.ego || a.cursed !== b.cursed) return false;
@@ -366,7 +375,7 @@ export function itemValue(it: Item, fl: Flavors, known = true): number {
 }
 
 export function tvalLabel(t: TVal): string {
-  const m: Record<TVal, string> = { sword: 'Swords', hafted: 'Hafted weapons', polearm: 'Polearms', digger: 'Diggers', bow: 'Launchers', shot: 'Shots', arrow: 'Arrows', bolt: 'Bolts', soft_armor: 'Soft armour', hard_armor: 'Hard armour', dragon_armor: 'Dragon armour', shield: 'Shields', helm: 'Helms', crown: 'Crowns', cloak: 'Cloaks', gloves: 'Gloves', boots: 'Boots', ring: 'Rings', amulet: 'Amulets', light: 'Lights', potion: 'Potions', scroll: 'Scrolls', wand: 'Wands', staff: 'Staffs', rod: 'Rods', food: 'Food', flask: 'Flasks', magic_book: 'Magic books', prayer_book: 'Prayer books', spike: 'Spikes', chest: 'Chests', gold: 'Gold', key: 'Keys', junk: 'Junk' };
+  const m: Record<TVal, string> = { sword: 'Swords', hafted: 'Hafted weapons', polearm: 'Polearms', digger: 'Diggers', bow: 'Launchers', shot: 'Shots', arrow: 'Arrows', bolt: 'Bolts', soft_armor: 'Soft armour', hard_armor: 'Hard armour', dragon_armor: 'Dragon armour', shield: 'Shields', helm: 'Helms', crown: 'Crowns', cloak: 'Cloaks', gloves: 'Gloves', boots: 'Boots', ring: 'Rings', amulet: 'Amulets', light: 'Lights', potion: 'Potions', scroll: 'Scrolls', wand: 'Wands', staff: 'Staffs', rod: 'Rods', food: 'Food', flask: 'Flasks', magic_book: 'Magic books', prayer_book: 'Prayer books', nature_book: 'Nature books', necro_book: 'Necromantic tomes', spike: 'Spikes', chest: 'Chests', gold: 'Gold', key: 'Keys', junk: 'Junk' };
   return m[t];
 }
 /** Which icon sprites.ts draws for a kind. */
@@ -378,7 +387,7 @@ export function itemIcon(k: ObjectKind): string {
     case 'shot': case 'arrow': case 'bolt': return 'ammo';
     case 'soft_armor': case 'hard_armor': case 'dragon_armor': return 'armor';
     case 'helm': case 'crown': return 'helm';
-    case 'magic_book': case 'prayer_book': return 'book';
+    case 'magic_book': case 'prayer_book': case 'nature_book': case 'necro_book': return 'book';
     default: return k.tval;
   }
 }

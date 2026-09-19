@@ -7,6 +7,11 @@ const ROGUE_TITLES = ['Vagabond', 'Cutpurse', 'Robber', 'Burglar', 'Filcher', 'S
 const RANGER_TITLES = ['Runner', 'Strider', 'Scout', 'Courser', 'Tracker', 'Guide', 'Pathfinder', 'Low Ranger', 'High Ranger', 'Ranger Lord'];
 const PALADIN_TITLES = ['Gallant', 'Keeper', 'Protector', 'Defender', 'Warder', 'Knight', 'Guardian', 'Chevalier', 'Paladin', 'Paladin Lord'];
 
+const DRUID_TITLES = ['Wanderer', 'Tamer', 'Nurturer', 'Gardener', 'Creator', 'Earth Warder', 'Windrider', 'Stormwielder', 'High Mystic', 'Mystic Lord'];
+const NECRO_TITLES = ['Acolyte', 'Curser', 'Dark Student', 'Initiate', 'Slavemaster', 'Summoner', 'Controller', 'Commander', 'Dark Master', 'Night Lord'];
+const BLACKGUARD_TITLES = ['Hewer', 'Marauder', 'Brute', 'Ravager', 'Reaver', 'Warmonger', 'Slayer', 'Dread Knight', 'Champion of Ruin', 'Lord of Ruin'];
+const ARCHER_TITLES = ['Fletcher', 'Bowman', 'Marksman', 'Sharpshooter', 'Hunter', 'Deadeye', 'Falconer', 'Bow Master', 'Arrow Lord', 'Windwalker'];
+
 export const CLASSES: ClassDef[] = [
   { id: 'warrior', name: 'Warrior', hero: 'Warrior', stats: { STR: 5, INT: -2, WIS: -2, DEX: 2, CON: 2, CHR: -1 },
     skills: { disarm: 25, device: 18, save: 18, stealth: 1, search: 14, perception: 2, melee: 70, bows: 55, throw: 55, digging: 0 },
@@ -56,5 +61,37 @@ export const CLASSES: ClassDef[] = [
     titles: PALADIN_TITLES,
     palette: { skin: '#f0c8a8', hair: '#f8e890', primary: '#e83a3a', secondary: '#2a3a6a', accent: '#f0c040', metal: '#d8dde8', dark: '#28202a', glow: '#ffe0a0' },
     desc: 'The Gauntlet Valkyrie: a holy warrior with a shield, good armour and a few prayers.' },
+  { id: 'druid', name: 'Druid', hero: 'Falconess', stats: { STR: -2, INT: 0, WIS: 3, DEX: -2, CON: 0, CHR: 1 },
+    skills: { disarm: 30, device: 30, save: 30, stealth: 3, search: 12, perception: 12, melee: 30, bows: 20, throw: 40, digging: 0 },
+    skillsGrowth: { disarm: 8, device: 12, save: 10, stealth: 0, search: 0, perception: 0, melee: 15, bows: 15, throw: 25, digging: 0 },
+    hitDie: 0, expPct: 30, maxAttacks: 4, minWeight: 40, attackMultiplier: 2, realm: 'nature', spellStat: 'WIS', firstSpellLevel: 1,
+    startItems: [['nature_book_1', 1], ['sling', 1], ['iron_shot', 30], ['soft_leather_armor', 1], ['ration', 3], ['torch', 3], ['potion_clw', 2], ['flask_oil', 5]],
+    titles: DRUID_TITLES,
+    palette: { skin: '#e8c8a8', hair: '#a06030', primary: '#4a7a2a', secondary: '#7a5a2a', accent: '#e0c040', metal: '#8a9a7a', dark: '#1c2a14', glow: '#c0ff80' },
+    desc: 'The Gauntlet Falconess: a caller of storms and beasts. No metal, no blades; stings, lightning and the earth itself do the fighting.' },
+  { id: 'necromancer', name: 'Necromancer', hero: 'Sorceress', stats: { STR: -3, INT: 3, WIS: -2, DEX: 1, CON: -2, CHR: -2 },
+    skills: { disarm: 30, device: 36, save: 30, stealth: 3, search: 10, perception: 8, melee: 34, bows: 20, throw: 20, digging: 0 },
+    skillsGrowth: { disarm: 7, device: 13, save: 9, stealth: 0, search: 0, perception: 0, melee: 15, bows: 15, throw: 15, digging: 0 },
+    hitDie: 2, expPct: 30, maxAttacks: 4, minWeight: 40, attackMultiplier: 2, realm: 'necro', spellStat: 'INT', firstSpellLevel: 1,
+    startItems: [['necro_book_1', 1], ['dagger', 1], ['soft_leather_armor', 1], ['ration', 3], ['torch', 2], ['potion_clw', 2], ['scroll_word_of_recall', 1], ['flask_oil', 5]],
+    titles: NECRO_TITLES,
+    palette: { skin: '#d8c8d8', hair: '#201030', primary: '#3a1c4a', secondary: '#7a3aa0', accent: '#40ff80', metal: '#8a8aa0', dark: '#100818', glow: '#a040ff' },
+    desc: 'The Gauntlet Sorceress: a master of nether, darkness and the unliving. Fragile, but the dark is a friend and the dead are servants.' },
+  { id: 'blackguard', name: 'Blackguard', hero: 'Knight', stats: { STR: 3, INT: 0, WIS: -3, DEX: 0, CON: 2, CHR: -2 },
+    skills: { disarm: 20, device: 20, save: 22, stealth: 0, search: 10, perception: 2, melee: 70, bows: 40, throw: 40, digging: 0 },
+    skillsGrowth: { disarm: 7, device: 8, save: 8, stealth: 0, search: 0, perception: 0, melee: 45, bows: 30, throw: 30, digging: 0 },
+    hitDie: 8, expPct: 35, maxAttacks: 5, minWeight: 30, attackMultiplier: 5, realm: 'necro', spellStat: 'INT', firstSpellLevel: 3,
+    startItems: [['necro_book_1', 1], ['tulwar', 1], ['hard_leather_armor', 1], ['ration', 3], ['torch', 3], ['potion_clw', 2], ['potion_berserk', 1], ['flask_oil', 5]],
+    titles: BLACKGUARD_TITLES,
+    palette: { skin: '#d8b090', hair: '#301810', primary: '#30303a', secondary: '#6a1a1a', accent: '#c02020', metal: '#8a8a98', dark: '#141018', glow: '#ff4040' },
+    desc: 'The Gauntlet Knight, gone dark: a brutal fighter who feeds on the fray, with a few necromantic tricks learned late.' },
+  { id: 'archer', name: 'Archer', hero: 'Archer', stats: { STR: 1, INT: 0, WIS: -1, DEX: 4, CON: 1, CHR: 0 },
+    skills: { disarm: 30, device: 24, save: 25, stealth: 3, search: 22, perception: 14, melee: 45, bows: 80, throw: 80, digging: 0 },
+    skillsGrowth: { disarm: 8, device: 8, save: 9, stealth: 0, search: 0, perception: 0, melee: 25, bows: 55, throw: 55, digging: 0 },
+    hitDie: 6, expPct: 20, maxAttacks: 4, minWeight: 35, attackMultiplier: 3, realm: null, spellStat: 'INT', firstSpellLevel: 99,
+    startItems: [['short_bow', 1], ['arrow', 60], ['dagger', 1], ['soft_leather_armor', 1], ['soft_leather_boots', 1], ['ration', 3], ['torch', 3], ['potion_clw', 2], ['flask_oil', 5]],
+    titles: ARCHER_TITLES,
+    palette: { skin: '#e8c0a0', hair: '#c04020', primary: '#7a4a2a', secondary: '#3a6a3a', accent: '#f0e0a0', metal: '#b0b8c8', dark: '#201810', glow: '#ffe080' },
+    desc: 'The Gauntlet Archer: no magic, but the fastest shots in the dungeon and the eye to place them. Keep the quiver full.' },
 ];
 export const CLASS_BY_ID: Record<string, ClassDef> = Object.fromEntries(CLASSES.map(c => [c.id, c]));

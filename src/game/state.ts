@@ -3,6 +3,8 @@
 import type { Player, PlayerBonuses, Level, Store, Pos, Element } from './types.ts';
 import type { Flavors } from './items.ts';
 import type { MessageLog } from './messages.ts';
+import type { Options } from './options.ts';
+import type { LoreBook } from './lore.ts';
 
 export type Fx =
   | { type: 'bolt'; path: Pos[]; element: Element; beam?: boolean }
@@ -47,11 +49,24 @@ export interface Game {
   stats: { levelsVisited: number; monstersKilled: number; itemsFound: number; goldFound: number };
   /** When set, the next level generation puts the player on this kind of stairs. */
   arrivedBy: 'down' | 'up' | 'none';
+  /** Birth and game options. */
+  options: Options;
+  /** Monster memory. */
+  lore: LoreBook;
+  /** Artifacts the player has seen (by id) and identified. */
+  artifactsSeen: string[];
+  /** Ego kinds identified at least once (they are then recognised on pickup). */
+  egosKnown: string[];
+  /** Levels kept for the persistent-levels option, keyed by depth. */
+  savedLevels: Record<number, Level>;
+  /** The last thing the player did that can be repeated with `n` (set by the UI). */
+  lastCommand?: (() => void) | null;
   /** Late-bound helpers that would otherwise create import cycles. */
   hooks: {
     placeGoldAt(x: number, y: number): void;
     placeObjectAt(x: number, y: number, level?: number): void;
     cloneMonster(m: import('./types.ts').Monster): void;
     polymorphMonster(m: import('./types.ts').Monster): void;
+    earthquake(x: number, y: number): void;
   };
 }

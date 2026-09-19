@@ -10,6 +10,8 @@ import { monsterCastSpell } from './monsterSpells.ts';
 import { makeObject, makeGold } from './items.ts';
 import { dropNear } from './world.ts';
 import { disturb } from './world.ts';
+import { noteSight } from './lore.ts';
+import { RACE_BY_ID } from './data/races.ts';
 
 export function raceOf(m: Monster): MonsterRace { return MONSTER_BY_ID[m.race]; }
 export function hasMFlag(r: MonsterRace, f: MonsterFlag): boolean { return r.flags.includes(f); }
@@ -62,6 +64,7 @@ export function pickRace(g: Game, depth: number, filter?: (r: MonsterRace) => bo
     if (r.depth > lev || (depth > 0 && r.depth === 0)) return false;
     if (depth === 0 && r.depth !== 0) return false;
     if (hasMFlag(r, 'GENERATOR')) return false;
+    if (hasMFlag(r, 'QUESTOR')) return false;
     if (hasMFlag(r, 'UNIQUE') && (g.uniquesDead.includes(r.id) || (g.level && g.level.monsters.some(m => m.race === r.id)))) return false;
     if (hasMFlag(r, 'FORCE_DEPTH') && r.depth > depth) return false;
     if (filter && !filter(r)) return false;
@@ -118,6 +121,15 @@ export function themedFilter(theme: string): (r: MonsterRace) => boolean {
     case 'giant': return r => hasMFlag(r, 'GIANT') && !hasMFlag(r, 'UNIQUE');
     case 'demon': return r => hasMFlag(r, 'DEMON') && !hasMFlag(r, 'UNIQUE');
     case 'dragon': return r => hasMFlag(r, 'DRAGON') && !hasMFlag(r, 'UNIQUE');
+    case 'hound': return r => hasMFlag(r, 'HOUND') && !hasMFlag(r, 'UNIQUE');
+    case 'spider': return r => (hasMFlag(r, 'SPIDER') || r.sprite === 'spider') && !hasMFlag(r, 'UNIQUE');
+    case 'hydra': return r => (hasMFlag(r, 'HYDRA') || r.sprite === 'hydra') && !hasMFlag(r, 'UNIQUE');
+    case 'angel': return r => (hasMFlag(r, 'ANGEL') || r.sprite === 'angel') && !hasMFlag(r, 'UNIQUE');
+    case 'wraith': return r => hasMFlag(r, 'WRAITH') && !hasMFlag(r, 'UNIQUE');
+    case 'chapel': return r => (r.sprite === 'rig' && /priest|acolyte|cleric|monk|templar|paladin|bishop/i.test(r.name)) && !hasMFlag(r, 'UNIQUE');
+    case 'mage': return r => (r.sprite === 'rig' && /mage|wizard|sorcerer|illusionist|enchant|necroman|warlock|shaman|conjurer/i.test(r.name)) && !hasMFlag(r, 'UNIQUE');
+    case 'golem': return r => r.sprite === 'golem' && !hasMFlag(r, 'UNIQUE');
+    case 'elemental': return r => (r.sprite === 'elemental' || r.sprite === 'vortex') && !hasMFlag(r, 'UNIQUE');
     default: return () => true;
   }
 }
@@ -134,9 +146,16 @@ export function placeGenerator(g: Game, lv: Level, depth: number, x: number, y: 
 // ---------------------------------------------------------------------------------------------
 // Energy and the per-turn loop
 
+/** Angband's extract_energy table, indexed by speed + 110 (so 110 = normal = 10 energy per game turn). */
+const EXTRACT_ENERGY = [
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 7, 7, 8, 9,
+  10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 36, 37, 37, 38, 38, 39, 39, 40, 40, 40, 41, 41, 41,
+  42, 42, 42, 43, 43, 43, 44, 44, 44, 44, 45, 45, 45, 45, 45, 46, 46, 46, 46, 46, 47, 47, 47, 47, 47, 48, 48, 48, 48, 48, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49, 49,
+];
 export function energyGain(speed: number): number {
-  if (speed >= 0) return 10 + Math.min(40, speed);
-  return Math.max(1, Math.floor(10 + speed / 2));
+  const i = Math.max(0, Math.min(199, Math.floor(speed) + 110));
+  return EXTRACT_ENERGY[i];
 }
 export function monsterSpeed(m: Monster): number { return m.speed + (m.hasted ? 10 : 0) - (m.slowed ? 10 : 0); }
 
@@ -151,14 +170,18 @@ export function updateMonsterVisibility(g: Game): void {
     if (telepathy && !hasMFlag(r, 'EMPTY_MIND') && distance(p.x, p.y, m.x, m.y) <= 20 && !(hasMFlag(r, 'WEIRD_MIND') && !oneIn(10))) vis = true;
     if (!vis && !p.timed.blind && playerCanSee(lv, m.x, m.y)) { if (!hasMFlag(r, 'INVISIBLE') || seeInvis) vis = true; }
     if (!vis && !p.timed.blind && hasFlag(lv, m.x, m.y, F.VIEW) && !hasMFlag(r, 'COLD_BLOOD')) {
-      const infra = 0; // infravision would go here: warm monsters within radius
-      if (distance(p.x, p.y, m.x, m.y) <= infra) vis = true;
+      // Infravision: warm-blooded monsters show up in the dark within the race's radius (plus gear and potions).
+      const infra = RACE_BY_ID[p.race].infra + b.infra;
+      if (infra > 0 && distance(p.x, p.y, m.x, m.y) <= infra && (!hasMFlag(r, 'INVISIBLE') || seeInvis)) vis = true;
     }
     if (vis) m.detected = false;
     const was = m.visible;
     m.visible = vis || m.detected;
-    // A monster coming into view interrupts running, resting and travel (Angband's disturb).
-    if (m.visible && !was && vis && (g.running || g.resting || g.travel || g.repeating)) disturb(g);
+    if (m.visible && !was) {
+      noteSight(g, m);
+      // A monster coming into view interrupts running, resting and travel (Angband's disturb).
+      if (vis && g.options.disturbNear && (g.running || g.resting || g.travel || g.repeating)) disturb(g);
+    }
   }
 }
 
@@ -274,12 +297,21 @@ function tryMove(g: Game, m: Monster, dx: number, dy: number): void {
   const nx = m.x + dx, ny = m.y + dy;
   if (dx !== 0) m.facing = dx > 0 ? 1 : -1;
   if (nx === p.x && ny === p.y) {
+    if (hasFlag(lv, nx, ny, F.GLYPH)) {
+      if (r.depth > 0 && randint0(550) < r.depth) { lv.flags[ny * lv.w + nx] &= ~F.GLYPH; g.msg.add('The rune of protection is broken!', '#ff8080'); }
+      else return;
+    }
     if (!hasMFlag(r, 'NEVER_BLOW') && !m.afraid) monsterMelee(g, m);
     return;
   }
   if (!inBounds(lv, nx, ny)) return;
   const t = tileAt(lv, nx, ny);
   if (t === T.PERM) return;
+  if (hasFlag(lv, nx, ny, F.GLYPH)) {
+    // Angband's BREAK_GLYPH: level against 550.
+    if (r.depth > 0 && randint0(550) < r.depth) { lv.flags[ny * lv.w + nx] &= ~F.GLYPH; if (playerCanSee(lv, nx, ny)) g.msg.add('The rune of protection is broken!', '#ff8080'); }
+    else return;
+  }
   if (isWall(t) && t !== T.SECRET_DOOR) {
     if (hasMFlag(r, 'PASS_WALL')) { /* passes */ }
     else if (hasMFlag(r, 'KILL_WALL')) { setTile(lv, nx, ny, T.FLOOR); if (playerCanSee(lv, nx, ny)) g.msg.add('You hear grinding.'); }
@@ -287,8 +319,8 @@ function tryMove(g: Game, m: Monster, dx: number, dy: number): void {
   } else if (t === T.DOOR_CLOSED || t === T.SECRET_DOOR) {
     if (hasMFlag(r, 'PASS_WALL')) { /* passes */ }
     else if (hasMFlag(r, 'OPEN_DOOR') && auxAt(lv, nx, ny) === 0) { setTile(lv, nx, ny, T.DOOR_OPEN); if (playerCanSee(lv, nx, ny)) { g.msg.add('You hear a door open.'); disturb(g); } return; }
-    else if (hasMFlag(r, 'OPEN_DOOR') && randint0(auxAt(lv, nx, ny) * 2 + 2) === 0) { setAux(lv, nx, ny, 0); setTile(lv, nx, ny, T.DOOR_OPEN); return; }
-    else if (hasMFlag(r, 'BASH_DOOR') && randint0(m.maxhp / 10 + 2) > 5 + auxAt(lv, nx, ny) * 3) { setTile(lv, nx, ny, T.DOOR_BROKEN); setAux(lv, nx, ny, 0); g.msg.add('You hear a door burst open!'); disturb(g); }
+    else if (hasMFlag(r, 'OPEN_DOOR') && auxAt(lv, nx, ny) < 100 && randint0(auxAt(lv, nx, ny) * 2 + 2) === 0) { setAux(lv, nx, ny, 0); setTile(lv, nx, ny, T.DOOR_OPEN); return; }
+    else if (hasMFlag(r, 'BASH_DOOR') && randint0(m.maxhp / 10 + 2) > 5 + doorPower(auxAt(lv, nx, ny)) * 3) { setTile(lv, nx, ny, T.DOOR_BROKEN); setAux(lv, nx, ny, 0); g.msg.add('You hear a door burst open!'); disturb(g); }
     else return;
   } else if (t === T.RUBBLE) {
     if (hasMFlag(r, 'KILL_WALL') || hasMFlag(r, 'PASS_WALL')) { if (hasMFlag(r, 'KILL_WALL')) setTile(lv, nx, ny, T.FLOOR); }
@@ -315,6 +347,9 @@ function tryMove(g: Game, m: Monster, dx: number, dy: number): void {
   }
   if (m.visible && m.sleep === 0 && distance(p.x, p.y, m.x, m.y) <= 1 && !p.timed.paralyzed && lv.depth > 0) disturb(g);
 }
+
+/** Lock strength of a door: 1..7 for locks, 2 per spike for jammed doors (aux 100+). */
+function doorPower(aux: number): number { return aux >= 100 ? (aux - 100 + 1) * 2 : aux; }
 
 export function removeMonster(g: Game, m: Monster): void {
   const i = g.level.monsters.indexOf(m);

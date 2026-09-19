@@ -11,6 +11,8 @@ import { disturb, dropNear } from './world.ts';
 import { randomEmptyFloor } from './level.ts';
 import type { Game } from './state.ts';
 import { setTimed, refreshBonuses, teleportPlayer, playerSavingThrow, teleportMonster } from './effectsCore.ts';
+import { noteBlow, noteKill, noteDeath, noteFlag, noteDrop } from './lore.ts';
+import { MONSTER_BY_ID } from './data/monsters.ts';
 
 /** Angband's test_hit: to-hit `chance` against armour class `ac`. */
 export function testHit(chance: number, ac: number, visible: boolean): boolean {
@@ -73,22 +75,30 @@ export function playerAttack(g: Game, m: Monster): void {
     if (!testHit(chance, r.ac, m.visible)) { g.msg.add(`You miss ${name}.`, '#a0a0a0'); continue; }
     let dam: number;
     let crit = '';
+    let quake = false;
     if (weapon) {
       const [n, s] = itemDice(weapon);
-      dam = damroll(n, s) * slayMultiplier(flags, m);
-      if (flags.has('IMPACT') && dam > 50 && oneIn(2)) g.fx.push({ type: 'shake', amount: 4 });
+      let base = damroll(n, s);
+      // Vorpal blades cut again and again (Angband: each extra roll on a 1-in-(s+1)... simplified: 1 in 3 to add another die, repeatedly).
+      let vorpal = 0;
+      if (flags.has('VORPAL')) { while (oneIn(3) && vorpal < 4) { base += damroll(n, s); vorpal++; } }
+      dam = base * slayMultiplier(flags, m);
       [dam, crit] = criticalMelee(kindOf(weapon).weight, weapon.toHit + b.toHit, dam, p.lev);
       dam += weapon.toDam + b.toDam;
+      if (vorpal) crit = vorpal >= 3 ? 'You cut ' + name + ' in half!' : vorpal === 2 ? 'You gouge ' + name + '!' : 'You cut ' + name + '!';
+      if (flags.has('IMPACT') && dam > 50 && oneIn(2)) quake = true;
     } else {
       dam = damroll(1, 1) + b.toDam;
     }
     if (p.timed.shero) dam += 2;
+    if (p.timed.bloodlust) dam += Math.floor(p.lev / 5);
     dam = Math.max(0, dam);
     const verb = weapon ? 'hit' : 'punch';
     g.msg.add(`You ${verb} ${name}.`);
     if (crit) g.msg.add(crit, '#ffd040');
-    if (monsterTakeHit(g, m, dam, '')) break;
-    // Confusing touch / vorpal chatter could go here.
+    const died = monsterTakeHit(g, m, dam, '');
+    if (quake) { g.msg.add('The ground shakes!', '#ffd040'); g.fx.push({ type: 'shake', amount: 6 }); g.hooks.earthquake(m.x, m.y); }
+    if (died) break;
   }
   if (weapon && flags.has('CURSED') && !weapon.known) { weapon.known = true; g.msg.add('Your weapon feels cursed!', '#ff8080'); }
   if (weapon && !weapon.known && oneIn(20)) senseWielded(g, weapon);
@@ -121,10 +131,14 @@ export function monsterTakeHit(g: Game, m: Monster, dam: number, note: string, b
       gainExp(g, exp + (randint0(p.lev) < frac ? 1 : 0));
       p.kills++;
       g.stats.monstersKilled++;
+      noteKill(g, m);
       if (hasMFlag(r, 'UNIQUE')) { g.uniquesDead.push(r.id); g.msg.shout(`${r.name.toUpperCase()} IS SLAIN!`, '#ffd040'); }
-      if (r.id === 'ancalagon_the_black' || r.id === 'ancalagon') { g.totalWinner = true; g.msg.shout('YOU HAVE WON THE GAME!', '#ffd040'); }
+      if (r.id === 'morgoth' || (!MONSTER_BY_ID['morgoth'] && r.id === 'ancalagon_the_black')) { g.totalWinner = true; g.msg.shout('YOU HAVE WON THE GAME!', '#ffd040'); g.msg.add('You have banished the Lord of Darkness. You may retire (Q) in glory, or keep exploring.', '#ffd040'); }
+      else if (r.id === 'sauron') g.msg.add('The way to the deepest level lies open.', '#ffd040');
     }
+    const before = g.level.items.length;
     monsterDrops(g, m);
+    if (m.visible) noteDrop(g, m, g.level.items.length - before);
     removeMonster(g, m);
     disturb(g);
     return true;
@@ -164,6 +178,8 @@ export function takeHit(g: Game, dam: number, cause: string): void {
   if (p.chp < 0) {
     p.dead = true;
     p.deathCause = cause;
+    const killer = g.level.monsters.find(m => monsterName(m, false).replace(/^the /, '') === cause);
+    if (killer) noteDeath(g, killer.race);
     p.chp = 0;
     g.msg.add(`You die.`, '#ff4040');
     g.msg.shout('YOU HAVE DIED', '#ff4040');
@@ -193,14 +209,22 @@ export function elementDamage(g: Game, elem: Element, dam: number, cause: string
     case 'pois': d = res('RES_POIS', null, 'oppose_pois'); if (d && !f.has('RES_POIS') && !t.oppose_pois) setTimed(g, 'poisoned', t.poisoned + randint1(dam) + 10); break;
     case 'lite': if (f.has('RES_LITE')) d = Math.floor(dam * 4 / 9); else if (!f.has('RES_BLIND')) setTimed(g, 'blind', t.blind + randint1(5) + 2); break;
     case 'dark': if (f.has('RES_DARK')) d = Math.floor(dam * 4 / 9); else if (!f.has('RES_BLIND')) setTimed(g, 'blind', t.blind + randint1(5) + 2); break;
-    case 'sound': if (f.has('RES_SOUND')) d = Math.floor(dam * 5 / 9); else setTimed(g, 'stun', Math.min(35, t.stun + randint1(dam > 60 ? 25 : dam / 3 + 5))); break;
+    case 'sound': if (f.has('RES_SOUND')) d = Math.floor(dam * 5 / 9); else setTimed(g, 'stun', t.stun + randint1(dam > 60 ? 25 : dam / 3 + 5)); break;
     case 'conf': if (f.has('RES_CONF')) d = Math.floor(dam * 5 / 9); else setTimed(g, 'confused', t.confused + randint1(20) + 10); break;
     case 'chaos': if (f.has('RES_CHAOS')) d = Math.floor(dam * 6 / 9); else { if (!f.has('RES_CONF')) setTimed(g, 'confused', t.confused + randint1(20) + 10); setTimed(g, 'image', t.image + randint1(10)); if (!f.has('HOLD_LIFE')) loseExp(g, Math.floor(p.exp / 20)); } break;
     case 'nether': if (f.has('RES_NETHER')) d = Math.floor(dam * 6 / 9); else if (!f.has('HOLD_LIFE') || !oneIn(4)) loseExp(g, 200 + Math.floor(p.exp / 100)); break;
     case 'nexus': d = f.has('RES_NEXUS') ? Math.floor(dam * 6 / 9) : dam; if (!f.has('RES_NEXUS') && oneIn(3)) teleportPlayer(g, 30); break;
     case 'disen': d = f.has('RES_DISEN') ? Math.floor(dam * 6 / 9) : dam; if (!f.has('RES_DISEN')) disenchant(g); break;
     case 'holy': d = Math.floor(dam / 2); break;
-    case 'water': if (!f.has('RES_SOUND')) setTimed(g, 'stun', Math.min(35, t.stun + randint1(10))); if (!f.has('RES_CONF')) setTimed(g, 'confused', t.confused + randint1(5)); break;
+    case 'water': if (!f.has('RES_SOUND')) setTimed(g, 'stun', t.stun + randint1(10)); if (!f.has('RES_CONF')) setTimed(g, 'confused', t.confused + randint1(5)); break;
+    case 'shards': if (f.has('RES_SHARDS')) d = Math.floor(dam * 6 / 9); else setTimed(g, 'cut', t.cut + dam); break;
+    case 'ice': d = res('RES_COLD', 'IM_COLD', 'oppose_cold'); if (!f.has('RES_SHARDS')) setTimed(g, 'cut', t.cut + damroll(5, 8)); if (!f.has('RES_SOUND')) setTimed(g, 'stun', t.stun + randint1(15)); if (d) inventoryDamage(g, 'cold', dam); break;
+    case 'plasma': if (!f.has('RES_SOUND')) setTimed(g, 'stun', t.stun + randint1(dam > 40 ? 35 : dam > 20 ? 20 : 10)); break;
+    case 'force': if (!f.has('RES_SOUND')) setTimed(g, 'stun', t.stun + randint1(20)); break;
+    case 'inertia': if (!f.has('FREE_ACT')) setTimed(g, 'slow', t.slow + randint0(4) + 4); break;
+    case 'gravity': g.msg.add('Gravity warps around you.'); if (!f.has('NO_TELEPORT')) teleportPlayer(g, 5); if (!f.has('FEATHER')) { setTimed(g, 'slow', t.slow + randint0(4) + 4); if (!f.has('RES_SOUND')) setTimed(g, 'stun', t.stun + randint1(dam > 40 ? 35 : dam / 3 + 5)); } else d = Math.floor(dam * 2 / 3); break;
+    case 'time': { const r = randint1(10); if (r <= 5) { g.msg.add('You feel life has clocked back.', '#ff8080'); loseExp(g, 100 + Math.floor(p.exp / 10)); } else if (r <= 9) { const st = STATS_ALL[randint0(6)]; if (drainStat(p, st)) { g.msg.add(`You're not as ${STAT_TIME_WORD[st]} as you used to be...`, '#ff8080'); refreshBonuses(g); } } else { g.msg.add("You're not as powerful as you used to be...", '#ff8080'); for (const st of STATS_ALL) drainStat(p, st); refreshBonuses(g); } break; }
+    case 'disint': break;
     case 'mana': case 'missile': break;
   }
   takeHit(g, d, cause);
@@ -274,7 +298,8 @@ export function monsterMelee(g: Game, m: Monster): void {
     if (m.visible) g.msg.add(`${name} is repelled.`);
     return;
   }
-  for (const blow of r.blows) {
+  for (let bi = 0; bi < r.blows.length; bi++) {
+    const blow = r.blows[bi];
     if (p.dead) return;
     // Angband's check_hit: power + 3 * level against three quarters of the armour class, with a
     // flat 5% to hit or miss whatever the numbers say.
@@ -288,10 +313,11 @@ export function monsterMelee(g: Game, m: Monster): void {
     }
     let dam = blow.dice ? damroll(blow.dice[0], blow.dice[1]) : 0;
     g.msg.add(`${name} ${METHOD_TEXT[blow.method] || 'hits you'}.`, dam ? '#ffb0b0' : '#e8e4d8');
+    if (m.visible) noteBlow(g, m, bi);
     applyBlowEffect(g, m, blow.effect, dam);
-    // Critical stuns from heavy hits.
-    if (dam > 20 && (blow.method === 'HIT' || blow.method === 'CRUSH' || blow.method === 'BUTT' || blow.method === 'KICK') && !b.flags.has('RES_SOUND') && oneIn(4)) setTimed(g, 'stun', Math.min(35, p.timed.stun + randint1(5)));
-    if (dam > 30 && blow.method === 'CLAW' && oneIn(4)) setTimed(g, 'cut', p.timed.cut + randint1(10));
+    // Critical stuns and cuts from heavy hits (Angband's monster_critical).
+    if (dam > 20 && (blow.method === 'HIT' || blow.method === 'CRUSH' || blow.method === 'BUTT' || blow.method === 'KICK') && !b.flags.has('RES_SOUND') && oneIn(4)) setTimed(g, 'stun', p.timed.stun + (dam > 60 ? randint1(20) + 10 : randint1(5)));
+    if (dam > 30 && (blow.method === 'CLAW' || blow.method === 'BITE' || blow.method === 'HIT') && oneIn(4)) setTimed(g, 'cut', p.timed.cut + (dam > 80 ? randint1(50) + 50 : randint1(10)));
   }
 }
 const BLOW_POWER: Partial<Record<BlowEffect, number>> = { HURT: 60, POISON: 5, UN_BONUS: 20, UN_POWER: 15, EAT_GOLD: 5, EAT_ITEM: 5, EAT_FOOD: 5, EAT_LITE: 5, ACID: 0, ELEC: 10, FIRE: 10, COLD: 10, BLIND: 2, CONFUSE: 10, TERRIFY: 10, PARALYZE: 2, LOSE_STR: 0, LOSE_DEX: 0, LOSE_CON: 0, LOSE_INT: 0, LOSE_WIS: 0, LOSE_CHR: 0, LOSE_ALL: 2, SHATTER: 60, EXP_10: 5, EXP_20: 5, EXP_40: 5, EXP_80: 5, HALLU: 10, DISENCHANT: 20 };
@@ -329,3 +355,5 @@ function applyBlowEffect(g: Game, m: Monster, effect: BlowEffect, dam: number): 
   }
 }
 const STAT_DRAIN_WORD: Record<Stat, string> = { STR: 'weak', INT: 'stupid', WIS: 'naive', DEX: 'clumsy', CON: 'sickly', CHR: 'ugly' };
+const STATS_ALL: Stat[] = ['STR', 'INT', 'WIS', 'DEX', 'CON', 'CHR'];
+const STAT_TIME_WORD: Record<Stat, string> = { STR: 'strong', INT: 'bright', WIS: 'wise', DEX: 'agile', CON: 'hale', CHR: 'beautiful' };

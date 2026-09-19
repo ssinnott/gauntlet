@@ -1,13 +1,15 @@
 // Dungeon generation in the Angband tradition: rooms of several shapes scattered over a block grid,
 // winding tunnels that pierce room walls and get doors, magma and quartz streamers with treasure,
-// rubble, hidden traps, several staircases each way, and lesser vaults. Monsters and objects are
-// placed afterwards by the callbacks in `GenHooks` so this file knows nothing about their tables.
+// rubble, hidden traps, several staircases each way, monster nests and pits, and hand-drawn lesser
+// and greater vaults (see vaults.ts). Monsters and objects are placed afterwards by the callbacks
+// in `GenHooks` so this file knows nothing about their tables.
 import { rng } from '../../lib/engine/rng.ts';
 import { type Level, type Pos, type Room, T, F, isWall, isPassable, DIR_DX, DIR_DY } from '../types.ts';
 import { createLevel, tileAt, setTile, addFlag, hasFlag, setAux, isCleanFloor, nextToWalls, inBounds, randomEmptyFloor } from '../level.ts';
-import { randint0, randint1, oneIn, randnor, shuffle } from '../util.ts';
+import { randint0, randint1, oneIn, randnor, shuffle, weightedPick } from '../util.ts';
 import { DUN_W, DUN_H } from '../../constants.ts';
-import { TRAP_KINDS } from '../types.ts';
+import { VAULTS, type VaultTemplate, placeVault, randomOrientation, pickTrap } from './vaults.ts';
+export { pickTrap };
 
 export interface GenHooks {
   /** Place a random monster suited to `depth` at (x, y); `sleep` = asleep, `group` allows friends. */
@@ -51,13 +53,14 @@ function build(lv: Level, depth: number, hooks: GenHooks): boolean {
   const used = new Uint8Array(bw * bh);
   const centres: Pos[] = [];
 
-  // Rooms: keep trying until the block grid is full or the attempts run out.
+  // Rooms: keep trying until the block grid is full or the attempts run out. At most one greater vault.
   const wanted = 9 + randint1(6);
+  let greater = false;
   for (let i = 0; i < ROOM_ATTEMPTS && centres.length < wanted; i++) {
-    const kind = pickRoomKind(depth);
+    const kind = pickRoomKind(depth, !greater);
     const bx = randint0(bw), by = randint0(bh);
     const r = buildRoom(lv, depth, kind, bx, by, used, bw, bh);
-    if (r) centres.push(r);
+    if (r) { centres.push(r); if (kind === 'greater_vault') greater = true; }
   }
   if (centres.length < 3) return false;
   // Tunnels: connect each room to the next in a shuffled order, then one extra link for a loop.
@@ -102,12 +105,16 @@ function build(lv: Level, depth: number, hooks: GenHooks): boolean {
   return true;
 }
 
-type RoomKind = 'simple' | 'overlap' | 'cross' | 'inner' | 'circle' | 'nest' | 'vault' | 'pillars' | 'moat';
-function pickRoomKind(depth: number): RoomKind {
+type RoomKind = 'simple' | 'overlap' | 'cross' | 'inner' | 'circle' | 'nest' | 'pit' | 'vault' | 'greater_vault' | 'pillars' | 'moat';
+function pickRoomKind(depth: number, allowGreater: boolean): RoomKind {
+  // Greater vaults: from depth 25, roughly one room in a hundred at first (a tenth of levels), rising
+  // to about one in fifty by depth 75. They almost always find space, so the roll is per attempt.
+  if (allowGreater && depth >= 25 && randint0(1000) < 5 + Math.floor((depth - 25) / 5)) return 'greater_vault';
   const r = randint0(100);
-  if (depth >= 5 && r < 4) return 'nest';
-  if (depth >= 8 && r < 7) return 'vault';
-  if (r < 15) return 'inner';
+  if (depth >= 5 && r < 3) return 'nest';
+  if (depth >= 5 && r < 6) return 'pit';
+  if (depth >= 8 && r < 9) return 'vault';
+  if (r < 16) return 'inner';
   if (r < 25) return 'cross';
   if (r < 35) return 'overlap';
   if (r < 42) return 'circle';
@@ -147,8 +154,14 @@ function ringWalls(lv: Level, x1: number, y1: number, x2: number, y2: number, li
 
 function buildRoom(lv: Level, depth: number, kind: RoomKind, bx: number, by: number, used: Uint8Array, bw: number, bh: number): Pos | null {
   const lit = depth <= randint1(25);
+  if (kind === 'vault' || kind === 'greater_vault') {
+    // A hand-drawn vault that suits the depth; the old procedural lesser vault below is the fallback.
+    const tpl = pickVault(depth, kind === 'vault' ? 'lesser' : 'greater');
+    if (tpl) return buildVault(lv, depth, tpl, bx, by, used, bw, bh);
+    if (kind === 'greater_vault') return null;
+  }
   let w: number, h: number;
-  if (kind === 'vault' || kind === 'nest' || kind === 'moat' || kind === 'inner') { w = 2; h = 1; }
+  if (kind === 'vault' || kind === 'nest' || kind === 'pit' || kind === 'moat' || kind === 'inner') { w = 2; h = 1; }
   else if (kind === 'cross' || kind === 'overlap' || kind === 'circle') { w = 2; h = 1; }
   else { w = oneIn(3) ? 2 : 1; h = 1; }
   if (!claim(used, bw, bh, bx, by, bx + w - 1, by + h - 1)) return null;
@@ -198,36 +211,109 @@ function buildRoom(lv: Level, depth: number, kind: RoomKind, bx: number, by: num
       if (oneIn(2)) setTile(lv, cx, cy, T.GRANITE);
       break;
     }
-    case 'inner': case 'moat': case 'nest': case 'vault': {
-      const x1 = px0 + 1, y1 = py0 + 1, x2 = px1 - 1, y2 = py1 - 1;
+    case 'inner': case 'moat': case 'nest': case 'pit': case 'vault': {
+      // Angband's type 4/5/6 rooms: 11 rows by 21 columns using the whole block height (the ring of
+      // reserved blocks keeps the neighbours away), with a one-grid walk around an inner room whose
+      // interior is 5 rows by 15 columns.
+      const x1 = cx - 9, y1 = cy - 4, x2 = cx + 9, y2 = cy + 4;
       carveRect(lv, x1, y1, x2, y2, T.FLOOR, lit, true); ringWalls(lv, x1, y1, x2, y2, lit);
       room.x1 = x1; room.y1 = y1; room.x2 = x2; room.y2 = y2;
-      // Inner room walls.
-      const ix1 = x1 + 2, iy1 = y1 + 2, ix2 = x2 - 2, iy2 = y2 - 2;
+      const ix1 = x1 + 1, iy1 = y1 + 1, ix2 = x2 - 1, iy2 = y2 - 1;
       for (let x = ix1; x <= ix2; x++) { setTile(lv, x, iy1, T.GRANITE); setTile(lv, x, iy2, T.GRANITE); }
       for (let y = iy1; y <= iy2; y++) { setTile(lv, ix1, y, T.GRANITE); setTile(lv, ix2, y, T.GRANITE); }
-      // A door into the inner room on a random side.
-      const side = randint0(4);
-      const dx = side === 0 ? ix1 : side === 1 ? ix2 : ix1 + 1 + randint0(ix2 - ix1 - 1);
-      const dy = side === 2 ? iy1 : side === 3 ? iy2 : iy1 + 1 + randint0(iy2 - iy1 - 1);
-      setTile(lv, dx, dy, kind === 'vault' ? T.SECRET_DOOR : T.DOOR_CLOSED);
-      if (kind === 'vault' || depth > 10 && oneIn(2)) setAux(lv, dx, dy, 1 + randint0(Math.min(7, 1 + depth / 5)));
+      /** A door into the inner room on a random side. */
+      const innerDoor = (t: number, locked: boolean): Pos => {
+        const side = randint0(4);
+        const dx = side === 0 ? ix1 : side === 1 ? ix2 : ix1 + 1 + randint0(ix2 - ix1 - 1);
+        const dy = side === 2 ? iy1 : side === 3 ? iy2 : iy1 + 1 + randint0(iy2 - iy1 - 1);
+        setTile(lv, dx, dy, t);
+        if (locked) setAux(lv, dx, dy, lockPower(depth));
+        return { x: dx, y: dy };
+      };
+      const randomInterior = (): Pos => ({ x: ix1 + 1 + randint0(ix2 - ix1 - 1), y: iy1 + 1 + randint0(iy2 - iy1 - 1) });
       if (kind === 'inner') {
-        // Treasure in the inner room, sometimes guarded.
-        const ox = ix1 + 1 + randint0(ix2 - ix1 - 1), oy = iy1 + 1 + randint0(iy2 - iy1 - 1);
-        pending(lv).push((h: GenHooks) => { h.placeObject(lv, depth, ox, oy, true, false); if (oneIn(2)) h.placeMonster(lv, depth + 2, ox, oy, true, false); });
-        if (oneIn(3)) for (let y = iy1 + 2; y < iy2 - 1; y += 2) for (let x = ix1 + 2; x < ix2 - 1; x += 2) setTile(lv, x, y, T.GRANITE);
+        // Angband's five flavours of inner room.
+        const variant = randint1(5);
+        if (variant !== 5) innerDoor(T.DOOR_CLOSED, depth > 10 && oneIn(2));
+        switch (variant) {
+          case 1: {
+            // Just an inner room: a guardian, and sometimes something to guard.
+            const o = randomInterior();
+            pending(lv).push((h: GenHooks) => { h.placeMonster(lv, depth + 2, cx, cy, true, false); if (oneIn(2)) h.placeObject(lv, depth, o.x, o.y, true, false); });
+            break;
+          }
+          case 2: {
+            // An inner vault: a permanent 3x3 cell with a locked door, a great treasure and its keeper, traps about.
+            for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) if (x !== cx || y !== cy) setTile(lv, x, y, T.PERM);
+            addFlag(lv, cx, cy, F.VAULT);
+            const s = randint0(4);
+            const dx = s === 0 ? cx - 1 : s === 1 ? cx + 1 : cx, dy = s === 2 ? cy - 1 : s === 3 ? cy + 1 : cy;
+            setTile(lv, dx, dy, T.DOOR_CLOSED); setAux(lv, dx, dy, lockPower(depth + 10));
+            pending(lv).push((h: GenHooks) => { h.placeMonster(lv, depth + 9, cx, cy, true, false); h.placeObject(lv, depth, cx, cy, true, true); });
+            vaultTraps(lv, depth, cx, cy, 7, 2, 2 + randint1(3));
+            break;
+          }
+          case 3: {
+            // Pillars: one in the middle, sometimes two more, sometimes walled in with loot beside it.
+            for (let y = cy - 1; y <= cy + 1; y++) for (let x = cx - 1; x <= cx + 1; x++) setTile(lv, x, y, T.GRANITE);
+            if (oneIn(2)) for (let y = cy - 1; y <= cy + 1; y++) for (let x = -1; x <= 1; x++) { setTile(lv, cx - 6 + x, y, T.GRANITE); setTile(lv, cx + 6 + x, y, T.GRANITE); }
+            if (oneIn(3)) {
+              for (let x = cx - 5; x <= cx + 5; x++) { setTile(lv, x, cy - 1, T.GRANITE); setTile(lv, x, cy + 1, T.GRANITE); }
+              setTile(lv, cx - 5, cy, T.GRANITE); setTile(lv, cx + 5, cy, T.GRANITE);
+              setTile(lv, cx - 3, cy + (oneIn(2) ? -1 : 1), T.SECRET_DOOR); setTile(lv, cx + 3, cy + (oneIn(2) ? -1 : 1), T.SECRET_DOOR);
+              pending(lv).push((h: GenHooks) => {
+                h.placeMonster(lv, depth + 2, cx - 3, cy, true, false); h.placeMonster(lv, depth + 2, cx + 3, cy, true, false);
+                h.placeObject(lv, depth, cx - 2, cy, true, false); h.placeObject(lv, depth, cx + 2, cy, true, false);
+              });
+            }
+            break;
+          }
+          case 4: {
+            // An inner maze: a checkerboard of walls (the diagonals are the way through).
+            for (let y = iy1 + 1; y < iy2; y++) for (let x = ix1 + 1; x < ix2; x++) if ((x + y) & 1) setTile(lv, x, y, T.GRANITE);
+            vaultMonsters(lv, depth, cx - 5, cy, randint1(3)); vaultMonsters(lv, depth, cx + 5, cy, randint1(3));
+            vaultTraps(lv, depth, cx - 3, cy, 2, 2, randint1(3));
+            vaultObjects(lv, depth, cx, cy, 3);
+            break;
+          }
+          default: {
+            // Four small inner rooms, each with its own secret door in the inner wall.
+            for (let y = iy1 + 1; y < iy2; y++) setTile(lv, cx, y, T.GRANITE);
+            for (let x = ix1 + 1; x < ix2; x++) setTile(lv, x, cy, T.GRANITE);
+            if (oneIn(2)) { const i = randint1(6); for (const sx of [cx - i, cx + i]) { setTile(lv, sx, iy1, T.SECRET_DOOR); setTile(lv, sx, iy2, T.SECRET_DOOR); } }
+            else { const i = randint1(2); for (const sy of [cy - i, cy + i]) { setTile(lv, ix1, sy, T.SECRET_DOOR); setTile(lv, ix2, sy, T.SECRET_DOOR); } }
+            vaultObjects(lv, depth, cx, cy, 2 + randint1(2));
+            for (const [ox, oy] of [[-4, -1], [4, -1], [-4, 1], [4, 1]]) vaultMonsters(lv, depth, cx + ox, cy + oy, randint1(4));
+            break;
+          }
+        }
+      } else if (kind === 'pit') {
+        // A monster pit: doors on both long sides and a themed horde sorted so the centre is the nastiest.
+        for (const dy of [iy1, iy2]) { setTile(lv, cx, dy, T.DOOR_CLOSED); if (depth > 10 && oneIn(2)) setAux(lv, cx, dy, lockPower(depth)); }
+        const theme = pickPitTheme(depth);
+        pending(lv).push((h: GenHooks) => {
+          for (let y = iy1 + 1; y < iy2; y++) for (let x = ix1 + 1; x < ix2; x++) {
+            if (!isCleanFloor(lv, x, y)) continue;
+            const rx = Math.min(x - ix1 - 1, ix2 - 1 - x), ry = Math.min(y - iy1 - 1, iy2 - 1 - y);
+            const ring = Math.min(rx, ry * 2, 4);
+            h.placeThemedMonster(lv, depth + ring * 2, x, y, theme);
+          }
+        });
       } else if (kind === 'moat') {
+        innerDoor(T.DOOR_CLOSED, depth > 10 && oneIn(2));
         // The inner room is ringed by water-like rubble... we have no water in the dungeon, so a pillar maze.
         for (let y = iy1 + 1; y < iy2; y++) for (let x = ix1 + 1; x < ix2; x++) if ((x + y) % 2 === 0 && oneIn(2)) setTile(lv, x, y, T.RUBBLE);
         pending(lv).push((h: GenHooks) => { for (let i = 0; i < 3; i++) { const ox = ix1 + 1 + randint0(ix2 - ix1 - 1), oy = iy1 + 1 + randint0(iy2 - iy1 - 1); if (isCleanFloor(lv, ox, oy)) h.placeObject(lv, depth, ox, oy, oneIn(2), false); } });
       } else if (kind === 'nest') {
+        innerDoor(T.DOOR_CLOSED, depth > 10 && oneIn(2));
         const theme = pickNestTheme(depth);
         pending(lv).push((h: GenHooks) => {
           for (let y = iy1 + 1; y < iy2; y++) for (let x = ix1 + 1; x < ix2; x++) if (isCleanFloor(lv, x, y) && !oneIn(3)) h.placeThemedMonster(lv, depth, x, y, theme);
         });
       } else {
-        // Lesser vault: flagged so stairs and teleports avoid it; full of good loot and tough monsters.
+        // Procedural lesser vault (only when no template suits the depth): flagged so stairs and
+        // teleports avoid it; a secret, locked door; full of good loot and tough monsters.
+        innerDoor(T.SECRET_DOOR, true);
         for (let y = iy1; y <= iy2; y++) for (let x = ix1; x <= ix2; x++) { addFlag(lv, x, y, F.VAULT); if (isWall(tileAt(lv, x, y)) && tileAt(lv, x, y) !== T.SECRET_DOOR) setTile(lv, x, y, T.PERM); }
         pending(lv).push((h: GenHooks) => {
           for (let y = iy1 + 1; y < iy2; y++) for (let x = ix1 + 1; x < ix2; x++) {
@@ -269,16 +355,88 @@ export function pickNestTheme(depth: number): string {
   return themes[randint0(themes.length)];
 }
 
-function pickTrap(depth: number): number {
-  const n = TRAP_KINDS.length;
-  // Trap doors and pits are common everywhere; the nastier runes turn up deeper.
-  for (let i = 0; i < 20; i++) {
-    const k = randint0(n);
-    if (k >= 6 && depth < 5) continue;
-    if (k >= 11 && depth < 15) continue;
-    return k;
+/** Themes for monster pits, each from the depth it first makes sense at; deeper themes weigh more. */
+export function pickPitTheme(depth: number): string {
+  const themes: [string, number][] = [
+    ['animal', 1], ['kobold', 2], ['jelly', 5], ['undead', 8], ['orc', 10], ['spider', 12], ['hound', 15], ['troll', 20], ['mage', 20],
+    ['chapel', 25], ['giant', 30], ['golem', 30], ['elemental', 30], ['hydra', 35], ['dragon', 40], ['wraith', 45], ['demon', 50], ['angel', 50],
+  ];
+  const ok = themes.filter(t => t[1] <= depth);
+  return (weightedPick(ok, t => 1 + t[1] / 5) ?? ok[0])[0];
+}
+
+/** Lock power for a door at this depth (Level.aux). */
+function lockPower(depth: number): number { return 1 + randint0(Math.min(7, 1 + Math.floor(depth / 5))); }
+
+/** Angband's vault_monsters: `n` monsters scattered about (x, y), a little out of depth. */
+function vaultMonsters(lv: Level, depth: number, x: number, y: number, n: number): void {
+  pending(lv).push((h: GenHooks) => {
+    for (let k = 0; k < n; k++) for (let i = 0; i < 9; i++) {
+      const mx = x + randint0(5) - 2, my = y + randint0(3) - 1;
+      if (isCleanFloor(lv, mx, my)) { h.placeMonster(lv, depth + 2, mx, my, true, false); break; }
+    }
+  });
+}
+/** Angband's vault_objects: `n` objects scattered about (x, y). */
+function vaultObjects(lv: Level, depth: number, x: number, y: number, n: number): void {
+  pending(lv).push((h: GenHooks) => {
+    for (let k = 0; k < n; k++) for (let i = 0; i < 11; i++) {
+      const ox = x + randint0(15) - 7, oy = y + randint0(5) - 2;
+      if (isCleanFloor(lv, ox, oy)) { h.placeObject(lv, depth, ox, oy, false, false); break; }
+    }
+  });
+}
+/** Angband's vault_traps: `n` hidden traps within `xd` by `yd` of (x, y). */
+function vaultTraps(lv: Level, depth: number, x: number, y: number, xd: number, yd: number, n: number): void {
+  for (let k = 0; k < n; k++) for (let i = 0; i < 11; i++) {
+    const tx = x + randint0(2 * xd + 1) - xd, ty = y + randint0(2 * yd + 1) - yd;
+    if (tileAt(lv, tx, ty) === T.FLOOR) { setTile(lv, tx, ty, T.TRAP_HIDDEN); setAux(lv, tx, ty, pickTrap(depth)); break; }
   }
-  return 1;
+}
+
+/** A vault template of the kind that suits the depth, weighted by rarity. */
+function pickVault(depth: number, kind: VaultTemplate['kind']): VaultTemplate | null {
+  const cands = VAULTS.filter(v => v.kind === kind && v.depth <= depth);
+  return weightedPick(cands, v => 1 / v.rarity) ?? null;
+}
+
+/** Hooks that queue the placement for `runPending`, so vault contents arrive with everything else. */
+function deferredHooks(lv: Level): GenHooks {
+  const q = pending(lv);
+  return {
+    placeMonster: (l, d, x, y, s, g) => { q.push(h => h.placeMonster(l, d, x, y, s, g)); },
+    placeThemedMonster: (l, d, x, y, t) => { q.push(h => h.placeThemedMonster(l, d, x, y, t)); },
+    placeGenerator: (l, d, x, y) => { q.push(h => h.placeGenerator(l, d, x, y)); },
+    placeObject: (l, d, x, y, good, great) => { q.push(h => h.placeObject(l, d, x, y, good, great)); },
+    placeGold: (l, d, x, y) => { q.push(h => h.placeGold(l, d, x, y)); },
+  };
+}
+
+/**
+ * Stamp a vault template in a random orientation. It claims as many blocks as the drawing needs
+ * (with a grid of granite to spare all round), and the tunnel anchor it returns is the grid just
+ * outside one of its border doors, so the tunnel network always reaches an entrance.
+ */
+function buildVault(lv: Level, depth: number, tpl: VaultTemplate, bx: number, by: number, used: Uint8Array, bw: number, bh: number): Pos | null {
+  const rows = randomOrientation(tpl.rows);
+  const tw = rows[0].length, th = rows.length;
+  const w = Math.ceil((tw + 2) / BLOCK), h = Math.ceil((th + 2) / BLOCK);
+  if (w > bw || h > bh) return null;
+  let ok = false;
+  if (tpl.kind === 'greater') {
+    // Greater vaults are rare and huge: look for a place rather than trusting the random block.
+    const spots: Pos[] = [];
+    for (let y = 0; y + h <= bh; y++) for (let x = 0; x + w <= bw; x++) spots.push({ x, y });
+    shuffle(spots);
+    for (const s of spots) if (claim(used, bw, bh, s.x, s.y, s.x + w - 1, s.y + h - 1)) { bx = s.x; by = s.y; ok = true; break; }
+  } else ok = claim(used, bw, bh, bx, by, bx + w - 1, by + h - 1);
+  if (!ok) return null;
+  const x0 = bx * BLOCK + Math.floor((w * BLOCK - tw) / 2), y0 = by * BLOCK + Math.floor((h * BLOCK - th) / 2);
+  const placed = placeVault(lv, tpl, x0, y0, depth, deferredHooks(lv), rows);
+  lv.rooms.push({ x1: x0, y1: y0, x2: x0 + tw - 1, y2: y0 + th - 1, lit: false });
+  const ents = placed.entrances.filter(p => p.x >= 1 && p.y >= 1 && p.x <= lv.w - 2 && p.y <= lv.h - 2);
+  if (ents.length) { const e = ents[randint0(ents.length)]; setTile(lv, e.x, e.y, T.FLOOR); return e; }
+  return { x: x0 + (tw >> 1), y: y0 + (th >> 1) };
 }
 
 /** Carve a winding tunnel from a to b through granite only, piercing room walls (which get doors later). */
@@ -298,7 +456,22 @@ function tunnel(lv: Level, a: Pos, b: Pos): void {
     const nx = x + dx, ny = y + dy;
     if (nx <= 0 || ny <= 0 || nx >= lv.w - 1 || ny >= lv.h - 1) { dx = Math.sign(b.x - x); dy = Math.sign(b.y - y); if (dx && dy) dy = 0; continue; }
     const t = tileAt(lv, nx, ny);
-    if (t === T.PERM) { dx = Math.sign(b.x - x); dy = Math.sign(b.y - y); if (dx && dy) dy = 0; if (dx === 0 && dy === 0) break; continue; }
+    if (t === T.PERM) {
+      // Permanent rock (the border, greater-vault walls): turn toward the target if that way is open,
+      // otherwise sidestep along the wall rather than stall against it.
+      const tx = Math.sign(b.x - x), ty = Math.sign(b.y - y);
+      const cands: [number, number][] = [[tx, 0], [0, ty], [dy, dx], [-dy, -dx]];
+      if (oneIn(2)) { const s = cands[2]; cands[2] = cands[3]; cands[3] = s; }
+      let found = false;
+      for (const [cx, cy] of cands) {
+        if (!cx && !cy) continue;
+        const px = x + cx, py = y + cy;
+        if (px <= 0 || py <= 0 || px >= lv.w - 1 || py >= lv.h - 1 || tileAt(lv, px, py) === T.PERM) continue;
+        dx = cx; dy = cy; found = true; break;
+      }
+      if (!found) break;
+      continue;
+    }
     if (t === T.GRANITE) {
       // Entering a room wall? Only from a floor grid on the far side, and mark for a door.
       const beyond = tileAt(lv, nx + dx, ny + dy);
@@ -317,7 +490,7 @@ function streamer(lv: Level, t: number, len: number, chanceK: number): void {
   for (let i = 0; i < len; i++) {
     for (let j = 0; j < 4; j++) {
       const ox = x + randint0(5) - 2, oy = y + randint0(5) - 2;
-      if (tileAt(lv, ox, oy) === T.GRANITE) setTile(lv, ox, oy, oneIn(chanceK * 10) ? (t === T.MAGMA ? T.MAGMA_K : T.QUARTZ_K) : t);
+      if (tileAt(lv, ox, oy) === T.GRANITE && !hasFlag(lv, ox, oy, F.VAULT)) setTile(lv, ox, oy, oneIn(chanceK * 10) ? (t === T.MAGMA ? T.MAGMA_K : T.QUARTZ_K) : t);
     }
     x += DIR_DX[dir]; y += DIR_DY[dir];
     if (x <= 0 || y <= 0 || x >= lv.w - 1 || y >= lv.h - 1) break;

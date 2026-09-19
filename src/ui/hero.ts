@@ -8,6 +8,7 @@ import { shade } from '../lib/art/palettes.ts';
 import { CLASS_BY_ID } from '../game/data/classes.ts';
 import type { Player } from '../game/types.ts';
 import { kindOf } from '../game/items.ts';
+import { RACE_BY_ID } from '../game/data/races.ts';
 
 const INK = '#120c14';
 /** Rig scale: a 72 px reference rig drawn at this scale stands ~26 px, a little over a 24 px tile. */
@@ -82,15 +83,16 @@ export interface HeroSprite {
 export function buildHero(p: Player): HeroSprite {
   const c = CLASS_BY_ID[p.cls];
   const pal: Palette = { ...c.palette };
+  const size = RACE_BY_ID[p.race]?.size || 1;
   const build: RigBuild = {
-    basePalette: pal, outline: INK, scale: HERO_SCALE, proportions: { headR: 10, torsoW: 24, torsoH: 24, upperLeg: 13, lowerLeg: 13, upperArm: 12, lowerArm: 11 },
-    thinR: 4, hiMin: 6, flatR: 2.5, tones: 2, weapon: weaponFor(p), hairStyle: p.cls === 'mage' ? 'bald' : 'short',
+    basePalette: pal, outline: INK, scale: HERO_SCALE * size, proportions: { headR: 10, torsoW: 24, torsoH: 24, upperLeg: 13, lowerLeg: 13, upperArm: 12, lowerArm: 11 },
+    thinR: 4, hiMin: 6, flatR: 2.5, tones: 2, weapon: weaponFor(p), hairStyle: p.cls === 'mage' || p.cls === 'necromancer' ? 'bald' : 'short',
     accessories: accessoriesFor(p.cls, pal),
   };
   const rig = buildRig(build);
   const player = new AnimPlayer(ANIMS);
   player.play('idle');
-  return { rig, player, weaponKey: p.equip.weapon ? p.equip.weapon.kind : '', cls: p.cls };
+  return { rig, player, weaponKey: p.equip.weapon ? p.equip.weapon.kind : '', cls: p.cls + '/' + p.race };
 }
 
 function accessoriesFor(cls: string, pal: Palette) {
@@ -125,13 +127,46 @@ function accessoriesFor(cls: string, pal: Palette) {
     ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline;
     ctx.fillStyle = pal.secondary; ctx.beginPath(); ctx.rect(-11, -6, 22, 4); ctx.stroke(); ctx.fill();
   } });
+  if (cls === 'druid') acc.push({ attach: 'head', draw: (ctx, rig) => {
+    // A leafy circlet with a feather.
+    ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline; ctx.lineJoin = 'round';
+    ctx.fillStyle = pal.primary; ctx.beginPath(); ctx.rect(-11, -7, 22, 3); ctx.stroke(); ctx.fill();
+    ctx.fillStyle = '#e8e0c0'; ctx.beginPath(); ctx.moveTo(8, -7); ctx.lineTo(14, -24); ctx.lineTo(11, -8); ctx.closePath(); ctx.stroke(); ctx.fill();
+    ctx.fillStyle = pal.accent; ctx.beginPath(); ctx.moveTo(-8, -7); ctx.lineTo(-13, -16); ctx.lineTo(-5, -9); ctx.closePath(); ctx.stroke(); ctx.fill();
+  } });
+  if (cls === 'necromancer') acc.push({ attach: 'head', draw: (ctx, rig) => {
+    // A deep hood.
+    ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline; ctx.lineJoin = 'round';
+    ctx.fillStyle = pal.primary; ctx.beginPath(); ctx.moveTo(-12, 2); ctx.lineTo(-12, -8); ctx.quadraticCurveTo(0, -20, 12, -8); ctx.lineTo(12, 2); ctx.lineTo(8, 0); ctx.lineTo(8, -6); ctx.quadraticCurveTo(0, -12, -8, -6); ctx.lineTo(-8, 0); ctx.closePath(); ctx.stroke(); ctx.fill();
+    ctx.fillStyle = pal.glow; ctx.fillRect(-4, -3, 2, 2); ctx.fillRect(2, -3, 2, 2);
+  } });
+  if (cls === 'blackguard') acc.push({ attach: 'head', draw: (ctx, rig) => {
+    // A great helm with a slit and horns.
+    ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline; ctx.lineJoin = 'round';
+    ctx.fillStyle = pal.metal; ctx.beginPath(); ctx.arc(0, -3, 11.5, Math.PI, 0); ctx.lineTo(11.5, 6); ctx.lineTo(-11.5, 6); ctx.closePath(); ctx.stroke(); ctx.fill();
+    ctx.fillStyle = rig.outline; ctx.fillRect(-7, -2, 14, 2);
+    ctx.fillStyle = pal.accent; ctx.beginPath(); ctx.moveTo(-9, -10); ctx.lineTo(-17, -22); ctx.lineTo(-5, -13); ctx.closePath(); ctx.stroke(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(9, -10); ctx.lineTo(17, -22); ctx.lineTo(5, -13); ctx.closePath(); ctx.stroke(); ctx.fill();
+  } });
+  if (cls === 'archer') {
+    acc.push({ attach: 'head', draw: (ctx, rig) => {
+      ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline; ctx.lineJoin = 'round';
+      ctx.fillStyle = pal.secondary; ctx.beginPath(); ctx.moveTo(-12, -4); ctx.lineTo(12, -4); ctx.lineTo(5, -11); ctx.lineTo(-9, -11); ctx.closePath(); ctx.stroke(); ctx.fill();
+    } });
+    acc.push({ attach: 'torso', draw: (ctx, rig) => {
+      // A quiver on the back.
+      ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline;
+      ctx.fillStyle = pal.primary; ctx.beginPath(); ctx.rect(-14, -16, 5, 20); ctx.stroke(); ctx.fill();
+      ctx.fillStyle = pal.accent; for (let i = 0; i < 3; i++) { ctx.beginPath(); ctx.rect(-13 + i * 1.5, -22, 1, 7); ctx.fill(); }
+    } });
+  }
   return acc;
 }
 
 /** Rebuild the rig when the wielded weapon changes. */
 export function syncHero(h: HeroSprite, p: Player): HeroSprite {
   const key = p.equip.weapon ? p.equip.weapon.kind : '';
-  if (key === h.weaponKey && h.cls === p.cls) return h;
+  if (key === h.weaponKey && h.cls === p.cls + '/' + p.race) return h;
   const n = buildHero(p);
   n.player.play(h.player.name || 'idle');
   return n;

@@ -4,7 +4,7 @@ import { rng, freshSeed } from '../lib/engine/rng.ts';
 import { type Player, type Level, type Item, type Pos, T, F, SLOTS } from './types.ts';
 import type { Game } from './state.ts';
 import { MessageLog } from './messages.ts';
-import { createPlayer, computeBonuses, recomputeHp, recomputeMana, adj } from './player.ts';
+import { createPlayer, computeBonuses, recomputeHp, recomputeMana, adj, makeHistory } from './player.ts';
 import { assignFlavors, makeItem, makeAware, kindOf, itemFlags, senseItem, makeGold, makeObject, itemName, wieldSlot, isWeapon, isArmor, isWearable, getNextItemId, setNextItemId, setArtifactsMade, artifactsMadeList } from './items.ts';
 import { createStores, maintainStore } from './stores.ts';
 import { generateDungeon, type GenHooks } from './gen/dungeon.ts';
@@ -18,22 +18,38 @@ import { randint0, randint1, oneIn } from './util.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
 import { RACE_BY_ID } from './data/races.ts';
 import { MONSTER_BY_ID, MONSTERS } from './data/monsters.ts';
-import { FOOD_MAX, FOOD_FULL, FOOD_HUNGRY, FOOD_WEAK, FOOD_FAINT, FOOD_STARVE, MAX_DEPTH } from '../constants.ts';
+import { FOOD_MAX, FOOD_FULL, FOOD_HUNGRY, FOOD_WEAK, FOOD_FAINT, FOOD_STARVE, MAX_DEPTH, TOWN_DAWN } from '../constants.ts';
+import { type Options, normalizeOptions } from './options.ts';
+import type { LoreBook } from './lore.ts';
+import { earthquakeAt } from './effects.ts';
+import type { Stat } from './types.ts';
 
-export function createGame(name: string, race: string, cls: string, sex: 'male' | 'female', seed = freshSeed()): Game {
+export interface BirthExtra {
+  options?: Partial<Options>;
+  /** Stats chosen at birth (point-buy or an accepted roll); rolled if absent. */
+  stats?: Record<Stat, number>;
+  history?: string;
+  /** Monster memory carried over from earlier heroes. */
+  lore?: LoreBook;
+}
+
+export function createGame(name: string, race: string, cls: string, sex: 'male' | 'female', seed = freshSeed(), extra: BirthExtra = {}): Game {
   rng.seed(seed);
   setNextItemId(1);
   setArtifactsMade([]);
-  const player = createPlayer(name || 'Hero', race, cls, sex);
+  const player = createPlayer(name || 'Hero', race, cls, sex, extra.stats);
+  player.history = extra.history || makeHistory(race, sex);
   const g: Game = {
     seed, turn: 1, player, bonuses: computeBonuses(player), level: null as unknown as Level, stores: createStores(), flavors: assignFlavors(), msg: new MessageLog(),
     nextMonsterId: 1, uniquesDead: [], flow: null, flowDirty: true, fx: [], levelChange: null, inStore: -1, totalWinner: false, repeating: null, running: null, travel: null, resting: 0,
     stats: { levelsVisited: 0, monstersKilled: 0, itemsFound: 0, goldFound: 0 }, arrivedBy: 'none',
+    options: normalizeOptions(extra.options), lore: extra.lore ? JSON.parse(JSON.stringify(extra.lore)) : {}, artifactsSeen: [], egosKnown: [], savedLevels: {},
     hooks: {
-      placeGoldAt: (x, y) => { dropNear(g, makeGold(g.level.depth), x, y); },
+      placeGoldAt: (x, y) => { dropNear(g, makeGold(g.level.depth, g.options.noSelling), x, y); },
       placeObjectAt: (x, y, level) => { const it = makeObject(level ?? g.level.depth, false, false); if (it) dropNear(g, it, x, y); },
       cloneMonster: (m) => { const pos = nearFloor(g.level, m.x, m.y, 2); if (pos) createMonster(g, m.race, pos.x, pos.y, false); },
       polymorphMonster: (m) => { const r = pickRace(g, g.level.depth + randint0(5), rr => !hasMFlag(rr, 'UNIQUE') && !hasMFlag(rr, 'GENERATOR')); if (!r) return; removeMonster(g, m); createMonster(g, r.id, m.x, m.y, false); },
+      earthquake: (x, y) => earthquakeAt(g, x, y, 8),
     },
   };
   // Birth kit: known and wielded where sensible.
@@ -62,24 +78,50 @@ function genHooks(g: Game): GenHooks {
     placeThemedMonster: (lv, depth, x, y, theme) => { placeMonster(g, lv, depth + 3, x, y, true, false, themedFilter(theme)); },
     placeGenerator: (lv, depth, x, y) => placeGenerator(g, lv, depth, x, y),
     placeObject: (lv, depth, x, y, good, great) => { const it = makeObject(depth, good, great); if (it) lv.items.push({ x, y, item: it }); },
-    placeGold: (lv, depth, x, y) => { lv.items.push({ x, y, item: makeGold(depth) }); },
+    placeGold: (lv, depth, x, y) => { lv.items.push({ x, y, item: makeGold(depth, g.options.noSelling) }); },
   };
 }
 
 /** Generate and enter a level. */
+/** Is it daytime in the town? Angband: 10,000 game turns of day, then 10,000 of night. */
+export function isDaytime(turn: number): boolean { return (turn % (2 * TOWN_DAWN)) < TOWN_DAWN; }
+
+/** Can the player go below this depth? Sauron guards level 99 and Morgoth waits on 100. */
+export function deepestAllowed(g: Game): number {
+  if (!MONSTER_BY_ID['sauron'] || !MONSTER_BY_ID['morgoth']) return MAX_DEPTH;
+  if (!g.uniquesDead.includes('sauron')) return 99;
+  return MAX_DEPTH;
+}
+
 export function enterLevel(g: Game, depth: number, by: 'down' | 'up' | 'none' | 'teleport' | 'recall'): void {
   const p = g.player;
-  depth = Math.max(0, Math.min(MAX_DEPTH, depth));
-  const arrivedBy = by === 'down' ? 'down' : by === 'up' ? 'up' : 'none';
+  depth = Math.max(0, Math.min(deepestAllowed(g), depth));
+  const arrivedBy = g.options.connectedStairs ? (by === 'down' ? 'down' : by === 'up' ? 'up' : 'none') : 'none';
+  // Persistent levels: stash the one we are leaving and restore the one we return to.
+  if (g.options.persistentLevels && g.level && g.level.depth > 0) g.savedLevels[g.level.depth] = g.level;
   // The level is generated with the game rng, so the seed reproduces the run; the player's
   // position is set before monsters are placed so nothing spawns on top of them.
   let level: Level, start: Pos;
-  if (depth === 0) {
-    const r = generateTown({ placeTownMonster: (lv, x, y) => { const race = pickRace(g, 0); if (race) createMonster(g, race.id, x, y, true, lv); } }, arrivedBy === 'up' ? 'up' : 'none');
+  const saved = g.options.persistentLevels ? g.savedLevels[depth] : undefined;
+  if (saved && depth > 0) {
+    level = saved;
+    const want = arrivedBy === 'down' ? T.STAIRS_UP : arrivedBy === 'up' ? T.STAIRS_DOWN : -1;
+    const cands: Pos[] = [];
+    for (let y = 0; y < level.h; y++) for (let x = 0; x < level.w; x++) if ((want < 0 ? isCleanFloor(level, x, y) : tileAt(level, x, y) === want) && !level.monsters.some(m => m.x === x && m.y === y)) cands.push({ x, y });
+    start = cands.length ? cands[randint0(cands.length)] : { x: 1, y: 1 };
+    // Monsters heal and wander a little while you were away.
+    for (const m of level.monsters) { m.hp = Math.min(m.maxhp, m.hp + Math.floor(m.maxhp / 4)); m.energy = randint0(50); }
+  } else if (depth === 0) {
+    const day = isDaytime(g.turn);
+    const r = generateTown({ placeTownMonster: (lv, x, y) => { const race = pickRace(g, 0); if (race) createMonster(g, race.id, x, y, true, lv); } }, arrivedBy === 'up' ? 'up' : 'none', day);
     level = r.level; start = r.start;
+    level.daytime = day;
   } else {
     const r = generateDungeon(depth, genHooks(g), arrivedBy);
     level = r.level; start = r.start;
+    // The quest monsters guard the bottom of the dungeon.
+    if (depth === 99 && MONSTER_BY_ID['sauron'] && !g.uniquesDead.includes('sauron')) placeQuestor(g, level, 'sauron', start);
+    if (depth === 100 && MONSTER_BY_ID['morgoth'] && !g.uniquesDead.includes('morgoth')) placeQuestor(g, level, 'morgoth', start);
   }
   g.level = level;
   g.levelChange = null;
@@ -98,12 +140,26 @@ export function enterLevel(g: Game, depth: number, by: 'down' | 'up' | 'none' | 
   updateView(level, p.x, p.y, g.bonuses.lightRadius, p.timed.blind > 0);
   updateMonsterVisibility(g);
   if (depth > 0) {
-    level.feeling = levelFeeling(g);
+    if (!saved) level.feeling = levelFeeling(g);
     g.msg.add(feelingText(level.feeling), '#c0c0ff');
     if (depth > 0 && by === 'down') g.msg.add(`You enter a maze of down staircases. (${depth * 50} ft)`, '#a0a0a0');
+    if (depth === 99 && level.monsters.some(m => m.race === 'sauron')) g.msg.shout('SAURON, THE SORCERER, AWAITS', '#ff4040');
+    if (depth === 100 && level.monsters.some(m => m.race === 'morgoth')) g.msg.shout('MORGOTH, LORD OF DARKNESS', '#ff4040');
+    if (g.options.ironman) removeUpStairs(level);
+  } else {
+    g.msg.add(level.daytime ? 'The sun is up.' : 'It is night. The town is dark.', '#a0a0a0');
   }
   autosaveHook?.(g);
 }
+function placeQuestor(g: Game, lv: Level, id: string, avoid: Pos): void {
+  for (let t = 0; t < 200; t++) {
+    const x = 1 + randint0(lv.w - 2), y = 1 + randint0(lv.h - 2);
+    if (!isCleanFloor(lv, x, y) || Math.max(Math.abs(x - avoid.x), Math.abs(y - avoid.y)) < 20) continue;
+    createMonster(g, id, x, y, true, lv); return;
+  }
+  const p = nearFloor(lv, avoid.x, avoid.y, 30, avoid); if (p) createMonster(g, id, p.x, p.y, true, lv);
+}
+function removeUpStairs(lv: Level): void { for (let i = 0; i < lv.tiles.length; i++) if (lv.tiles[i] === T.STAIRS_UP) lv.tiles[i] = T.FLOOR; }
 export let autosaveHook: ((g: Game) => void) | null = null;
 export function setAutosaveHook(f: ((g: Game) => void) | null): void { autosaveHook = f; }
 
@@ -181,7 +237,7 @@ export function processWorld(g: Game): void {
     if (p.food < FOOD_STARVE) takeHit(g, randint1(4), 'starvation');
     if (p.food < FOOD_FAINT && oneIn(10) && !p.timed.paralyzed && !b.flags.has('FREE_ACT')) { g.msg.add('You faint from the lack of food.', '#ff8080'); setTimed(g, 'paralyzed', 1 + randint0(5)); }
   } else { p.food = FOOD_MAX - 1; }
-  // Regeneration.
+  // Regeneration (none while poisoned, bleeding or stunned; a mortal wound never heals by itself).
   if (!p.timed.poisoned && !p.timed.cut && !p.timed.stun) {
     let pct = p.food < FOOD_WEAK ? 0 : p.food < FOOD_HUNGRY ? 1 : 2;
     if (g.resting) pct *= 2;
@@ -196,9 +252,20 @@ export function processWorld(g: Game): void {
   if (t.confused) setTimed(g, 'confused', t.confused - 1); if (t.afraid) setTimed(g, 'afraid', t.afraid - 1);
   if (t.image) setTimed(g, 'image', t.image - 1);
   if (t.poisoned) { takeHit(g, 1, 'poison'); setTimed(g, 'poisoned', t.poisoned - 1); }
-  if (t.cut) { const d = t.cut > 200 ? 3 : t.cut > 100 ? 2 : 1; takeHit(g, d, 'a fatal wound'); setTimed(g, 'cut', t.cut - (b.flags.has('REGEN') ? 2 : 1)); }
-  if (t.stun) setTimed(g, 'stun', t.stun - 1);
-  for (const k of ['protevil', 'invuln', 'hero', 'shero', 'shield', 'blessed', 'sinvis', 'sinfra', 'oppose_acid', 'oppose_elec', 'oppose_fire', 'oppose_cold', 'oppose_pois', 'telepathy'] as const) if (t[k]) setTimed(g, k, t[k] - 1);
+  if (t.cut) {
+    // Angband's cut tiers: graze 1, light 1, bad 1, nasty 1, severe 2, deep gash 3, mortal wound 3 (and it never closes by itself).
+    const d = t.cut > 200 ? 3 : t.cut > 100 ? 2 : 1;
+    takeHit(g, d, t.cut > 1000 ? 'a mortal wound' : 'a fatal wound');
+    const adjust = t.cut > 1000 ? 0 : Math.max(1, adj.conHp(b.stat.CON) + 1) * (b.flags.has('REGEN') ? 2 : 1);
+    if (adjust) setTimed(g, 'cut', t.cut - adjust);
+  }
+  if (t.stun) setTimed(g, 'stun', t.stun - Math.max(1, adj.conHp(b.stat.CON) + 1));
+  for (const k of ['protevil', 'invuln', 'hero', 'shero', 'shield', 'blessed', 'sinvis', 'sinfra', 'oppose_acid', 'oppose_elec', 'oppose_fire', 'oppose_cold', 'oppose_pois', 'telepathy', 'stoneskin', 'regen', 'bold', 'terror', 'bloodlust', 'oppose_conf'] as const) if (t[k]) setTimed(g, k, t[k] - 1);
+  // Cursed gear that bleeds you.
+  if (b.flags.has('DRAIN_HP') && oneIn(10) && p.chp > 1) takeHit(g, 1, 'a cursed item');
+  if (b.flags.has('DRAIN_MANA') && oneIn(10) && p.csp > 0) p.csp--;
+  // Day and night in the town.
+  if (p.depth === 0 && g.level.daytime !== undefined && g.level.daytime !== isDaytime(g.turn)) { g.level.daytime = isDaytime(g.turn); relightTown(g); }
   if (t.recall) { setTimed(g, 'recall', t.recall - 1); if (t.recall === 0) { g.msg.add('You feel yourself yanked ' + (p.depth === 0 ? 'downwards!' : 'upwards!'), '#ffd040'); g.levelChange = { depth: p.recallDepth, by: 'recall' }; } }
   if (t.deep_descent) { setTimed(g, 'deep_descent', t.deep_descent - 1); if (t.deep_descent === 0) { g.msg.add('The floor opens beneath you!', '#ffd040'); g.levelChange = { depth: Math.min(MAX_DEPTH, p.depth + 2), by: 'teleport' }; } }
   // Light fuel.
@@ -240,6 +307,18 @@ function senseSomething(g: Game): void {
   it.sense = sense;
   const inPack = p.inven.includes(it);
   g.msg.add(`You feel the ${itemName(it, g.flavors, { article: false, count: false, plainKind: true })} ${inPack ? 'in your pack' : 'you are wearing'} ${it.number > 1 ? 'are' : 'is'} ${sense}...`, sense === 'cursed' || sense === 'terrible' ? '#ff8080' : '#c0c0ff');
+}
+
+/** Sunrise or sunset while standing in the town: relight or darken it. */
+function relightTown(g: Game): void {
+  const lv = g.level, day = !!lv.daytime;
+  g.msg.add(day ? 'The sun has risen.' : 'The sun has set.', '#ffd040');
+  for (let i = 0; i < lv.tiles.length; i++) {
+    const t = lv.tiles[i];
+    const shop = t >= T.SHOP_0;
+    if (day || shop) lv.flags[i] |= F.GLOW | F.MARK; else lv.flags[i] &= ~F.GLOW;
+  }
+  updateView(lv, g.player.x, g.player.y, g.bonuses.lightRadius, g.player.timed.blind > 0);
 }
 
 export function foodState(food: number): string {

@@ -8,6 +8,7 @@ import { getNextItemId, setNextItemId, setArtifactsMade, artifactsMadeList } fro
 import { computeBonuses } from './player.ts';
 import { refreshBonuses } from './effectsCore.ts';
 import { createGame } from './game.ts';
+import { normalizeOptions } from './options.ts';
 
 function b64(u8: Uint8Array): string {
   let s = '';
@@ -21,25 +22,40 @@ function unb64(s: string): Uint8Array {
   return u8;
 }
 
+function packLevel(lv: Level): unknown {
+  return { ...lv, tiles: b64(lv.tiles), flags: b64(lv.flags), aux: b64(lv.aux), monsters: lv.monsters.map(m => ({ ...m, vx: undefined, vy: undefined, hitFlash: undefined, attackAnim: undefined })) };
+}
+function unpackLevel(d: { tiles: string; flags: string; aux: string }): Level {
+  return { ...(d as unknown as Level), tiles: unb64(d.tiles), flags: unb64(d.flags), aux: unb64(d.aux) };
+}
 export function serialize(g: Game): string {
-  const lv = g.level;
-  const level = { ...lv, tiles: b64(lv.tiles), flags: b64(lv.flags), aux: b64(lv.aux), monsters: lv.monsters.map(m => ({ ...m, vx: undefined, vy: undefined, hitFlash: undefined, attackAnim: undefined })) };
+  const savedLevels: Record<string, unknown> = {};
+  for (const [k, lv] of Object.entries(g.savedLevels)) savedLevels[k] = packLevel(lv);
   const data = {
-    v: 1, seed: g.seed, turn: g.turn, player: { ...g.player, vx: undefined, vy: undefined }, level, stores: g.stores, flavors: g.flavors, msg: g.msg.toJSON(),
+    v: 2, seed: g.seed, turn: g.turn, player: { ...g.player, vx: undefined, vy: undefined }, level: packLevel(g.level), stores: g.stores, flavors: g.flavors, msg: g.msg.toJSON(),
     nextMonsterId: g.nextMonsterId, uniquesDead: g.uniquesDead, totalWinner: g.totalWinner, stats: g.stats, nextItemId: getNextItemId(), artifacts: artifactsMadeList(), rng: rng.state,
+    options: g.options, lore: g.lore, artifactsSeen: g.artifactsSeen, egosKnown: g.egosKnown, savedLevels,
   };
   return JSON.stringify(data);
 }
 
 export function deserialize(json: string): Game {
   const d = JSON.parse(json);
-  if (d.v !== 1) throw new Error('unsupported save version');
+  if (d.v !== 1 && d.v !== 2) throw new Error('unsupported save version');
   // Build a skeleton game through createGame so every runtime hook exists, then overwrite it.
-  const g = createGame(d.player.name, d.player.race, d.player.cls, d.player.sex, d.seed);
+  const g = createGame(d.player.name, d.player.race, d.player.cls, d.player.sex, d.seed, { options: d.options });
   g.turn = d.turn;
   g.player = d.player;
-  const lv: Level = { ...d.level, tiles: unb64(d.level.tiles), flags: unb64(d.level.flags), aux: unb64(d.level.aux) };
-  g.level = lv;
+  for (const t of Object.keys(g.bonuses ? {} : {})) void t;
+  g.level = unpackLevel(d.level);
+  g.options = normalizeOptions(d.options);
+  g.lore = d.lore || {};
+  g.artifactsSeen = d.artifactsSeen || [];
+  g.egosKnown = d.egosKnown || [];
+  g.savedLevels = {};
+  for (const [k, v] of Object.entries(d.savedLevels || {})) g.savedLevels[Number(k)] = unpackLevel(v as { tiles: string; flags: string; aux: string });
+  // Older saves lack the newer timed effects.
+  for (const t of ['stoneskin', 'regen', 'bold', 'terror', 'bloodlust', 'oppose_conf'] as const) if (g.player.timed[t] === undefined) g.player.timed[t] = 0;
   g.stores = d.stores;
   g.flavors = d.flavors;
   g.msg = new MessageLog();

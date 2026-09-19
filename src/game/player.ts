@@ -9,7 +9,7 @@ import { kindOf, itemFlags, isWeapon, artifactOf } from './items.ts';
 import { FOOD_MAX } from '../constants.ts';
 import { clamp } from './util.ts';
 
-export const TIMED_NAMES: Timed[] = ['fast', 'slow', 'blind', 'paralyzed', 'confused', 'afraid', 'image', 'poisoned', 'cut', 'stun', 'protevil', 'invuln', 'hero', 'shero', 'shield', 'blessed', 'sinvis', 'sinfra', 'oppose_acid', 'oppose_elec', 'oppose_fire', 'oppose_cold', 'oppose_pois', 'telepathy', 'recall', 'deep_descent'];
+export const TIMED_NAMES: Timed[] = ['fast', 'slow', 'blind', 'paralyzed', 'confused', 'afraid', 'image', 'poisoned', 'cut', 'stun', 'protevil', 'invuln', 'hero', 'shero', 'shield', 'blessed', 'sinvis', 'sinfra', 'oppose_acid', 'oppose_elec', 'oppose_fire', 'oppose_cold', 'oppose_pois', 'telepathy', 'recall', 'deep_descent', 'stoneskin', 'regen', 'bold', 'terror', 'bloodlust', 'oppose_conf'];
 
 /** Experience needed for each level (Angband's player_exp table, index = level - 2). */
 export const EXP_TABLE = [10, 25, 45, 70, 100, 140, 200, 280, 380, 500, 650, 850, 1100, 1400, 1800, 2300, 2900, 3600, 4400, 5400, 6800, 8400, 10200, 12500, 17500, 25000, 35000, 50000, 75000, 100000, 150000, 200000, 275000, 350000, 450000, 550000, 700000, 850000, 1000000, 1250000, 1500000, 1800000, 2100000, 2400000, 2700000, 3000000, 3500000, 4000000, 4500000, 5000000];
@@ -52,19 +52,38 @@ export const adj = {
 };
 
 /** Roll birth stats (Angband's 3 + 3d5... condensed: 8 + d10 spread, race/class mods applied). */
-export function rollStats(race: string, cls: string): Record<Stat, number> {
+export function rollStats(race: string, cls: string, rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b)): Record<Stat, number> {
   const r = RACE_BY_ID[race], c = CLASS_BY_ID[cls];
   const out = {} as Record<Stat, number>;
   for (const s of STATS) {
-    let v = 8 + rng.int(1, 5) + rng.int(1, 5) + rng.int(0, 2);
+    let v = 8 + rnd(1, 5) + rnd(1, 5) + rnd(0, 2);
     v += r.stats[s] + c.stats[s];
     out[s] = clamp(v, 3, 20);
   }
   return out;
 }
+/** Point-based birth: the cost to raise a base stat from v to v + 1 (before race/class modifiers). */
+export function statCost(v: number): number { return v < 14 ? 1 : v < 16 ? 2 : v < 17 ? 3 : v < 18 ? 4 : 6; }
+export const POINT_BUDGET = 20;
+/** Apply race and class modifiers to bought base stats. */
+export function boughtStats(base: Record<Stat, number>, race: string, cls: string): Record<Stat, number> {
+  const r = RACE_BY_ID[race], c = CLASS_BY_ID[cls];
+  const out = {} as Record<Stat, number>;
+  for (const s of STATS) out[s] = clamp(base[s] + r.stats[s] + c.stats[s], 3, 20);
+  return out;
+}
+/** A few lines of history for the character sheet (Angband's player_history, in miniature). */
+export function makeHistory(race: string, sex: 'male' | 'female', rnd: (n: number) => number = n => rng.int(0, n - 1)): string {
+  const r = RACE_BY_ID[race];
+  const pick = (a: string[]) => a[rnd(a.length)];
+  const origin = r.history && r.history.length ? pick(r.history) : pick(['You are the illegitimate and unacknowledged child of a serf.', 'You are one of several children of a yeoman.', 'You are the only child of a guildsman.', 'You are the first child of a landed knight.', 'You are the heir of a noble house.']);
+  const look = pick(['You have dark brown eyes, straight black hair and an average complexion.', 'You have blue eyes, wavy blond hair and a fair complexion.', 'You have green eyes, curly red hair and a ruddy complexion.', 'You have grey eyes, straight brown hair and a dark complexion.', 'You have hazel eyes, wild auburn hair and a pale complexion.']);
+  const rep = pick(['You are a credit to the family.', 'You are the black sheep of the family.', 'You are a well liked child.', 'You are a shunned child.', 'You are of average fame.']);
+  return `${origin} ${rep} ${look}`.replace(/\bYou are (a|the) (well liked|shunned) child/, sex === 'female' ? 'You are $1 $2 daughter' : 'You are $1 $2 son');
+}
 
-export function createPlayer(name: string, race: string, cls: string, sex: 'male' | 'female'): Player {
-  const stats = rollStats(race, cls);
+export function createPlayer(name: string, race: string, cls: string, sex: 'male' | 'female', chosenStats?: Record<Stat, number>): Player {
+  const stats = chosenStats || rollStats(race, cls);
   const timed = {} as Record<Timed, number>;
   for (const t of TIMED_NAMES) timed[t] = 0;
   const equip = {} as Record<SlotName, Item | null>;
@@ -86,7 +105,7 @@ export function computeBonuses(p: Player): PlayerBonuses {
   const r = RACE_BY_ID[p.race], c = CLASS_BY_ID[p.cls];
   const flags = new Set<ObjectFlag>(r.flags);
   const stat = { ...p.statCur };
-  let toAc = 0, ac = 0, toHit = 0, toDam = 0, speed = 0, lightRadius = 0, weight = 0;
+  let toAc = 0, ac = 0, toHit = 0, toDam = 0, speed = 0, lightRadius = 0, weight = 0, infra = 0;
   let extraBlows = 0, extraShots = 0, extraMight = 0;
   const skills: SkillSet = { ...r.skills };
   for (const k of Object.keys(skills) as (keyof SkillSet)[]) skills[k] += c.skills[k] + Math.floor(c.skillsGrowth[k] * p.lev / 10);
@@ -106,6 +125,7 @@ export function computeBonuses(p: Player): PlayerBonuses {
     if (fl.has('STEALTH')) skills.stealth += pv; if (fl.has('SEARCH')) { skills.search += pv * 5; skills.perception += pv * 5; }
     if (fl.has('SPEED')) speed += pv; if (fl.has('BLOWS')) extraBlows += pv; if (fl.has('SHOTS')) extraShots += pv; if (fl.has('MIGHT')) extraMight += pv;
     if (fl.has('TUNNEL')) skills.digging += pv * 20;
+    if (fl.has('INFRA')) infra += pv;
     if (s === 'light') {
       const art = artifactOf(it);
       lightRadius = Math.max(lightRadius, art ? (it.pval || 3) : (it.timeout > 0 || fl.has('NO_FUEL') ? (k.pval || 1) : 0));
@@ -123,6 +143,13 @@ export function computeBonuses(p: Player): PlayerBonuses {
   if (t.shield) toAc += 50;
   if (t.stun > 50) { toHit -= 20; toDam -= 20; } else if (t.stun) { toHit -= 5; toDam -= 5; }
   if (t.sinvis) flags.add('SEE_INVIS'); if (t.telepathy) flags.add('TELEPATHY');
+  if (t.stoneskin) { toAc += 40; speed -= 5; }
+  if (t.regen) flags.add('REGEN');
+  if (t.bold) flags.add('RES_FEAR');
+  if (t.terror) { speed += 10; }
+  if (t.bloodlust) { toHit += 10; toDam += 5; }
+  if (t.oppose_conf) flags.add('RES_CONF');
+  if (t.sinfra) infra += 5;
   if (t.image) { /* hallucination is cosmetic */ }
   // Stat-derived.
   toHit += adj.strTh(stat.STR) + adj.dexTh(stat.DEX);
@@ -165,11 +192,13 @@ export function computeBonuses(p: Player): PlayerBonuses {
     shots += extraShots;
     if (p.cls === 'ranger' && bk.ammo === 'arrow') shots += Math.floor(p.lev / 20) + 1 > 1 ? Math.floor((p.lev + 20) / 20) : 0;
     if (p.cls === 'rogue' && bk.ammo === 'shot') shots += Math.floor(p.lev / 20) + 1;
+    if (p.cls === 'archer') shots += 1 + Math.floor(p.lev / 15);
     const hold = adj.strHold(stat.STR) * 10;
     if (hold < bk.weight) heavyBow = true;
   }
   if (p.timed.afraid) { /* fear blocks melee entirely; handled in combat */ }
-  return { stat, ac, toAc, toHit: Math.round(toHit), toDam, blows, shots, might, speed, skills, lightRadius, flags, weight, weightLimit, heavyWeapon, heavyBow };
+  // Archers and rangers get extra shots; the class table says how fast.
+  return { stat, ac, toAc, toHit: Math.round(toHit), toDam, blows, shots, might, speed, skills, lightRadius, flags, weight, weightLimit, heavyWeapon, heavyBow, infra };
 }
 
 /** Max hp from level, race+class hit die and CON. */
@@ -191,10 +220,10 @@ export function recomputeMana(p: Player, b: PlayerBonuses): void {
   const levels = p.lev - c.firstSpellLevel + 1;
   let msp = Math.floor(adj.magMana(b.stat[c.spellStat]) * levels / 100) + 1;
   // Gloves hurt mages; heavy armour hurts everyone.
-  if (c.realm === 'magic' && p.equip.gloves) { const fl = itemFlags(p.equip.gloves); if (!fl.has('FREE_ACT') && !(fl.has('DEX') && p.equip.gloves.pval > 0)) msp = Math.floor(msp * 3 / 4); }
+  if ((c.realm === 'magic' || c.realm === 'necro') && p.equip.gloves) { const fl = itemFlags(p.equip.gloves); if (!fl.has('FREE_ACT') && !(fl.has('DEX') && p.equip.gloves.pval > 0)) msp = Math.floor(msp * 3 / 4); }
   let armorWeight = 0;
   for (const s of ['body', 'cloak', 'shield', 'helm', 'gloves', 'boots'] as SlotName[]) { const it = p.equip[s]; if (it) armorWeight += kindOf(it).weight; }
-  const maxWeight = c.realm === 'magic' ? 300 : 350;
+  const maxWeight = c.realm === 'magic' || c.realm === 'necro' ? 300 : 350;
   if (armorWeight > maxWeight) msp -= Math.floor((armorWeight - maxWeight) / 10);
   msp = Math.max(0, msp);
   if (p.msp !== msp) { p.csp = Math.min(p.csp, msp); p.msp = msp; }

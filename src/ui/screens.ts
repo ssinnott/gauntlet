@@ -25,6 +25,10 @@ import { distance } from '../game/util.ts';
 import { createPlayer } from '../game/player.ts';
 import { makeItem } from '../game/items.ts';
 import { buildHero, drawHero, type HeroSprite } from './hero.ts';
+import { BirthScreen2, HighScoresOverlay, RecallOverlay, type Ui2 } from './screens2.ts';
+import { chestTrapName, realmWords } from '../game/commands.ts';
+import { wrapText } from '../game/recall.ts';
+import { characterDump } from '../game/dump.ts';
 
 export interface Ui {
   g: Game;
@@ -331,6 +335,7 @@ export function describeItem(g: Game, it: Item): string {
   const k = kindOf(it);
   const parts: string[] = [];
   if (k.desc && (isAware(g.flavors, it.kind))) parts.push(k.desc);
+  if (k.tval === 'chest' && it.known) parts.push(it.toHit > 0 ? 'It is locked.' : it.toDam > 0 ? `It is trapped with ${chestTrapName(it)}.` : 'It is unlocked and safe.');
   if (isKnown(it, g.flavors)) {
     const f = [...itemFlags(it)].filter(x => !x.startsWith('IGNORE_') && x !== 'EASY_KNOW' && x !== 'SHOW_MODS');
     if (f.length) parts.push(f.map(x => x.replace(/_/g, ' ').toLowerCase()).join(', '));
@@ -433,7 +438,8 @@ export function spellMenu(ui: Ui, mode: 'cast' | 'browse' | 'study', onPick: (id
   const g = ui.g, p = g.player, c = CLASS_BY_ID[p.cls];
   if (!c.realm) { g.msg.add('You cannot cast spells!'); return; }
   const books = knownBooks(g);
-  if (!books.length) { g.msg.add(`You have no ${c.realm === 'magic' ? 'magic books' : 'prayer books'}.`); return; }
+  const [word, , bookWord] = realmWords(g);
+  if (!books.length) { g.msg.add(`You have no ${bookWord}s.`); return; }
   const spells = mode === 'browse' ? classSpells(g).filter(s => books.some(b => b.kind === s.book)) : spellsAvailable(g);
   const lines: MenuLine[] = spells.map(s => {
     const lev = spellLevel(g, s), mana = spellMana(g, s), fail = spellFail(g, s);
@@ -443,7 +449,7 @@ export function spellMenu(ui: Ui, mode: 'cast' | 'browse' | 'study', onPick: (id
     const color = learned ? (p.cast.includes(s.id) ? TEXT : '#a0ffa0') : lev <= p.lev ? '#ffd040' : DIM;
     return { text: `${s.name.padEnd(24)} LV ${String(lev).padStart(2)}  MANA ${String(mana).padStart(2)}  FAIL ${String(fail).padStart(2)}%  ${learned ? '' : lev <= p.lev ? 'UNLEARNED' : ''}`, color, value: s.id, disabled, right: kindOf({ kind: s.book } as Item).name.replace(/[\[\]]/g, '').slice(0, 18) };
   });
-  const titleText = mode === 'cast' ? (c.realm === 'magic' ? 'CAST WHICH SPELL?' : 'RECITE WHICH PRAYER?') : mode === 'study' ? 'STUDY WHICH?' : 'YOUR BOOKS';
+  const titleText = mode === 'cast' ? (c.realm === 'prayer' ? 'RECITE WHICH PRAYER?' : `${realmWords(g)[1].toUpperCase()} WHICH ${word.toUpperCase()}?`) : mode === 'study' ? 'STUDY WHICH?' : 'YOUR BOOKS';
   ui.push(new Menu(titleText, lines, (l, i, u) => { u.pop(); if (mode !== 'browse') onPick(l.value as string); else g.msg.add(SPELL_BY_ID[l.value as string].desc); }, { width: 640, footer: mode === 'browse' ? 'ENTER DESCRIBES   ESC CLOSES' : `MANA ${p.csp}/${p.msp}   ${newSpellCount(g) ? 'YOU CAN LEARN ' + newSpellCount(g) + ' MORE' : ''}` }));
 }
 
@@ -473,7 +479,7 @@ export class CharSheet implements Overlay {
     L(x + 300, ly, 'BLOWS', `${b.blows}/TURN`); ly += 11;
     L(x + 300, ly, 'SHOTS', `${b.shots}/TURN X${b.might}`); ly += 11;
     L(x + 300, ly, 'SPEED', b.speed === 0 ? 'NORMAL' : fmt(b.speed)); ly += 11;
-    L(x + 300, ly, 'INFRA', `${r.infra * 10} FT`); ly += 11;
+    L(x + 300, ly, 'INFRA', `${(r.infra + b.infra) * 10} FT`); ly += 11;
     L(x + 300, ly, 'FOOD', foodState(p.food)); ly += 11;
     L(x + 300, ly, 'MAX DEPTH', p.maxDepth ? `${p.maxDepth * 50} FT` : 'TOWN'); ly += 11;
     L(x + 300, ly, 'KILLS', String(p.kills)); ly += 11;
@@ -492,10 +498,14 @@ export class CharSheet implements Overlay {
     // Flags.
     const flags = [...b.flags].filter(f => !f.startsWith('IGNORE_') && !f.startsWith('SUST_') || true).map(f => f.replace(/_/g, ' ')).join('  ');
     drawText(ctx, flags.length > 150 ? flags.slice(0, 149) + '.' : flags, x + 16, y + h - 46, { size: 1, color: '#a0c0ff' });
-    drawText(ctx, c.desc, x + 16, y + h - 32, { size: 1, color: DIM });
-    drawText(ctx, 'ESC CLOSES', x + w / 2, y + h - 14, { size: 1, color: DIM, align: 'center' });
+    const hist = wrapText(p.history || c.desc, 110);
+    for (let i = 0; i < Math.min(2, hist.length); i++) drawText(ctx, hist[i], x + 16, y + h - 34 + i * 10, { size: 1, color: DIM });
+    drawText(ctx, 'F WRITES A CHARACTER DUMP   ESC CLOSES', x + w / 2, y + h - 14, { size: 1, color: DIM, align: 'center' });
   }
-  key(e: KeyEvent, ui: Ui): boolean { if (e.key === 'Escape' || e.key === 'C' || e.key === 'c' || e.key === 'Enter') ui.pop(); return true; }
+  key(e: KeyEvent, ui: Ui): boolean {
+    if (e.key === 'f' || e.key === 'F') { (ui as Ui2).dumpCharacter(); return true; }
+    if (e.key === 'Escape' || e.key === 'C' || e.key === 'c' || e.key === 'Enter') ui.pop(); return true;
+  }
   click(_x: number, _y: number, ui: Ui): boolean { ui.pop(); return true; }
 }
 function fmt(v: number): string { return (v >= 0 ? '+' : '') + v; }
@@ -520,6 +530,7 @@ export class MapOverlay implements Overlay {
       else if (t === T.STAIRS_DOWN) col = '#ffffff'; else if (t === T.STAIRS_UP) col = '#c0c0ff';
       else if (t === T.TRAP) col = '#ff4060'; else if (t === T.RUBBLE) col = '#8a8a92'; else if (t === T.GRASS) col = '#3a6a34'; else if (t === T.ROAD) col = '#8a7a5a'; else if (t === T.TREE) col = '#2a5a2a';
       else if (isShop(t)) col = '#ffe060';
+      if (f & F.GLYPH) col = '#ffff80';
       if (!(f & F.SEEN)) col = col + 'a0';
       ctx.fillStyle = col; ctx.fillRect(ox + tx * cell, oy + ty * cell, cell, cell);
     }
@@ -566,11 +577,11 @@ export class HelpOverlay implements Overlay {
     const lines = [
       'MOVE     ARROWS / NUMPAD / H J K L Y U B N   (HOLD TO KEEP WALKING)     RUN  SHIFT + DIRECTION',
       'WALK INTO monsters to attack, doors to open, rubble and veins to dig, a shop door to trade',
-      '<  >     take stairs           ,  g   pick up          R  rest          s  search          o  open chest',
-      'i  e     inventory / equipment    w  wield/wear    t  take off    d  drop    k  destroy    x  l  look',
-      'q  quaff potion    r  read scroll    E  eat    a  aim wand    u  use staff    z  zap rod    A  activate',
-      'f  fire missile    v  throw          F  refuel light          m  p  cast spell / pray     b  browse     G  study',
-      'C  character       M  level map      ctrl+P  message log      ctrl+S  save      Q  retire        ?  this help',
+      '<  >     take stairs      ,  g  pick up / hold    R  rest    s  search    o  open    c  close    B  bash    j  jam (spike)',
+      'i  e     inventory / equipment    w  wield/wear    t  take off    d  drop    k  destroy    x  l  look (r recalls)    D  disarm',
+      'q  quaff potion    r  read scroll    E  eat    a  aim wand    u  use staff    z  zap rod    A  activate    n  repeat',
+      'f  fire missile    v  throw          F  refuel light          m  p  cast / pray     b  browse     G  study     T  tunnel',
+      'C  character (F dumps)   M  map   L  locate   ~  knowledge   =  options   ctrl+P  messages   ctrl+S  save   Q  retire',
       'MOUSE   click the map to travel there; while aiming, click a monster to target it; * cycles targets',
       '',
       'KEYS open locked doors instantly (or pick the lock).  GENERATORS spawn monsters until smashed.',
@@ -614,12 +625,13 @@ export class LookMode implements Overlay {
     const c = ui.cursor; if (!c) return;
     const txt = describeGrid(ui.g, c.x, c.y);
     ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(MAP_X, MAP_Y, MAP_W, 16);
-    drawText(ctx, `LOOK: ${txt.slice(0, 110)}   (DIRS MOVE, SPACE/+ NEXT MONSTER, ${this.onSelect ? 'ENTER TARGETS, ' : ''}ESC)`, MAP_X + 8, MAP_Y + 4, { size: 1, color: HI });
+    drawText(ctx, `LOOK: ${txt.slice(0, 100)}   (DIRS, SPACE NEXT, R RECALL, ${this.onSelect ? 'ENTER TARGETS, ' : ''}ESC)`, MAP_X + 8, MAP_Y + 4, { size: 1, color: HI });
   }
   key(e: KeyEvent, ui: Ui): boolean {
     const c = ui.cursor!;
     if (e.key === 'Escape') { ui.cursor = null; ui.pop(); return true; }
     if (e.key === 'Enter' || e.key === 't') { const p = { ...c }; ui.cursor = null; ui.pop(); if (this.onSelect) this.onSelect(p); else ui.target = p; return true; }
+    if (e.key === 'r' || e.key === '/') { const m = monsterAt(ui.g.level, c.x, c.y); if (m && m.visible) ui.push(new RecallOverlay(raceOf(m))); return true; }
     if (e.key === ' ' || e.key === '+' || e.key === '*') {
       const g = ui.g, p = g.player;
       const list = g.level.monsters.filter(m => m.visible).sort((a, b) => distance(p.x, p.y, a.x, a.y) - distance(p.x, p.y, b.x, b.y));
@@ -656,30 +668,33 @@ export class TitleScreen implements Overlay {
     drawTextOutlined(ctx, 'GAUNTLET', VIEW_W / 2, 70, { size: 7, color: '#ffd040', align: 'center', outline: '#3a1c00', thickness: 3 });
     drawTextOutlined(ctx, 'OF ANGBAND', VIEW_W / 2, 140, { size: 4, color: '#e04040', align: 'center', outline: '#2a0a10', thickness: 2 });
     drawText(ctx, 'A PROCEDURAL DUNGEON OF PITS, WYRMS AND GENERATORS', VIEW_W / 2, 190, { size: 1, color: '#8a869a', align: 'center' });
-    const items = [['NEW GAME', true], ['CONTINUE', ui.hasSave()], ['HELP', true]] as [string, boolean][];
+    const items = [['NEW GAME', true], ['CONTINUE', ui.hasSave()], ['HALL OF HEROES', true], ['IMPORT SAVE', true], ['HELP', true]] as [string, boolean][];
     for (let i = 0; i < items.length; i++) {
       const [t, ok] = items[i];
-      drawText(ctx, (this.sel === i ? '> ' : '  ') + t, VIEW_W / 2, 250 + i * 26, { size: 2, color: !ok ? '#4a4656' : this.sel === i ? HI : TEXT, align: 'center' });
+      drawText(ctx, (this.sel === i ? '> ' : '  ') + t, VIEW_W / 2, 232 + i * 22, { size: 2, color: !ok ? '#4a4656' : this.sel === i ? HI : TEXT, align: 'center' });
     }
     drawText(ctx, 'ARROWS + ENTER      WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, 350, { size: 1, color: '#5a5666', align: 'center' });
   }
   key(e: KeyEvent, ui: Ui): boolean {
-    if (e.key === 'ArrowDown' || e.key === 'j') this.sel = (this.sel + 1) % 3;
-    else if (e.key === 'ArrowUp' || e.key === 'k') this.sel = (this.sel + 2) % 3;
+    if (e.key === 'ArrowDown' || e.key === 'j') this.sel = (this.sel + 1) % 5;
+    else if (e.key === 'ArrowUp' || e.key === 'k') this.sel = (this.sel + 4) % 5;
     else if (e.key === 'Enter' || e.key === ' ') this.choose(ui);
     else if (e.key === 'n' || e.key === 'N') { this.sel = 0; this.choose(ui); }
     else if (e.key === 'c' || e.key === 'C') { this.sel = 1; this.choose(ui); }
+    else if (e.key === 'h' || e.key === 'H') { this.sel = 2; this.choose(ui); }
     else if (e.key === '?') ui.push(new HelpOverlay());
     return true;
   }
   choose(ui: Ui): void {
-    if (this.sel === 0) ui.push(new BirthScreen());
+    if (this.sel === 0) ui.push(new BirthScreen2());
     else if (this.sel === 1) { if (!ui.loadGame()) ui.g.msg.add('No saved game.'); }
+    else if (this.sel === 2) ui.push(new HighScoresOverlay());
+    else if (this.sel === 3) (ui as Ui2).importSave();
     else ui.push(new HelpOverlay());
   }
   click(x: number, y: number, ui: Ui): boolean {
-    const i = Math.floor((y - 244) / 26);
-    if (i >= 0 && i < 3 && Math.abs(x - VIEW_W / 2) < 120) { this.sel = i; this.choose(ui); }
+    const i = Math.floor((y - 226) / 22);
+    if (i >= 0 && i < 5 && Math.abs(x - VIEW_W / 2) < 140) { this.sel = i; this.choose(ui); }
     return true;
   }
 }
@@ -787,20 +802,23 @@ export class DeathScreen implements Overlay {
     const lines = [
       `${p.name.toUpperCase()} THE ${title(p).toUpperCase()}`,
       `${RACE_BY_ID[p.race].name.toUpperCase()} ${CLASS_BY_ID[p.cls].name.toUpperCase()}, LEVEL ${p.lev}`,
-      g.totalWinner ? 'SLEW ANCALAGON THE BLACK AND RETIRED IN GLORY' : `KILLED BY ${p.deathCause.toUpperCase()}`,
+      g.totalWinner ? 'BANISHED THE LORD OF DARKNESS AND RETIRED IN GLORY' : `KILLED BY ${p.deathCause.toUpperCase()}`,
       p.depth === 0 ? 'IN THE TOWN' : `ON DUNGEON LEVEL ${p.depth} (${p.depth * 50} FT)`,
       '',
       `${p.kills} KILLS    ${p.gold} GOLD    ${p.maxExp} EXP    DEEPEST ${p.maxDepth * 50} FT`,
       `TURN ${Math.floor(g.turn / 10)}    SCORE ${score(g)}`,
     ];
     for (let i = 0; i < lines.length; i++) drawText(ctx, lines[i], x + w / 2, y + 70 + i * 16, { size: i === 0 ? 2 : 1, color: i === 6 ? GOLD : TEXT, align: 'center' });
-    drawText(ctx, 'ENTER FOR THE TITLE SCREEN      CTRL+P MESSAGES', x + w / 2, y + h - 20, { size: 1, color: DIM, align: 'center' });
+    drawText(ctx, 'ENTER TITLE SCREEN   F CHARACTER DUMP   H HALL OF HEROES   CTRL+P MESSAGES   ~ KNOWLEDGE', x + w / 2, y + h - 20, { size: 1, color: DIM, align: 'center' });
   }
   key(e: KeyEvent, ui: Ui): boolean {
     if (e.ctrl && (e.key === 'p' || e.key === 'P')) { ui.push(new MessagesOverlay()); return true; }
+    if (e.key === 'f' || e.key === 'F') { (ui as Ui2).dumpCharacter(); return true; }
+    if (e.key === 'h' || e.key === 'H') { ui.push(new HighScoresOverlay()); return true; }
+    if (e.key === '~') { import('./screens2.ts').then(m => ui.push(new m.KnowledgeOverlay())); return true; }
     if (e.key === 'Enter' || e.key === 'Escape' || e.key === ' ') ui.quitToTitle();
     return true;
   }
   click(_x: number, _y: number, ui: Ui): boolean { ui.quitToTitle(); return true; }
 }
-export const _keep = [measureText, isWeapon, tvalLabel, TILE, MAP_H];
+export const _keep = [measureText, isWeapon, tvalLabel, TILE, MAP_H, characterDump];
