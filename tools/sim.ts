@@ -17,6 +17,9 @@ import { MONSTERS } from '../src/game/data/monsters.ts';
 import { OBJECTS } from '../src/game/data/objects.ts';
 import { rng } from '../src/lib/engine/rng.ts';
 import type { Game } from '../src/game/state.ts';
+import { characterDump } from '../src/game/dump.ts';
+import { describeRace } from '../src/game/recall.ts';
+import { bashDoor, jamDoor, disarm, passTurn } from '../src/game/commands.ts';
 
 const SEEDS = Number(process.argv[2] || 6);
 const TURNS = Number(process.argv[3] || 3000);
@@ -85,6 +88,7 @@ function botTurn(g: Game, step: number, diver: boolean): void {
   if (step % 13 === 0) { const sp = spellsAvailable(g).filter(s => p.learned.includes(s.id)); if (sp.length) { cast(g, sp[rng.int(0, sp.length - 1)], { dir: rng.int(1, 9), chosen: p.inven[0] }); return; } }
   if (step % 41 === 0 && p.chp < p.mhp / 2) { rest(g, -1); return; }
   if (step % 37 === 0) { searchAround(g); return; }
+  if (step % 43 === 0) { const d = rng.int(1, 9); if (d !== 5) { if (rng.chance(0.5)) bashDoor(g, d); else if (rng.chance(0.5)) jamDoor(g, d); else disarm(g, d); } else passTurn(g); return; }
   // Stairs.
   const t = tileAt(lv, p.x, p.y);
   if (t === T.STAIRS_DOWN && (diver || rng.chance(0.7))) { goDown(g); return; }
@@ -146,7 +150,8 @@ let deaths = 0, maxDepth = 0, totalKills = 0;
 for (let seed = 1; seed <= SEEDS; seed++) {
   const cls = CLASSES[(seed - 1) % CLASSES.length], race = RACES[(seed * 3) % RACES.length];
   let g: Game;
-  try { g = createGame('Sim' + seed, race.id, cls.id, seed % 2 ? 'male' : 'female', seed * 7919); }
+  const opts = seed % 3 === 0 ? { ironman: true, smartMonsters: true } : seed % 3 === 1 ? { noSelling: true, persistentLevels: true, connectedStairs: false } : {};
+  try { g = createGame('Sim' + seed, race.id, cls.id, seed % 2 ? 'male' : 'female', seed * 7919, { options: opts }); }
   catch (e) { failures++; console.log(`  FAIL: createGame seed ${seed}: ${(e as Error).stack}`); continue; }
   let step = 0;
   try {
@@ -167,6 +172,9 @@ for (let seed = 1; seed <= SEEDS; seed++) {
     console.log(`  FAIL: seed ${seed} (${cls.id}) crashed at step ${step} depth ${g.level.depth}: ${(e as Error).stack}`);
     continue;
   }
+  // The text systems must never throw.
+  try { const d = characterDump(g); ok(d.length > 200, `seed ${seed}: dump too short`); for (const r of MONSTERS.slice(0, 40)) describeRace(g, r); for (const r of MONSTERS.slice(-40)) describeRace(g, r, true); }
+  catch (e) { failures++; console.log(`  FAIL: seed ${seed} dump/recall: ${(e as Error).stack}`); }
   if (g.player.dead) deaths++;
   maxDepth = Math.max(maxDepth, g.player.maxDepth);
   totalKills += g.player.kills;

@@ -26,6 +26,7 @@ const TIMED_BADGES: [string, string, string][] = [
   ['protevil', 'PROT EVIL', '#a0ffa0'], ['invuln', 'INVULN', '#ffe080'], ['hero', 'HERO', '#a0ffa0'], ['shero', 'BERSERK', '#ff8080'], ['shield', 'SHIELD', '#a0c0ff'],
   ['blessed', 'BLESSED', '#fff0a0'], ['sinvis', 'SEE INV', '#c0c0ff'], ['telepathy', 'ESP', '#ff80ff'], ['oppose_fire', 'RFIRE', '#ff8040'], ['oppose_cold', 'RCOLD', '#a0e0ff'],
   ['oppose_acid', 'RACID', '#a0ff60'], ['oppose_elec', 'RELEC', '#80c0ff'], ['oppose_pois', 'RPOIS', '#60e060'], ['recall', 'RECALL', '#ffd040'], ['deep_descent', 'DESCENT', '#ffd040'],
+  ['stoneskin', 'STONESKIN', '#c0c0a0'], ['regen', 'REGEN', '#a0ffa0'], ['bold', 'BOLD', '#ffe080'], ['terror', 'TERROR', '#ff8080'], ['bloodlust', 'BLOODLUST', '#ff4040'], ['oppose_conf', 'RCONF', '#e0a0ff'],
 ];
 
 export function drawHud(ctx: CanvasRenderingContext2D, g: Game, frame: number): void {

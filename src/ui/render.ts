@@ -37,6 +37,8 @@ export class MapRenderer {
   cursor: Pos | null = null;
   /** Tiles highlighted (e.g. the travel path). */
   hilite: Pos[] = [];
+  /** Locate mode: the camera centres on this tile instead of the player. */
+  camLock: Pos | null = null;
 
   /** Per-frame update: interpolate positions, tick effects. */
   update(g: Game, dtFrames = 1): void {
@@ -53,7 +55,8 @@ export class MapRenderer {
     }
     // Camera follows the visual position and clamps to the level.
     const lv = g.level;
-    const wx = (p.vx! + 0.5) * TILE - MAP_W / 2, wy = (p.vy! + 0.5) * TILE - MAP_H / 2;
+    const cx = this.camLock ? this.camLock.x : p.vx!, cy = this.camLock ? this.camLock.y : p.vy!;
+    const wx = (cx + 0.5) * TILE - MAP_W / 2, wy = (cy + 0.5) * TILE - MAP_H / 2;
     const maxX = Math.max(0, lv.w * TILE - MAP_W), maxY = Math.max(0, lv.h * TILE - MAP_H);
     const tx = clamp(wx, 0, maxX), ty = clamp(wy, 0, maxY);
     this.camX = lv.w * TILE < MAP_W ? (lv.w * TILE - MAP_W) / 2 : lerp(this.camX, tx, 0.25);

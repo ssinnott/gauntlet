@@ -12,7 +12,7 @@ import * as C from './game/commands.ts';
 import { kindOf, itemName, isAmmo, isWearable, identify } from './game/items.ts';
 import { needsDir, needsItem, type EffectCtx } from './game/effects.ts';
 import { type Item, type Pos, T, DIR_DX, DIR_DY, dirOf } from './game/types.ts';
-import { tileAt, itemsAt, monsterAt } from './game/level.ts';
+import { tileAt, itemsAt, monsterAt, auxAt } from './game/level.ts';
 import { SPELL_BY_ID } from './game/data/spells.ts';
 import { CLASS_BY_ID } from './game/data/classes.ts';
 import { refreshBonuses } from './game/effectsCore.ts';
@@ -22,11 +22,24 @@ import { drawHud, drawMessageBar, drawBanner } from './ui/hud.ts';
 import { buildHero, syncHero } from './ui/hero.ts';
 import { type Ui, type Overlay, Menu, pickItem, DirPrompt, QuantityPrompt, TextPrompt, Confirm, InventoryScreen, StoreScreen, spellMenu, CharSheet, MapOverlay, HelpOverlay, MessagesOverlay, LookMode, TitleScreen, DeathScreen, type ItemWhere } from './ui/screens.ts';
 import { ARTIFACT_BY_ID } from './game/data/objects.ts';
+import { KnowledgeOverlay, OptionsOverlay, HighScoresOverlay, LocateMode, RecallOverlay, type Ui2 } from './ui/screens2.ts';
+import { characterDump } from './game/dump.ts';
+import { type ScoreEntry, SCORES_KEY, scoreEntry, addScore } from './game/scores.ts';
+import { mergeLore, type LoreBook } from './game/lore.ts';
+import type { Stat } from './game/types.ts';
+import type { Options } from './game/options.ts';
+import { MONSTER_BY_ID } from './game/data/monsters.ts';
+import { raceOf } from './game/monster.ts';
+const LORE_KEY = 'gauntlet-of-angband.lore.v1';
 
 setTextDefaults({ shadowColor: '#0a0810', outline: '#0a0810' });
 
-class App implements Ui {
+class App implements Ui2 {
   g!: Game;
+  scores: ScoreEntry[] = [];
+  /** The last repeatable action, for Enter. */
+  lastAction: (() => void) | null = null;
+  private scoreRecorded = false;
   overlays: Overlay[] = [];
   renderer = new MapRenderer();
   cursor: Pos | null = null;
@@ -41,12 +54,60 @@ class App implements Ui {
   constructor() {
     this.input = new Input(this.canvasApi.canvas, (x, y) => this.canvasApi.toInternal(x, y));
     setAutosaveHook(g => { if (this.started && g === this.g && !g.player.dead) this.save(); });
+    try { this.scores = JSON.parse(localStorage.getItem(SCORES_KEY) || '[]'); } catch { this.scores = []; }
     this.push(new TitleScreen());
+  }
+  // -----------------------------------------------------------------------------------------
+  // Persistence beyond the save: monster memory, high scores, dumps, export and import.
+  private loadLore(): LoreBook { try { return JSON.parse(localStorage.getItem(LORE_KEY) || '{}'); } catch { return {}; } }
+  private saveLore(): void { try { localStorage.setItem(LORE_KEY, JSON.stringify(mergeLore(this.loadLore(), this.g.lore))); } catch { /* ignore */ } }
+  private recordScore(): number {
+    if (this.scoreRecorded) return -1;
+    this.scoreRecorded = true;
+    const rank = addScore(this.scores, scoreEntry(this.g));
+    try { localStorage.setItem(SCORES_KEY, JSON.stringify(this.scores)); } catch { /* ignore */ }
+    this.saveLore();
+    return rank;
+  }
+  private download(name: string, text: string, type = 'text/plain'): void {
+    try {
+      const blob = new Blob([text], { type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) { console.warn('download failed', e); }
+  }
+  dumpCharacter(): void {
+    const text = characterDump(this.g);
+    this.download(`${this.g.player.name.replace(/[^a-z0-9]/gi, '_') || 'hero'}.txt`, text);
+    this.g.msg.add('Character dump written.', '#a0ffa0');
+  }
+  exportSave(): void {
+    if (!this.started) return;
+    this.download(`${this.g.player.name.replace(/[^a-z0-9]/gi, '_') || 'hero'}.gauntlet.json`, serialize(this.g), 'application/json');
+    this.g.msg.add('Save exported.', '#a0ffa0');
+  }
+  importSave(): void {
+    try {
+      const input = document.createElement('input'); input.type = 'file'; input.accept = '.json,application/json';
+      input.onchange = () => {
+        const f = input.files && input.files[0]; if (!f) return;
+        f.text().then(json => {
+          try { this.g = deserialize(json); this.begin(); this.save(); this.g.msg.add('Save imported.', '#a0ffa0'); }
+          catch (e) { console.error(e); alert('That file is not a Gauntlet of Angband save.'); }
+        });
+      };
+      input.click();
+    } catch (e) { console.warn('import failed', e); }
+  }
+  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string }): void {
+    this.g = createGame(name, race, cls, sex, undefined, { ...extra, lore: this.loadLore() });
+    this.begin();
   }
   push(o: Overlay): void { this.overlays.push(o); }
   pop(): void { this.overlays.pop(); }
   hasSave(): boolean { try { return !!localStorage.getItem(SAVE_KEY); } catch { return false; } }
-  save(): void { try { localStorage.setItem(SAVE_KEY, serialize(this.g)); this.lastSave = this.frame; } catch (e) { console.warn('save failed', e); } }
+  save(): void { try { localStorage.setItem(SAVE_KEY, serialize(this.g)); this.lastSave = this.frame; } catch (e) { console.warn('save failed', e); } this.saveLore(); }
   loadGame(): boolean {
     try {
       const json = localStorage.getItem(SAVE_KEY);
@@ -58,12 +119,15 @@ class App implements Ui {
     } catch (e) { console.error(e); return false; }
   }
   newGame(name: string, race: string, cls: string, sex: 'male' | 'female'): void {
-    this.g = createGame(name, race, cls, sex);
+    this.g = createGame(name, race, cls, sex, undefined, { lore: this.loadLore() });
     this.begin();
   }
   private begin(): void {
     this.overlays.length = 0;
     this.started = true;
+    this.scoreRecorded = false;
+    this.lastAction = null;
+    this.renderer.camLock = null;
     this.renderer.hero = buildHero(this.g.player);
     this.renderer.active.length = 0;
     this.renderer.camX = this.g.player.x * 24; this.renderer.camY = this.g.player.y * 24;
@@ -90,6 +154,8 @@ class App implements Ui {
     if (g.player.dead && !this.overlays.some(o => o instanceof DeathScreen)) {
       try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
       this.overlays.length = 0;
+      const rank = this.recordScore();
+      if (rank > 0) g.msg.add(`You rank ${rank} in the Hall of Heroes.`, '#ffd040');
       this.push(new DeathScreen());
     }
     if (g.totalWinner && !g.player.dead && !this.overlays.some(o => o instanceof DeathScreen)) { /* keep playing; the banner said it */ }
@@ -131,6 +197,8 @@ class App implements Ui {
       const rep = this.input.repeat(now, this.input.keys.has('Shift'));
       if (rep && !g.running && !g.travel && !g.resting) this.handleKey(rep);
     }
+    // Paralysed or knocked out: time passes without input.
+    if ((g.player.timed.paralyzed || g.player.timed.stun > 100) && this.frame % 6 === 0 && !g.player.dead) { C.passTurn(g); this.afterAction(); }
     if (!this.renderer.busy() && this.frame % 4 === 0) {
       if (g.running) { C.runStep(g); this.afterAction(); }
       else if (g.travel) { C.travelStep(g); this.afterAction(); }
@@ -150,6 +218,7 @@ class App implements Ui {
     if (r.cmd === 'tunnel') { if (t === T.FLOOR) g.repeating = null; else C.tunnelInto(g, x, y); }
     else if (r.cmd === 'open') { if (t !== T.DOOR_CLOSED) g.repeating = null; else C.openDoor(g, x, y); }
     else if (r.cmd === 'disarm') { if (t !== T.TRAP) g.repeating = null; else C.disarm(g, r.dir); }
+    else if (r.cmd === 'bash') { if (t !== T.DOOR_CLOSED) g.repeating = null; else C.bashDoor(g, r.dir); }
     this.afterAction();
   }
 
@@ -191,8 +260,13 @@ class App implements Ui {
     const g = this.g, p = g.player;
     if (this.renderer.busy() && dirOfKey(e)) return;
     const dir = dirOfKey(e);
-    if (dir && dir !== 5) {
-      if (e.shift || (e.key.length === 1 && e.key !== e.key.toLowerCase() && /[A-Z]/.test(e.key))) C.run(g, dir); else C.moveDir(g, dir);
+    if (dir && dir !== 5 && !e.ctrl) {
+      const running = e.shift || (e.key.length === 1 && e.key !== e.key.toLowerCase() && /[A-Z]/.test(e.key));
+      const nx = p.x + DIR_DX[dir], ny = p.y + DIR_DY[dir];
+      const t = tileAt(g.level, nx, ny);
+      if (!running && t === T.TRAP && g.options.confirmTraps && !monsterAt(g.level, nx, ny)) { this.push(new Confirm('Really walk onto the trap?', () => { C.moveDir(g, dir); this.afterAction(); })); return; }
+      if (!running && t === T.DOOR_CLOSED && auxAt(g.level, nx, ny) >= 100) { C.bashDoor(g, dir); this.afterAction(); return; }
+      if (running) C.run(g, dir); else C.moveDir(g, dir);
       this.afterAction(); return;
     }
     if (e.ctrl) {
@@ -201,19 +275,31 @@ class App implements Ui {
         case 'x': this.save(); g.msg.add('Game saved.', '#a0ffa0'); this.quitToTitle(); return;
         case 'p': this.push(new MessagesOverlay()); return;
         case 'f': g.msg.add(`Level feeling: ${g.level.feeling || 'none'}. Depth ${g.level.depth}.`); return;
+        case 'j': this.dirThen('Jam which door', d => { C.jamDoor(g, d); this.afterAction(); }, false); return;
+        case 'b': this.dirThen('Bash which door', d => { C.bashDoor(g, d); this.afterAction(); }, false); return;
+        case 'l': this.push(new LocateMode({ x: p.x, y: p.y })); return;
+        case 'e': this.exportSave(); return;
+        case 'k': this.push(new KnowledgeOverlay()); return;
       }
       return;
     }
     switch (e.key) {
       case '5': case '.': case 's': if (e.key === 's') C.searchAround(g); else C.rest(g, 1); break;
-      case ',': case 'g': if (!C.pickupHere(g, false)) { /* nothing */ } else C.rest(g, 0); break;
+      case ',': case 'g': if (C.pickupHere(g, false)) C.passTurn(g); else if (e.key === ',') C.passTurn(g); break;
+      case 'Enter': if (this.lastAction) this.lastAction(); else g.msg.add('Nothing to repeat.'); break;
+      case '~': case '|': this.push(new KnowledgeOverlay()); break;
+      case '=': this.push(new OptionsOverlay()); break;
+      case 'V': this.push(new HighScoresOverlay()); break;
+      case '{': pickItem(this, 'Inscribe which item?', () => true, ['inven', 'equip', 'quiver'], (it, w) => this.itemAction(it, w, 'inscribe')); break;
+      case '}': pickItem(this, 'Uninscribe which item?', it => !!it.inscription, ['inven', 'equip', 'quiver'], (it) => { it.inscription = undefined; g.msg.add('Inscription removed.'); }); break;
+      case '/': { const m = g.level.monsters.filter(mm => mm.visible).sort((a, b) => Math.abs(a.x - p.x) + Math.abs(a.y - p.y) - Math.abs(b.x - p.x) - Math.abs(b.y - p.y))[0]; if (m) this.push(new RecallOverlay(raceOf(m))); else g.msg.add('No monster in view to recall.'); break; }
       case '>': C.goDown(g); break;
       case '<': C.goUp(g); break;
       case 'R': this.push(new Menu('REST', [{ text: 'As needed', value: -1 }, { text: '10 turns', value: 10 }, { text: '50 turns', value: 50 }, { text: '200 turns', value: 200 }], (l, i, ui) => { ui.pop(); C.rest(g, l.value as number); }, { width: 300 })); break;
       case 'i': this.push(new InventoryScreen((it, w, a) => this.itemAction(it, w, a), 'inven')); break;
       case 'e': this.push(new InventoryScreen((it, w, a) => this.itemAction(it, w, a), 'equip')); break;
       case 'w': pickItem(this, 'Wear or wield which item?', it => isWearable(kindOf(it)) && !isAmmo(kindOf(it)), ['inven', 'floor'], (it, w) => this.itemAction(it, w, 'wield')); break;
-      case 't': case 'T': if (e.key === 'T') { this.dirThen('Tunnel', (d) => { C.tunnelInto(g, p.x + DIR_DX[d], p.y + DIR_DY[d]); this.afterAction(); }, false); break; } pickItem(this, 'Take off which item?', () => true, ['equip'], (it) => this.itemAction(it, 'equip', 'takeoff')); break;
+      case 't': case 'T': if (e.key === 'T') { this.dirThen('Tunnel', (d) => { this.lastAction = () => { C.tunnelInto(g, p.x + DIR_DX[d], p.y + DIR_DY[d]); this.afterAction(); }; this.lastAction(); }, false); break; } pickItem(this, 'Take off which item?', () => true, ['equip'], (it) => this.itemAction(it, 'equip', 'takeoff')); break;
       case 'd': pickItem(this, 'Drop which item?', () => true, ['inven', 'quiver', 'equip'], (it, w) => this.itemAction(it, w, 'drop')); break;
       case 'k': pickItem(this, 'Destroy which item?', () => true, ['inven', 'quiver', 'floor'], (it, w) => this.itemAction(it, w, 'destroy')); break;
       case 'q': pickItem(this, 'Quaff which potion?', it => kindOf(it).tval === 'potion', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'quaff')); break;
@@ -235,7 +321,7 @@ class App implements Ui {
       case '*': this.cursor = { x: p.x, y: p.y }; this.push(new LookMode(t => { this.target = t; g.msg.add('Target set.'); })); break;
       case 'o': this.openThing(); break;
       case 'c': this.dirThen('Close', d => { C.closeDoor(g, d); this.afterAction(); }, false); break;
-      case 'D': this.dirThen('Disarm', d => { C.disarm(g, d); this.afterAction(); }, false); break;
+      case 'D': { const chest = itemsAt(g.level, p.x, p.y).find(fi => kindOf(fi.item).tval === 'chest'); if (chest) { C.disarmChest(g, chest); break; } this.dirThen('Disarm', d => { C.disarm(g, d); this.afterAction(); }, false); break; }
       case 'S': p.searching = !p.searching; g.msg.add(p.searching ? 'You begin searching carefully.' : 'You stop searching.'); refreshBonuses(g); break;
       case '?': this.push(new HelpOverlay()); break;
       case 'Q': this.push(new Confirm('Retire this character? (the save is deleted)', () => { p.dead = true; p.deathCause = 'retirement'; this.afterAction(); })); break;
@@ -277,8 +363,33 @@ class App implements Ui {
   private castSpell(id: string): void {
     const g = this.g;
     const s = SPELL_BY_ID[id];
-    const run = (ctx: EffectCtx) => { C.cast(g, s, ctx); this.afterAction(); };
+    const run = (ctx: EffectCtx) => { this.lastAction = () => { if (g.player.learned.includes(s.id)) { C.cast(g, s, ctx); this.afterAction(); } }; C.cast(g, s, ctx); this.afterAction(); };
     this.withEffectPrompts(s.effect, s.name, run);
+  }
+  /** Prompts that some effects need beyond a direction or an item: Banishment's race, Recall's depth reset. */
+  private specialPrompts(effect: import('./game/types.ts').Effect, ctx: EffectCtx, then: () => void): void {
+    const g = this.g, p = g.player;
+    const kinds = new Set<string>();
+    const walk = (e: import('./game/types.ts').Effect) => { kinds.add(e.kind); if (e.kind === 'seq') e.effects.forEach(walk); };
+    walk(effect);
+    if (kinds.has('banish')) {
+      const seen = new Map<string, number>();
+      for (const m of g.level.monsters) if (m.visible && !raceOf(m).flags.includes('UNIQUE')) seen.set(m.race, (seen.get(m.race) || 0) + 1);
+      const known = Object.keys(g.lore).filter(id => MONSTER_BY_ID[id] && !MONSTER_BY_ID[id].flags.includes('UNIQUE') && !seen.has(id) && (g.lore[id].kills > 0 || g.lore[id].sights > 0));
+      const lines = [...[...seen.entries()].map(([id, n]) => ({ text: `${MONSTER_BY_ID[id].name} (${n} in view)`, value: id })), ...known.map(id => ({ text: MONSTER_BY_ID[id].name, value: id, color: '#8a869a' }))];
+      if (!lines.length) { g.msg.add('You know of nothing to banish.'); return; }
+      this.push(new Menu('BANISH WHICH KIND OF MONSTER?', lines, (l, i, ui) => { ui.pop(); ctx.race = l.value as string; then(); }, { width: 480 }));
+      return;
+    }
+    if (kinds.has('recall') && g.level.depth > 0 && g.level.depth < p.maxDepth && !p.timed.recall && !g.options.ironman) {
+      this.push(new Confirm(`Set the recall depth to ${g.level.depth * 50} ft (now ${p.maxDepth * 50} ft)?`, () => { ctx.resetRecall = true; then(); }));
+      // The Confirm overlay pops itself; a 'no' answer must still cast.
+      const top = this.overlays[this.overlays.length - 1] as Confirm;
+      const orig = top.key.bind(top);
+      top.key = (e, ui) => { const yes = e.key === 'y' || e.key === 'Y'; const r = orig(e, ui); if (!yes) then(); return r; };
+      return;
+    }
+    then();
   }
   /** Ask for a direction and/or an item if the effect needs them, then run. */
   private withEffectPrompts(effect: import('./game/types.ts').Effect, label: string, run: (ctx: EffectCtx) => void): void {
@@ -286,8 +397,8 @@ class App implements Ui {
     const ctx: EffectCtx = {};
     const need = needsItem(effect);
     const afterItem = () => {
-      if (needsDir(effect)) this.dirThen(label, (d, t) => { ctx.dir = d; ctx.target = t; run(ctx); });
-      else run(ctx);
+      if (needsDir(effect)) this.dirThen(label, (d, t) => { ctx.dir = d; ctx.target = t; this.specialPrompts(effect, ctx, () => run(ctx)); });
+      else this.specialPrompts(effect, ctx, () => run(ctx));
     };
     if (need === 'identify') pickItem(this, 'Identify which item?', it => !it.known || !isWearable(kindOf(it)) && kindOf(it).flavored === true && !g.flavors.aware.includes(it.kind), ['inven', 'equip', 'quiver', 'floor'], it => { ctx.chosen = it; afterItem(); }, () => run(ctx));
     else if (need === 'enchant_weapon') pickItem(this, 'Enchant which weapon?', it => ['sword', 'hafted', 'polearm', 'digger', 'bow', 'shot', 'arrow', 'bolt'].includes(kindOf(it).tval), ['equip', 'inven', 'quiver'], it => { ctx.chosen = it; afterItem(); }, () => run(ctx));
@@ -308,20 +419,21 @@ class App implements Ui {
       g.msg.add('You have no room for that.'); return false;
     };
     const done = () => this.afterAction();
+    const remember = (f: () => void) => { this.lastAction = () => { const still = p.inven.includes(it) || p.quiver.includes(it) || Object.values(p.equip).includes(it); if (!still || it.number <= 0) { g.msg.add('You no longer have that.'); return; } f(); }; };
     switch (action) {
       case 'wield': if (takeFirst()) C.wield(g, it); done(); break;
       case 'takeoff': C.takeOff(g, it); done(); break;
       case 'drop': if (it.number > 1) this.push(new QuantityPrompt('Drop how many?', it.number, n => { C.dropItem(g, it, n); done(); }, it.number)); else { C.dropItem(g, it, 1); done(); } break;
-      case 'quaff': if (takeFirst()) C.quaff(g, it); done(); break;
+      case 'quaff': if (!takeFirst()) break; if (g.options.confirmUnknown && !g.flavors.aware.includes(it.kind)) { this.push(new Confirm(`Really quaff ${itemName(it, g.flavors, { count: false })}?`, () => { C.quaff(g, it); done(); })); break; } C.quaff(g, it); done(); break;
       case 'eat': if (takeFirst()) C.eat(g, it); done(); break;
-      case 'read': if (!takeFirst()) break; if (k.effect) this.withEffectPrompts(k.effect, itemName(it, g.flavors, { count: false }), ctx => { C.read(g, it, ctx); done(); }); else { C.read(g, it); done(); } break;
-      case 'aim': if (!takeFirst()) break; this.dirThen(itemName(it, g.flavors, { count: false }), (d, t) => { C.aim(g, it, d, t); done(); }); break;
+      case 'read': { if (!takeFirst()) break; const go = () => { if (k.effect) this.withEffectPrompts(k.effect, itemName(it, g.flavors, { count: false }), ctx => { C.read(g, it, ctx); done(); }); else { C.read(g, it); done(); } }; if (g.options.confirmUnknown && !g.flavors.aware.includes(it.kind)) this.push(new Confirm(`Really read ${itemName(it, g.flavors, { count: false })}?`, go)); else go(); break; }
+      case 'aim': if (!takeFirst()) break; this.dirThen(itemName(it, g.flavors, { count: false }), (d, t) => { remember(() => { C.aim(g, it, d, t); done(); }); C.aim(g, it, d, t); done(); }); break;
       case 'use': if (!takeFirst()) break; if (k.effect) this.withEffectPrompts(k.effect, itemName(it, g.flavors, { count: false }), ctx => { C.useStaff(g, it, ctx); done(); }); else { C.useStaff(g, it); done(); } break;
-      case 'zap': if (!takeFirst()) break; if (k.effect && (needsDir(k.effect) || needsItem(k.effect))) this.withEffectPrompts(k.effect, itemName(it, g.flavors, { count: false }), ctx => { C.zap(g, it, ctx.dir ?? 5, ctx.target, ctx); done(); }); else { C.zap(g, it, 5, null); done(); } break;
+      case 'zap': if (!takeFirst()) break; if (k.effect && (needsDir(k.effect) || needsItem(k.effect))) this.withEffectPrompts(k.effect, itemName(it, g.flavors, { count: false }), ctx => { remember(() => { C.zap(g, it, ctx.dir ?? 5, ctx.target, ctx); done(); }); C.zap(g, it, ctx.dir ?? 5, ctx.target, ctx); done(); }); else { remember(() => { C.zap(g, it, 5, null); done(); }); C.zap(g, it, 5, null); done(); } break;
       case 'activate': { const eff = it.artifact ? ARTIFACT_BY_ID[it.artifact]?.activation : k.effect; if (eff && needsDir(eff)) this.dirThen('Activate', (d, t) => { C.activate(g, it, d, t); done(); }); else { C.activate(g, it, 5, null); done(); } break; }
       case 'fuel': C.refuel(g, it); done(); break;
       case 'throw': if (!takeFirst()) break; this.dirThen('Throw', (d, t) => { C.throwItem(g, it, d, t); done(); }); break;
-      case 'fire': if (!takeFirst()) break; this.dirThen('Fire', (d, t) => { C.fire(g, it, d, t); done(); }); break;
+      case 'fire': if (!takeFirst()) break; this.dirThen('Fire', (d, t) => { remember(() => { C.fire(g, it, d, t); done(); }); C.fire(g, it, d, t); done(); }); break;
       case 'browse': spellMenu(this, 'browse', () => {}); break;
       case 'inspect': g.msg.add(`${itemName(it, g.flavors, { full: it.known })}: ${describe(g, it)}`); break;
       case 'inscribe': this.push(new TextPrompt('Inscribe with:', it.inscription || '', s => { it.inscription = s || undefined; })); break;
@@ -346,6 +458,8 @@ window.__game.api = {
   get game() { return app.g; },
   app,
   newGame: (name: string, race: string, cls: string, sex: 'male' | 'female') => app.newGame(name, race, cls, sex),
+  newGame2: (name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string }) => app.newGame2(name, race, cls, sex, extra),
+  dump: () => characterDump(app.g),
   key: (key: string, shift = false, ctrl = false) => { app.handleKeyPublic({ key, shift, ctrl, alt: false, code: '' }); },
   step: () => { app.update(); app.render(); },
 };
@@ -353,6 +467,8 @@ export type GameApi = {
   readonly game: Game;
   app: unknown;
   newGame(name: string, race: string, cls: string, sex: 'male' | 'female'): void;
+  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string }): void;
+  dump(): string;
   key(key: string, shift?: boolean, ctrl?: boolean): void;
   step(): void;
 };
