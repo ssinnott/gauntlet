@@ -1,8 +1,8 @@
 // Melee and damage: the player's blows, monster blows with their side effects, elemental damage
 // with resistances, and what happens when either side runs out of hit points.
 import { type Monster, type Item, type Element, type Stat, type ObjectFlag, type BlowEffect, type Timed } from './types.ts';
-import { raceOf, hasMFlag, monsterName, monsterNameVisible, removeMonster, monsterDrops } from './monster.ts';
-import { kindOf, itemFlags, itemDice, itemName, isWeapon, makeGold } from './items.ts';
+import { raceOf, hasMFlag, monsterName, monsterNameVisible, removeMonster, monsterDrops, refreshGeneratorTier } from './monster.ts';
+import { kindOf, itemFlags, itemDice, itemName, isWeapon, makeGold, senseItem } from './items.ts';
 import { drainStat, checkLevel, adj, meleeSkill } from './player.ts';
 import { damroll, randint0, randint1, oneIn, capitalize } from './util.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
@@ -13,6 +13,8 @@ import type { Game } from './state.ts';
 import { setTimed, refreshBonuses, teleportPlayer, playerSavingThrow, teleportMonster } from './effectsCore.ts';
 import { noteBlow, noteKill, noteDeath, noteFlag, noteDrop } from './lore.ts';
 import { MONSTER_BY_ID } from './data/monsters.ts';
+import { asAttacker, learnResist } from './smart.ts';
+import { playSound } from './state.ts';
 
 /** Angband's test_hit: to-hit `chance` against armour class `ac`. */
 export function testHit(chance: number, ac: number, visible: boolean): boolean {
@@ -72,7 +74,7 @@ export function playerAttack(g: Game, m: Monster): void {
   const flags = weapon ? itemFlags(weapon) : new Set<ObjectFlag>();
   const name = monsterNameVisible(g, m, false);
   for (let blow = 0; blow < b.blows; blow++) {
-    if (!testHit(chance, r.ac, m.visible)) { g.msg.add(`You miss ${name}.`, '#a0a0a0'); continue; }
+    if (!testHit(chance, r.ac, m.visible)) { g.msg.add(`You miss ${name}.`, '#a0a0a0'); playSound(g, 'miss'); continue; }
     let dam: number;
     let crit = '';
     let quake = false;
@@ -95,6 +97,7 @@ export function playerAttack(g: Game, m: Monster): void {
     dam = Math.max(0, dam);
     const verb = weapon ? 'hit' : 'punch';
     g.msg.add(`You ${verb} ${name}.`);
+    playSound(g, crit ? 'crit' : 'hit');
     if (crit) g.msg.add(crit, '#ffd040');
     const died = monsterTakeHit(g, m, dam, '');
     if (quake) { g.msg.add('The ground shakes!', '#ffd040'); g.fx.push({ type: 'shake', amount: 6 }); g.hooks.earthquake(m.x, m.y); }
@@ -104,9 +107,21 @@ export function playerAttack(g: Game, m: Monster): void {
   if (weapon && !weapon.known && oneIn(20)) senseWielded(g, weapon);
 }
 
+/**
+ * Pseudo-identification through use: swinging an unknown weapon tells you something about it.
+ * game.ts's senseSomething does the same on a timer for everything carried; both skip an item that
+ * already has a feeling, so a weapon is never reported twice.
+ */
 function senseWielded(g: Game, it: Item): void {
-  // Handled in game.ts's periodic pseudo-id; here only the cheap "you feel" on hit.
-  void g; void it;
+  if (it.known || it.sense) return;
+  const p = g.player;
+  const heavy = p.cls === 'warrior' || p.cls === 'paladin';
+  const sense = senseItem(it, heavy);
+  if (!sense) return;
+  it.sense = sense;
+  const bad = sense === 'cursed' || sense === 'terrible';
+  g.msg.add(`You feel the ${itemName(it, g.flavors, { article: false, count: false, plainKind: true })} you are wielding is ${sense}...`, bad ? '#ff8080' : '#c0c0ff');
+  if (bad) disturb(g);
 }
 
 /**
@@ -125,6 +140,7 @@ export function monsterTakeHit(g: Game, m: Monster, dam: number, note: string, b
     const verb = hasMFlag(r, 'GENERATOR') ? 'is destroyed' : note || (undead ? 'is destroyed' : m.visible ? 'dies' : 'dies');
     if (m.visible) g.msg.add(`${name} ${verb}.`, hasMFlag(r, 'UNIQUE') ? '#ffd040' : '#e8e4d8');
     else g.msg.add('You hear a scream of pain.', '#a0a0a0');
+    playSound(g, hasMFlag(r, 'GENERATOR') ? 'generator_die' : hasMFlag(r, 'UNIQUE') ? 'kill_unique' : 'kill');
     if (byPlayer) {
       const exp = Math.floor(r.exp * r.depth / Math.max(1, p.lev));
       const frac = (r.exp * r.depth) % Math.max(1, p.lev);
@@ -143,6 +159,8 @@ export function monsterTakeHit(g: Game, m: Monster, dam: number, note: string, b
     disturb(g);
     return true;
   }
+  // A hurt generator comes apart in stages: it slows down and stops reaching so deep.
+  if (hasMFlag(r, 'GENERATOR')) refreshGeneratorTier(g, m);
   // Fear.
   if (!hasMFlag(r, 'NO_FEAR') && !m.afraid) {
     const pct = Math.floor(100 * m.hp / m.maxhp);
@@ -162,6 +180,7 @@ export function gainExp(g: Game, amount: number): void {
   const gained = checkLevel(p);
   if (gained > 0) {
     refreshBonuses(g);
+    playSound(g, 'levelup');
     g.msg.add(`Welcome to level ${p.lev}.`, '#a0ffa0');
     g.msg.shout(`${CLASS_BY_ID[p.cls].hero.toUpperCase()} REACHES LEVEL ${p.lev}!`, '#a0ffa0');
   } else if (gained < 0) { refreshBonuses(g); g.msg.add(`You have dropped to level ${p.lev}.`, '#ff8080'); }
@@ -174,7 +193,7 @@ export function takeHit(g: Game, dam: number, cause: string): void {
   if (p.timed.invuln && dam < 9000) return;
   disturb(g);
   p.chp -= dam;
-  if (dam > 0) { g.fx.push({ type: 'hit', x: p.x, y: p.y, text: String(dam), color: '#ff6060' }); if (dam >= p.mhp / 4) g.fx.push({ type: 'shake', amount: Math.min(8, 2 + dam / 10) }); }
+  if (dam > 0) { playSound(g, 'hurt'); g.fx.push({ type: 'hit', x: p.x, y: p.y, text: String(dam), color: '#ff6060' }); if (dam >= p.mhp / 4) g.fx.push({ type: 'shake', amount: Math.min(8, 2 + dam / 10) }); }
   if (p.chp < 0) {
     p.dead = true;
     p.deathCause = cause;
@@ -183,16 +202,19 @@ export function takeHit(g: Game, dam: number, cause: string): void {
     p.chp = 0;
     g.msg.add(`You die.`, '#ff4040');
     g.msg.shout('YOU HAVE DIED', '#ff4040');
+    playSound(g, 'player_die');
     return;
   }
   const warn = Math.floor(p.mhp * 0.25);
-  if (p.chp < warn && p.chp + dam >= warn) g.msg.shout(`${CLASS_BY_ID[p.cls].hero.toUpperCase()} IS ABOUT TO DIE!`, '#ff6060');
-  else if (p.chp < warn && oneIn(4)) g.msg.add('*** LOW HITPOINT WARNING! ***', '#ff6060');
+  if (p.chp < warn && p.chp + dam >= warn) { g.msg.shout(`${CLASS_BY_ID[p.cls].hero.toUpperCase()} IS ABOUT TO DIE!`, '#ff6060'); playSound(g, 'lowhp'); }
+  else if (p.chp < warn && oneIn(4)) { g.msg.add('*** LOW HITPOINT WARNING! ***', '#ff6060'); playSound(g, 'lowhp'); }
 }
 
 /** Elemental damage to the player with resistances and side effects. */
 export function elementDamage(g: Game, elem: Element, dam: number, cause: string): void {
   const p = g.player, f = g.bonuses.flags, t = p.timed;
+  // smart_learn: whoever threw this watches it fizzle and remembers.
+  learnResist(g, elem, f, t);
   let d = dam;
   const res = (r: ObjectFlag, im: ObjectFlag | null, opp: Timed | null) => {
     if (im && f.has(im)) return 0;
@@ -288,6 +310,9 @@ export function loseExp(g: Game, amount: number): void {
 const METHOD_TEXT: Record<string, string> = { HIT: 'hits you', TOUCH: 'touches you', PUNCH: 'punches you', KICK: 'kicks you', CLAW: 'claws you', BITE: 'bites you', STING: 'stings you', BUTT: 'butts you', CRUSH: 'crushes you', ENGULF: 'engulfs you', CRAWL: 'crawls on you', DROOL: 'drools on you', SPIT: 'spits on you', GAZE: 'gazes at you', WAIL: 'wails at you', SPORE: 'releases spores at you', BEG: 'begs you for money', INSULT: 'insults you', MOAN: 'moans at you', KISS: 'kisses you' };
 
 export function monsterMelee(g: Game, m: Monster): void {
+  asAttacker(g, m, () => monsterMeleeBlows(g, m));
+}
+function monsterMeleeBlows(g: Game, m: Monster): void {
   const r = raceOf(m), p = g.player, b = g.bonuses;
   if (hasMFlag(r, 'NEVER_BLOW')) return;
   const name = monsterNameVisible(g, m);

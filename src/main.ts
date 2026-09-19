@@ -4,25 +4,28 @@
 import { createCanvas } from './lib/engine/canvas.ts';
 import { createLoop } from './lib/engine/loop.ts';
 import { setTextDefaults, drawText } from './lib/engine/text.ts';
-import { VIEW_W, VIEW_H, MAP_X, MAP_Y, MAP_W, MAP_H, SAVE_KEY } from './constants.ts';
+import { VIEW_W, VIEW_H, MAP_X, MAP_Y, MAP_W, MAP_H } from './constants.ts';
 import type { Game } from './game/state.ts';
 import { createGame, enterLevel, setAutosaveHook } from './game/game.ts';
 import { serialize, deserialize } from './game/save.ts';
 import * as C from './game/commands.ts';
 import { kindOf, itemName, isAmmo, isWearable, identify, inscriptionConfirms } from './game/items.ts';
+import { toggleIgnoreKind } from './game/ignore.ts';
 import { needsDir, needsItem, type EffectCtx } from './game/effects.ts';
 import { type Item, type Pos, T, DIR_DX, DIR_DY, dirOf } from './game/types.ts';
 import { tileAt, itemsAt, monsterAt, auxAt } from './game/level.ts';
 import { SPELL_BY_ID } from './game/data/spells.ts';
 import { CLASS_BY_ID } from './game/data/classes.ts';
 import { refreshBonuses } from './game/effectsCore.ts';
-import { Input, dirOfKey, type KeyEvent } from './ui/input.ts';
+import { Input, dirOfKey, type KeyEvent, type PointerEvent2 } from './ui/input.ts';
+import { TouchPad } from './ui/touch.ts';
+import { type SaveMeta, type SaveRecord, listSaves, readSave, writeSave, deleteSave, migrateLegacySave, newSlotId } from './ui/storage.ts';
 import { MapRenderer } from './ui/render.ts';
 import { drawHud, drawMessageBar, drawBanner } from './ui/hud.ts';
 import { buildHero, syncHero } from './ui/hero.ts';
 import { type Ui, type Overlay, Menu, pickItem, DirPrompt, QuantityPrompt, TextPrompt, Confirm, InventoryScreen, StoreScreen, spellMenu, CharSheet, MapOverlay, HelpOverlay, MessagesOverlay, LookMode, TitleScreen, DeathScreen, type ItemWhere } from './ui/screens.ts';
-import { ARTIFACT_BY_ID } from './game/data/objects.ts';
-import { KnowledgeOverlay, OptionsOverlay, HighScoresOverlay, LocateMode, RecallOverlay, type Ui2 } from './ui/screens2.ts';
+import { artifactById } from './game/artifacts.ts';
+import { KnowledgeOverlay, OptionsOverlay, HighScoresOverlay, LocateMode, RecallOverlay, IgnoreOverlay, type Ui2 } from './ui/screens2.ts';
 import { characterDump } from './game/dump.ts';
 import { type ScoreEntry, SCORES_KEY, scoreEntry, addScore } from './game/scores.ts';
 import { mergeLore, type LoreBook } from './game/lore.ts';
@@ -30,6 +33,7 @@ import type { Stat } from './game/types.ts';
 import type { Options } from './game/options.ts';
 import { MONSTER_BY_ID } from './game/data/monsters.ts';
 import { raceOf } from './game/monster.ts';
+import { playQueuedSounds, speak, unlockAudio, resetNarrator, stopSpeaking } from './ui/audio.ts';
 const LORE_KEY = 'gauntlet-of-angband.lore.v1';
 
 setTextDefaults({ shadowColor: '#0a0810', outline: '#0a0810' });
@@ -46,15 +50,31 @@ class App implements Ui2 {
   target: Pos | null = null;
   frame = 0;
   input: Input;
+  touch = new TouchPad();
   canvasApi = createCanvas('stage', { width: VIEW_W, height: VIEW_H });
   ctx = this.canvasApi.ctx;
   started = false;
   lastSave = 0;
+  /** Saved heroes, newest first. Cached so hasSave() can stay synchronous for the title screen. */
+  slots: SaveMeta[] = [];
+  notice = '';
+  /** Which slot this hero is being written to. */
+  currentSlot: string | null = null;
+  private saveInFlight = false;
+  private pendingSave: SaveRecord | null = null;
+  private saveErrorShown = false;
 
   constructor() {
     this.input = new Input(this.canvasApi.canvas, (x, y) => this.canvasApi.toInternal(x, y));
     setAutosaveHook(g => { if (this.started && g === this.g && !g.player.dead) this.save(); });
     try { this.scores = JSON.parse(localStorage.getItem(SCORES_KEY) || '[]'); } catch { this.scores = []; }
+    // A save from the single-key version becomes the first slot, once.
+    migrateLegacySave(json => {
+      try {
+        const d = JSON.parse(json) as { player: { name: string; race: string; cls: string; lev: number; depth: number; maxDepth: number; dead?: boolean }; turn: number };
+        return { name: d.player.name, race: d.player.race, cls: d.player.cls, lev: d.player.lev, depth: d.player.depth, maxDepth: d.player.maxDepth, turn: d.turn, dead: !!d.player.dead };
+      } catch { return null; }
+    }).then(() => this.refreshSlots());
     this.push(new TitleScreen());
   }
   // -----------------------------------------------------------------------------------------
@@ -93,7 +113,7 @@ class App implements Ui2 {
       input.onchange = () => {
         const f = input.files && input.files[0]; if (!f) return;
         f.text().then(json => {
-          try { this.g = deserialize(json); this.begin(); this.save(); this.g.msg.add('Save imported.', '#a0ffa0'); }
+          try { this.g = deserialize(json); this.currentSlot = newSlotId(); this.begin(); this.save(); this.g.msg.add('Save imported.', '#a0ffa0'); }
           catch (e) { console.error(e); alert('That file is not a Gauntlet of Angband save.'); }
         });
       };
@@ -102,30 +122,82 @@ class App implements Ui2 {
   }
   newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string }): void {
     this.g = createGame(name, race, cls, sex, undefined, { ...extra, lore: this.loadLore() });
+    this.currentSlot = newSlotId();
     this.begin();
   }
   push(o: Overlay): void { this.overlays.push(o); }
   pop(): void { this.overlays.pop(); }
-  hasSave(): boolean { try { return !!localStorage.getItem(SAVE_KEY); } catch { return false; } }
-  save(): void { try { localStorage.setItem(SAVE_KEY, serialize(this.g)); this.lastSave = this.frame; } catch (e) { console.warn('save failed', e); } this.saveLore(); }
+  hasSave(): boolean { return this.slots.length > 0; }
+  refreshSlots(): void { listSaves().then(s => { this.slots = s; }).catch(() => { /* the list stays as it was */ }); }
+
+  /**
+   * Snapshot the game now and write it in the background. serialize() is synchronous, so the record
+   * is always a consistent picture of this instant even though the write lands later.
+   */
+  save(): void {
+    if (!this.started || !this.g) return;
+    const g = this.g, p = g.player;
+    if (!this.currentSlot) this.currentSlot = newSlotId();
+    this.lastSave = this.frame;
+    this.queueSave({
+      id: this.currentSlot, name: p.name, race: p.race, cls: p.cls, lev: p.lev,
+      depth: p.depth, maxDepth: p.maxDepth, turn: g.turn, savedAt: Date.now(), dead: p.dead,
+      data: serialize(g),
+    });
+    this.saveLore();
+  }
+  /** One write at a time; a newer snapshot replaces a waiting one, so the last state always lands. */
+  private queueSave(rec: SaveRecord): void {
+    this.pendingSave = rec;
+    if (this.saveInFlight) return;
+    this.saveInFlight = true;
+    const flush = (): void => {
+      const next = this.pendingSave;
+      this.pendingSave = null;
+      if (!next) { this.saveInFlight = false; this.refreshSlots(); return; }
+      writeSave(next).then(err => {
+        if (err && !this.saveErrorShown) {
+          this.saveErrorShown = true;
+          this.notice = `Saving failed: ${err}.`;
+          if (this.started) this.g.msg.add(`This game cannot be saved: ${err}. Export the save (ctrl+E) to keep it.`, '#ff4040');
+        }
+        flush();
+      }).catch(() => { this.saveInFlight = false; });
+    };
+    flush();
+  }
   loadGame(): boolean {
-    try {
-      const json = localStorage.getItem(SAVE_KEY);
-      if (!json) return false;
-      this.g = deserialize(json);
-      this.begin();
-      this.g.msg.add('Welcome back.', '#ffd040');
-      return true;
-    } catch (e) { console.error(e); return false; }
+    const s = this.slots[0];
+    if (!s) return false;
+    this.loadSlot(s.id);
+    return true;
+  }
+  loadSlot(id: string): void {
+    readSave(id).then(json => {
+      if (!json) { this.notice = 'That hero could not be read back.'; return; }
+      try {
+        this.g = deserialize(json);
+        this.currentSlot = id;
+        this.notice = '';
+        this.begin();
+        this.g.msg.add('Welcome back.', '#ffd040');
+      } catch (e) { console.warn('load failed', e); this.notice = 'That hero could not be read back.'; }
+    });
+  }
+  deleteSlot(id: string): void {
+    deleteSave(id).then(() => { if (this.currentSlot === id) this.currentSlot = null; this.refreshSlots(); });
+    this.slots = this.slots.filter(s => s.id !== id);
   }
   newGame(name: string, race: string, cls: string, sex: 'male' | 'female'): void {
     this.g = createGame(name, race, cls, sex, undefined, { lore: this.loadLore() });
+    this.currentSlot = newSlotId();
     this.begin();
   }
   private begin(): void {
     this.overlays.length = 0;
     this.started = true;
     this.scoreRecorded = false;
+    this.saveErrorShown = false;
     this.lastAction = null;
     this.renderer.camLock = null;
     this.renderer.hero = buildHero(this.g.player);
@@ -152,7 +224,7 @@ class App implements Ui2 {
     if (g.inStore >= 0 && !this.overlays.some(o => o instanceof StoreScreen)) this.push(new StoreScreen(g.inStore));
     this.renderer.hero = syncHero(this.renderer.hero!, g.player);
     if (g.player.dead && !this.overlays.some(o => o instanceof DeathScreen)) {
-      try { localStorage.removeItem(SAVE_KEY); } catch { /* ignore */ }
+      if (this.currentSlot) { const id = this.currentSlot; this.currentSlot = null; deleteSave(id).then(() => this.refreshSlots()); this.slots = this.slots.filter(s => s.id !== id); }
       this.overlays.length = 0;
       const rank = this.recordScore();
       if (rank > 0) g.msg.add(`You rank ${rank} in the Hall of Heroes.`, '#ffd040');
@@ -160,6 +232,41 @@ class App implements Ui2 {
     }
     if (g.totalWinner && !g.player.dead && !this.overlays.some(o => o instanceof DeathScreen)) { /* keep playing; the banner said it */ }
   }
+  /** Are the on-screen controls showing? Either a touch happened, or the option forces them. */
+  touchVisible(): boolean { return this.touch.detected || (this.started && this.g.options.touchControls); }
+  /**
+   * Turn taps that landed on the touch layer into the key presses they stand for, and hand back the
+   * taps that did not. Buttons never duplicate command logic; they go through the ordinary keymap.
+   */
+  private consumeTouch(clicks: PointerEvent2[]): PointerEvent2[] {
+    if (!this.touchVisible()) return clicks;
+    const out: PointerEvent2[] = [];
+    for (const c of clicks) {
+      if (c.kind !== 'down') { out.push(c); continue; }
+      const b = this.touch.hit(c.x, c.y, this.overlays.length > 0);
+      if (!b) { out.push(c); continue; }
+      if (b.page) { this.touch.nextPage(); continue; }
+      this.handleKeyPublic({ key: b.key, shift: !!b.shift, ctrl: !!b.ctrl, alt: false, code: '' });
+    }
+    return out;
+  }
+
+  /**
+   * Play whatever the game asked for this frame, and let the narrator shout the banners. The game
+   * logic only ever queues string ids; everything that touches WebAudio lives in ui/audio.ts.
+   */
+  private lastBanner = '';
+  private pumpAudio(): void {
+    if (!this.started) return;
+    const g = this.g;
+    playQueuedSounds(g);
+    const b = g.msg.banner;
+    if (!b) { if (this.lastBanner) { this.lastBanner = ''; resetNarrator(); } return; }
+    if (b.text === this.lastBanner) return;
+    this.lastBanner = b.text;
+    if (g.options.voice) speak(b.text); else stopSpeaking();
+  }
+
   /** Test hook: deliver a key exactly as the loop would. */
   handleKeyPublic(e: KeyEvent): void {
     if (this.overlays.length) { this.overlays[this.overlays.length - 1].key(e, this); if (this.started) { if (this.g.player.dead || this.g.levelChange) this.afterAction(); } return; }
@@ -178,12 +285,20 @@ class App implements Ui2 {
     const now = performance.now();
     const keys = this.input.drain();
     const clicks = this.input.drainPointer();
+    // Browsers keep audio silent until the player has touched something.
+    if (keys.length || clicks.length) unlockAudio();
+    // A real touch turns the on-screen controls on for good.
+    if (!this.touch.detected && clicks.some(c => c.pointerType === 'touch')) this.touch.detected = true;
+    // The touch layer gets first refusal on every tap; what it does not want falls through to the
+    // map and to the overlays, so a mouse keeps behaving exactly as before.
+    const taps = this.consumeTouch(clicks);
     // Overlays take everything.
     if (this.overlays.length) {
       const top = this.overlays[this.overlays.length - 1];
       for (const e of keys) top.key(e, this);
-      for (const c of clicks) if (c.kind === 'down' && top.click) top.click(c.x, c.y, this);
+      for (const c of taps) if (c.kind === 'down' && top.click) top.click(c.x, c.y, this);
       if (this.started) { this.renderer.update(this.g); if (this.g.player.dead || this.g.levelChange) this.afterAction(); }
+      this.pumpAudio();
       return;
     }
     if (!this.started) return;
@@ -192,7 +307,7 @@ class App implements Ui2 {
     // Continuous actions run on a timer so the player can watch (and interrupt with any key).
     if (keys.length && (g.running || g.resting || g.travel || g.repeating)) { g.running = null; g.resting = 0; g.travel = null; g.repeating = null; }
     for (const e of keys) this.handleKey(e);
-    for (const c of clicks) if (c.kind === 'down') this.handleClick(c.x, c.y, c.button);
+    for (const c of taps) if (c.kind === 'down') this.handleClick(c.x, c.y, c.button);
     if (!keys.length && !this.renderer.busy()) {
       const rep = this.input.repeat(now, this.input.keys.has('Shift'));
       if (rep && !g.running && !g.travel && !g.resting) this.handleKey(rep);
@@ -207,6 +322,7 @@ class App implements Ui2 {
     if (g.resting && this.frame % 2 === 0) { for (let i = 0; i < 3 && g.resting; i++) C.restStep(g); this.afterAction(); }
     this.renderer.hilite = g.travel ? g.travel.slice(0, 40) : [];
     this.renderer.update(this.g);
+    this.pumpAudio();
     if (this.frame - this.lastSave > 60 * 60) this.save();
   }
   private repeatStep(): void {
@@ -236,6 +352,7 @@ class App implements Ui2 {
       if (this.g.level.depth === 0) this.drawShopLabels(ctx);
     }
     for (const o of this.overlays) o.draw(ctx, this);
+    if (this.touchVisible()) this.touch.draw(ctx, this.overlays.length > 0);
     this.canvasApi.present();
   }
   private drawShopLabels(ctx: CanvasRenderingContext2D): void {
@@ -280,6 +397,7 @@ class App implements Ui2 {
         case 'l': this.push(new LocateMode({ x: p.x, y: p.y })); return;
         case 'e': this.exportSave(); return;
         case 'k': this.push(new KnowledgeOverlay()); return;
+        case 'o': g.showIgnored = !g.showIgnored; g.msg.add(g.showIgnored ? 'You take another look at what you have been ignoring.' : 'You go back to ignoring the junk.'); return;
       }
       return;
     }
@@ -322,6 +440,7 @@ class App implements Ui2 {
       case 'o': this.openThing(); break;
       case 'c': this.dirThen('Close', d => { C.closeDoor(g, d); this.afterAction(); }, false); break;
       case 'D': { const chest = itemsAt(g.level, p.x, p.y).find(fi => kindOf(fi.item).tval === 'chest'); if (chest) { C.disarmChest(g, chest); break; } this.dirThen('Disarm', d => { C.disarm(g, d); this.afterAction(); }, false); break; }
+      case 'O': this.push(new IgnoreOverlay()); break;
       case 'S': p.searching = !p.searching; g.msg.add(p.searching ? 'You begin searching carefully.' : 'You stop searching.'); refreshBonuses(g); break;
       case '?': this.push(new HelpOverlay()); break;
       case 'Q': this.push(new Confirm('Retire this character? (the save is deleted)', () => { p.dead = true; p.deathCause = 'retirement'; this.afterAction(); })); break;
@@ -432,13 +551,14 @@ class App implements Ui2 {
       case 'aim': if (!takeFirst()) break; this.dirThen(itemName(it, g.flavors, { count: false }), (d, t) => { remember(() => { C.aim(g, it, d, t); done(); }); C.aim(g, it, d, t); done(); }); break;
       case 'use': if (!takeFirst()) break; if (k.effect) this.withEffectPrompts(k.effect, itemName(it, g.flavors, { count: false }), ctx => { C.useStaff(g, it, ctx); done(); }); else { C.useStaff(g, it); done(); } break;
       case 'zap': if (!takeFirst()) break; if (k.effect && (needsDir(k.effect) || needsItem(k.effect))) this.withEffectPrompts(k.effect, itemName(it, g.flavors, { count: false }), ctx => { remember(() => { C.zap(g, it, ctx.dir ?? 5, ctx.target, ctx); done(); }); C.zap(g, it, ctx.dir ?? 5, ctx.target, ctx); done(); }); else { remember(() => { C.zap(g, it, 5, null); done(); }); C.zap(g, it, 5, null); done(); } break;
-      case 'activate': { const eff = it.artifact ? ARTIFACT_BY_ID[it.artifact]?.activation : k.effect; if (eff && needsDir(eff)) this.dirThen('Activate', (d, t) => { C.activate(g, it, d, t); done(); }); else { C.activate(g, it, 5, null); done(); } break; }
+      case 'activate': { const eff = it.artifact ? artifactById(it.artifact)?.activation : k.effect; if (eff && needsDir(eff)) this.dirThen('Activate', (d, t) => { C.activate(g, it, d, t); done(); }); else { C.activate(g, it, 5, null); done(); } break; }
       case 'fuel': C.refuel(g, it); done(); break;
       case 'throw': if (!takeFirst()) break; this.dirThen('Throw', (d, t) => { C.throwItem(g, it, d, t); done(); }); break;
       case 'fire': if (!takeFirst()) break; this.dirThen('Fire', (d, t) => { remember(() => { C.fire(g, it, d, t); done(); }); C.fire(g, it, d, t); done(); }); break;
       case 'browse': spellMenu(this, 'browse', () => {}); break;
       case 'inspect': g.msg.add(`${itemName(it, g.flavors, { full: it.known })}: ${describe(g, it)}`); break;
       case 'inscribe': this.push(new TextPrompt('Inscribe with:', it.inscription || '', s => { it.inscription = s || undefined; })); break;
+      case 'ignore': { const on = toggleIgnoreKind(g, it.kind); const what = itemName(it, g.flavors, { article: false, count: false, plainKind: true }); g.msg.add(on ? `You will leave ${what} where you find it.` : `You will pick up ${what} again.`); done(); break; }
       case 'destroy': this.push(new Confirm(`Really destroy ${itemName(it, g.flavors)}?`, () => { if (fromFloor) { const fi = itemsAt(g.level, p.x, p.y).find(f => f.item === it); if (fi) g.level.items.splice(g.level.items.indexOf(fi), 1); } else C.removeFromInventory(g, it); g.msg.add(`You destroy ${itemName(it, g.flavors)}.`); identify(it, g.flavors); refreshBonuses(g); done(); })); break;
     }
   }

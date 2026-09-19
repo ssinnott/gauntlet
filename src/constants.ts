@@ -48,5 +48,5 @@ export const FOOD_WEAK = 1000;
 export const FOOD_FAINT = 500;
 export const FOOD_STARVE = 100;
 
-/** Save key in localStorage. */
+/** The old single-key save in localStorage. Saves now live in IndexedDB; see src/ui/storage.ts. */
 export const SAVE_KEY = 'gauntlet-of-angband.save.v1';

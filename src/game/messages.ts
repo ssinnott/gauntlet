@@ -23,5 +23,10 @@ export class MessageLog {
   shout(text: string, color = '#ffd040'): void { this.banner = { text, color, ttl: 180 }; }
   /** Called when a new player turn starts: keeps the fresh list to what happened since. */
   newTurn(turn: number): void { this.turn = turn; this.fresh.length = 0; }
-  toJSON(): { list: Message[] } { return { list: this.list.slice(-60) }; }
+  /**
+   * The tail of the log, plus the turn counter. The counter matters: `add` collapses a repeat only
+   * when it happens on the same turn, so a log restored without it would start collapsing on a
+   * different boundary than the game it came from.
+   */
+  toJSON(): { list: Message[]; turn: number } { return { list: this.list.slice(-60), turn: this.turn }; }
 }

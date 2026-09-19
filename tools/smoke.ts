@@ -81,9 +81,86 @@ await page.screenshot({ path: path.join(OUT, 'smoke-charsheet.png') });
 await page.evaluate(() => (window as any).__game.api.key('Escape'));
 const dumpLen = await page.evaluate(() => (window as any).__game.api.dump().length);
 
-// Save round trip through localStorage.
+// Touch controls: the option draws the on-screen pad, and the hit testing maps taps to the right
+// keys. The pad is the only way to play on a phone, so its geometry is worth asserting.
+await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = true; });
+await page.waitForTimeout(250);
+await page.screenshot({ path: path.join(OUT, 'smoke-touch.png') });
+const touchColours = await colours();
+const touchHits = await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  const btn = app.touch.hit(281, 481, false);       // first command button
+  const north = app.touch.hit(74, 422, false);      // top of the thumb pad
+  const west = app.touch.hit(30, 462, false);       // left of the thumb pad
+  const hub = app.touch.hit(74, 462, false);        // the pad's centre
+  const map = app.touch.hit(400, 200, false);       // open map: not the pad's business
+  const esc = app.touch.hit(app.touch.buttons(true)[0].x + 3, app.touch.buttons(true)[0].y + 3, true);
+  return { btn: btn && btn.key, north: north && north.key, west: west && west.key, hub: hub && hub.key, map, esc: esc && esc.key, visible: app.touchVisible() };
+});
+const touchOpensInventory = await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  const before = app.overlays.length;
+  app.handleKeyPublic({ key: 'i', shift: false, ctrl: false, alt: false, code: '' });
+  const after = app.overlays.length;
+  app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
+  return after > before;
+});
+await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = false; });
+
+// Save round trip: ctrl+S writes a slot to IndexedDB, it lists on the title screen, and reading it
+// back reconstructs the same hero. Nothing is left in the old single localStorage key.
 await page.evaluate(() => (window as any).__game.api.key('s', false, true));
-const hasSave = await page.evaluate(() => !!localStorage.getItem('gauntlet-of-angband.save.v1'));
+await page.waitForTimeout(700);
+const saveInfo = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const rows: any[] = await new Promise(resolve => {
+    const req = indexedDB.open('gauntlet-of-angband', 1);
+    req.onsuccess = () => {
+      try {
+        const t = req.result.transaction('saves', 'readonly');
+        const all = t.objectStore('saves').getAll();
+        all.onsuccess = () => resolve(all.result as any[]);
+        all.onerror = () => resolve([]);
+      } catch { resolve([]); }
+    };
+    req.onerror = () => resolve([]);
+  });
+  const mine = rows.find(r => r.id === app.currentSlot);
+  return {
+    rows: rows.length,
+    name: mine?.name,
+    depth: mine?.depth,
+    hasData: typeof mine?.data === 'string' && mine.data.length > 500,
+    slots: app.slots.length,
+    hasSaveFlag: app.hasSave(),
+    legacy: !!localStorage.getItem('gauntlet-of-angband.save.v1'),
+  };
+});
+// Loading the slot back gives the same hero.
+const reloaded = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const id = app.currentSlot;
+  app.quitToTitle();
+  app.loadSlot(id);
+  await new Promise(r => setTimeout(r, 600));
+  return { name: app.g?.player?.name, depth: app.g?.player?.depth, started: app.started };
+});
+// The saved-heroes screen itself renders.
+await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  app.quitToTitle();
+  app.handleKeyPublic({ key: 'c', shift: false, ctrl: false, alt: false, code: '' });
+});
+await page.waitForTimeout(300);
+await page.screenshot({ path: path.join(OUT, 'smoke-saves.png') });
+const savesScreen = await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  const top = app.overlays[app.overlays.length - 1];
+  return { overlay: top && top.constructor && top.constructor.name, listed: app.slots.length, first: app.slots[0] && app.slots[0].name };
+});
+const savesColours = await colours();
+await page.evaluate(() => (window as any).__game.api.app.handleKeyPublic({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }));
+await page.waitForTimeout(500);
 const hasLore = await page.evaluate(() => !!localStorage.getItem('gauntlet-of-angband.lore.v1'));
 
 // A second hero made through the full birth API with point-bought stats and birth options.
@@ -102,9 +179,18 @@ ok(townColours > 30, `town drew (${townColours} colours)`);
 ok(state1.depth === 0 && state1.hp > 0, `character created in town at ${state1.x},${state1.y} with ${state1.monsters} townsfolk`);
 ok(state2.depth === 1, `descended to dungeon level ${state2.depth} (${state2.monsters} monsters, ${state2.items} objects, turn ${state2.turn})`);
 ok(dungeonColours > 30, `dungeon drew (${dungeonColours} colours)`);
-ok(hasSave, 'ctrl+S wrote a save to localStorage');
+ok(saveInfo.rows >= 1 && saveInfo.hasData && saveInfo.name === 'Smoke', `ctrl+S wrote a slot to IndexedDB (${JSON.stringify(saveInfo)})`);
+ok(saveInfo.slots >= 1 && saveInfo.hasSaveFlag, 'the saved hero shows in the slot list');
+ok(!saveInfo.legacy, 'nothing is left behind in the old single-key save');
+ok(reloaded.started && reloaded.name === 'Smoke' && reloaded.depth === saveInfo.depth, `the slot loads back into the same hero (${JSON.stringify(reloaded)})`);
+ok(savesScreen.overlay === 'SaveSlotsOverlay' && savesScreen.listed >= 1 && savesScreen.first === 'Smoke' && savesColours > 4,
+  `the saved-heroes screen lists the hero (${JSON.stringify(savesScreen)}, ${savesColours} colours)`);
 ok(hasLore, 'monster memory persisted to localStorage');
 ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);
+ok(touchColours > 30, `touch controls drew (${touchColours} colours)`);
+ok(touchHits.visible === true && touchHits.btn === 'i' && touchHits.north === 'ArrowUp' && touchHits.west === 'ArrowLeft' && touchHits.hub === 'g' && touchHits.map === null && touchHits.esc === 'Escape',
+  `touch hit testing maps taps to keys (${JSON.stringify(touchHits)})`);
+ok(touchOpensInventory, 'a touch button opens the screen it names');
 ok(dumpLen > 200, `character dump has ${dumpLen} characters`);
 ok(state3.cls === 'necromancer' && state3.ironman === true && state3.int >= 17 && state3.hp > 0, `birth with point-buy and birth options works (${JSON.stringify(state3)})`);
 console.log(bad ? '\nSMOKE FAILED' : '\nSMOKE OK: the game runs in a browser with no build step. Screenshots in dist/.');

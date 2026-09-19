@@ -2,9 +2,9 @@
 // spells and breath, door handling, item pickup, generators. Angband's monster1/2.c and melee2.c.
 import { type Level, type Monster, type MonsterRace, type MonsterFlag, type Pos, T, F, DIR_DX, DIR_DY, isPassable, isWall, isVein } from './types.ts';
 import { MONSTERS, MONSTER_BY_ID } from './data/monsters.ts';
-import { tileAt, setTile, monsterAt, inBounds, hasFlag, addFlag, los, computeFlow, passable, isCleanFloor, auxAt, setAux, playerCanSee, itemsAt } from './level.ts';
+import { tileAt, setTile, monsterAt, inBounds, hasFlag, addFlag, los, computeFlow, computeNoise, layScent, scentAge, NOISE_MAX, passable, isCleanFloor, auxAt, setAux, playerCanSee, itemsAt } from './level.ts';
 import { randint0, randint1, oneIn, weightedPick, distance } from './util.ts';
-import type { Game } from './state.ts';
+import { type Game, playSound } from './state.ts';
 import { monsterMelee } from './combat.ts';
 import { monsterCastSpell } from './monsterSpells.ts';
 import { makeObject, makeGold } from './items.ts';
@@ -12,6 +12,7 @@ import { dropNear } from './world.ts';
 import { disturb } from './world.ts';
 import { noteSight } from './lore.ts';
 import { RACE_BY_ID } from './data/races.ts';
+import { MAX_DEPTH } from '../constants.ts';
 
 export function raceOf(m: Monster): MonsterRace { return MONSTER_BY_ID[m.race]; }
 export function hasMFlag(r: MonsterRace, f: MonsterFlag): boolean { return r.flags.includes(f); }
@@ -49,6 +50,7 @@ export function createMonster(g: Game, raceId: string, x: number, y: number, sle
     id: g.nextMonsterId++, race: raceId, x, y, hp, maxhp: hp, energy: randint0(50), speed: r.speed, sleep: 0,
     stunned: 0, confused: 0, afraid: 0, hasted: 0, slowed: 0, held: [], facing: oneIn(2) ? 1 : -1, visible: false, detected: false, spawnTimer: r.spawnEvery || 0,
   };
+  if (hasMFlag(r, 'GENERATOR')) m.tier = 3;
   if (sleep && r.sleep) m.sleep = r.sleep * 2 + randint1(r.sleep * 10);
   if (hasMFlag(r, 'FORCE_SLEEP') && sleep) m.sleep = Math.max(m.sleep, 100 + randint1(200));
   lv.monsters.push(m);
@@ -134,6 +136,60 @@ export function themedFilter(theme: string): (r: MonsterRace) => boolean {
   }
 }
 
+// ---------------------------------------------------------------------------------------------
+// Generators (the Gauntlet ones): three tiers that come apart as you smash them
+
+/** How intact a generator is, from its hit points: 3 whole, 2 cracked, 1 nearly finished. */
+export function generatorTierFor(m: Monster): number {
+  const f = m.maxhp > 0 ? m.hp / m.maxhp : 1;
+  return f > 2 / 3 ? 3 : f > 1 / 3 ? 2 : 1;
+}
+/** The tier a generator is at, recovering it from hit points for saves made before tiers existed. */
+export function generatorTier(m: Monster): number { return m.tier ?? generatorTierFor(m); }
+
+/** Turns between spawns: a whole generator pours, a broken one dribbles. */
+export function generatorInterval(r: MonsterRace, tier: number): number {
+  const base = r.spawnEvery || 20;
+  return Math.max(4, Math.round(base * (tier >= 3 ? 1 : tier === 2 ? 1.7 : 2.8)));
+}
+
+const TIER_BREAK: Record<number, [string, string]> = {
+  2: ['shudders and splits open!', '#ffd040'],
+  1: ['is barely holding together!', '#ff8080'],
+};
+
+/** Recompute a generator's tier after it has been hurt, announcing each stage it loses. */
+export function refreshGeneratorTier(g: Game, m: Monster): void {
+  if (!hasMFlag(raceOf(m), 'GENERATOR')) return;
+  const was = m.tier ?? 3;
+  const now = generatorTierFor(m);
+  m.tier = now;
+  if (now >= was) return;
+  const note = TIER_BREAK[now];
+  if (note && m.visible) {
+    g.msg.add(`${monsterName(m)} ${note[0]}`, note[1]);
+    g.fx.push({ type: 'flash', x: m.x, y: m.y, color: note[1] });
+    g.fx.push({ type: 'shake', amount: 3 });
+  }
+  playSound(g, 'generator_hurt');
+  // Losing a stage shakes something loose at once.
+  m.spawnTimer = 0;
+}
+
+/**
+ * What a generator throws out. An intact one reaches deeper into its family than a broken one; the
+ * race's own `spawns` is the floor it falls back to when the family turns up nothing.
+ */
+export function pickGeneratorSpawn(g: Game, r: MonsterRace, depth: number, tier: number): string | undefined {
+  if (r.spawnTheme) {
+    const lev = tier >= 3 ? Math.min(MAX_DEPTH, depth + 3) : tier === 2 ? depth : Math.max(1, depth - 5);
+    const inFamily = themedFilter(r.spawnTheme);
+    const pick = pickRace(g, lev, rr => !hasMFlag(rr, 'UNIQUE') && inFamily(rr));
+    if (pick) return pick.id;
+  }
+  return r.spawns;
+}
+
 export function placeGenerator(g: Game, lv: Level, depth: number, x: number, y: number): void {
   const gens = MONSTERS.filter(r => hasMFlag(r, 'GENERATOR') && r.depth <= depth + 2);
   if (!gens.length) return;
@@ -210,21 +266,24 @@ export function monsterTurn(g: Game, m: Monster): void {
   // Regeneration.
   if (m.hp < m.maxhp && (hasMFlag(r, 'REGENERATE') ? oneIn(5) : oneIn(20))) m.hp = Math.min(m.maxhp, m.hp + Math.max(1, Math.floor(m.maxhp / 20)));
 
-  // Generators just spawn.
+  // Generators just spawn, faster and nastier the more intact they are.
   if (hasMFlag(r, 'GENERATOR')) {
     if (dist > 25) return;
+    const tier = generatorTier(m);
     if (m.spawnTimer > 0) { m.spawnTimer--; return; }
     if (!r.spawns) return;
-    const nearby = lv.monsters.filter(o => o.race === r.spawns && distance(o.x, o.y, m.x, m.y) <= 8).length;
-    if (nearby >= 6 || lv.monsters.length > 250) { m.spawnTimer = r.spawnEvery || 20; return; }
+    // It stops while its own brood is thick around it, and a whole one tolerates a bigger crowd.
+    const nearby = lv.monsters.filter(o => o !== m && distance(o.x, o.y, m.x, m.y) <= 8).length;
+    if (nearby >= 3 + tier * 2 || lv.monsters.length > 250) { m.spawnTimer = generatorInterval(r, tier); return; }
     const pos = nearFloor(lv, m.x, m.y, 2);
     if (pos) {
-      const s = createMonster(g, r.spawns, pos.x, pos.y, false);
+      const raceId = pickGeneratorSpawn(g, r, lv.depth, tier);
+      const s = raceId ? createMonster(g, raceId, pos.x, pos.y, false, lv) : null;
       if (s) s.energy = 0;
       if (s && m.visible) { g.msg.add(`${monsterName(m)} spawns ${monsterName(s, false)}!`); g.fx.push({ type: 'flash', x: pos.x, y: pos.y, color: r.color2 || r.color }); }
-      disturb(g);
+      if (s) { playSound(g, 'spawn'); disturb(g); }
     }
-    m.spawnTimer = r.spawnEvery || 20;
+    m.spawnTimer = generatorInterval(r, tier);
     return;
   }
   // Breeders.
@@ -257,19 +316,125 @@ export function monsterTurn(g: Game, m: Monster): void {
     const best = bestFlowStep(g, m, true);
     if (best) { dx = best.x - m.x; dy = best.y - m.y; } else { dx = Math.sign(m.x - p.x); dy = Math.sign(m.y - p.y); }
   } else {
-    if (dist > r.vision + 10 && !hasMFlag(r, 'SMART') && !g.bonuses.flags.has('AGGRAVATE')) {
-      // Out of range: wander a little or stay put.
+    // How it knows where you are, in the order Angband asks: sight, then hearing, then scent.
+    // Nothing is adjacent to you and unaware, and an aggravating hero is heard by everything.
+    const obvious = canSee || g.bonuses.flags.has('AGGRAVATE') || dist <= 2;
+    let track: Pos | null = null;
+    if (obvious) track = bestFlowStep(g, m, false);
+    if (!track && canHearPlayer(g, m)) track = bestNoiseStep(g, m);
+    if (!track && canSmellPlayer(g, r)) track = bestScentStep(g, m);
+    if (!track) {
+      // It has lost you: wander a little or stay put.
       if (!oneIn(3)) return;
       const d = randint1(9); dx = DIR_DX[d]; dy = DIR_DY[d];
     } else {
-      const best = bestFlowStep(g, m, false);
-      if (best) { dx = best.x - m.x; dy = best.y - m.y; } else { dx = Math.sign(p.x - m.x); dy = Math.sign(p.y - m.y); }
-      // Pack animals try to surround rather than queue in corridors.
-      if (hasMFlag(r, 'FRIENDS') && dist <= 5 && oneIn(3) && !(dist <= 1)) { const d = randint1(9); dx = DIR_DX[d]; dy = DIR_DY[d]; }
+      dx = track.x - m.x; dy = track.y - m.y;
+      if (obvious && dx === 0 && dy === 0) { dx = Math.sign(p.x - m.x); dy = Math.sign(p.y - m.y); }
+      // Pack hunters circle instead of queueing up in the corridor behind the leader.
+      if (hasMFlag(r, 'FRIENDS') && dist >= 2 && dist <= 6) {
+        const flank = packStep(g, m, dist);
+        if (flank) { dx = flank.x - m.x; dy = flank.y - m.y; }
+      }
     }
   }
   if (dx === 0 && dy === 0) return;
   tryMove(g, m, dx, dy);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Senses: what a monster that cannot see you can still work out
+
+/**
+ * How far a monster can hear, in noise-flow units. The hero's stealth is the lever: a quiet hero
+ * shrinks every monster's hearing at once, which is what makes stealth worth having while awake
+ * and not only while things are asleep.
+ */
+export function hearRange(g: Game, r: MonsterRace): number {
+  if (hasMFlag(r, 'EMPTY_MIND')) return 0;
+  let v = r.vision + 20 - g.bonuses.skills.stealth * 2;
+  if (hasMFlag(r, 'SMART')) v += 8;
+  if (hasMFlag(r, 'STUPID')) v -= 8;
+  return Math.max(3, v);
+}
+export function canHearPlayer(g: Game, m: Monster): boolean {
+  if (!g.noise) return false;
+  const v = g.noise[m.y * g.level.w + m.x];
+  return v !== NOISE_MAX && v <= hearRange(g, raceOf(m));
+}
+/** Beasts hunt by nose. Anything with no mind to speak of does not. */
+export function canSmellPlayer(g: Game, r: MonsterRace): boolean {
+  return !!g.scent && hasMFlag(r, 'ANIMAL') && !hasMFlag(r, 'EMPTY_MIND');
+}
+
+/** Downhill on the noise flow: toward the player, around corners, but not through a shut door. */
+function bestNoiseStep(g: Game, m: Monster): Pos | null {
+  const lv = g.level, w = lv.w, noise = g.noise!;
+  const here = noise[m.y * w + m.x];
+  let best: Pos | null = null, bestV = here;
+  const start = randint0(8);
+  for (let i = 0; i < 8; i++) {
+    const d = [1, 2, 3, 4, 6, 7, 8, 9][(start + i) % 8];
+    const nx = m.x + DIR_DX[d], ny = m.y + DIR_DY[d];
+    if (!inBounds(lv, nx, ny)) continue;
+    const v = noise[ny * w + nx];
+    if (v === NOISE_MAX) continue;
+    if (v < bestV) { bestV = v; best = { x: nx, y: ny }; }
+  }
+  return best;
+}
+
+/**
+ * Follow the trail: step onto the freshest scent next to us. This walks the path the player
+ * actually took rather than the straight line to where they are now, so a hound comes round the
+ * corner you went round instead of scratching at the wall you are standing behind.
+ */
+function bestScentStep(g: Game, m: Monster): Pos | null {
+  const lv = g.level, w = lv.w, scent = g.scent!, stamp = g.scentStamp;
+  const hereAge = scentAge(scent, stamp, m.y * w + m.x);
+  let best: Pos | null = null, bestAge = hereAge < 0 ? Number.MAX_SAFE_INTEGER : hereAge;
+  const start = randint0(8);
+  for (let i = 0; i < 8; i++) {
+    const d = [1, 2, 3, 4, 6, 7, 8, 9][(start + i) % 8];
+    const nx = m.x + DIR_DX[d], ny = m.y + DIR_DY[d];
+    if (!inBounds(lv, nx, ny) || !passable(lv, nx, ny)) continue;
+    const age = scentAge(scent, stamp, ny * w + nx);
+    if (age < 0) continue;
+    if (age < bestAge) { bestAge = age; best = { x: nx, y: ny }; }
+  }
+  return best;
+}
+
+/**
+ * Pack tactics. Wolves and their like used to jitter one step in three, which read as confusion.
+ * Now they hold their distance and spread out until two of the pack are already on the player,
+ * then everyone piles in at once.
+ */
+function packStep(g: Game, m: Monster, dist: number): Pos | null {
+  const lv = g.level, p = g.player;
+  // Gather the pack once: who is nearby, and how many are already in the hero's face.
+  const allies: Monster[] = [];
+  let engaged = 0;
+  for (const o of lv.monsters) {
+    if (o === m || o.race !== m.race) continue;
+    if (distance(o.x, o.y, p.x, p.y) <= 2) engaged++;
+    if (distance(o.x, o.y, m.x, m.y) <= 6) allies.push(o);
+  }
+  if (engaged >= 2) return null; // the trap is sprung: close in the normal way
+  let best: Pos | null = null, bestScore = -Infinity;
+  const start = randint0(8);
+  for (let i = 0; i < 8; i++) {
+    const d = [1, 2, 3, 4, 6, 7, 8, 9][(start + i) % 8];
+    const nx = m.x + DIR_DX[d], ny = m.y + DIR_DY[d];
+    if (!inBounds(lv, nx, ny) || !passable(lv, nx, ny)) continue;
+    if (monsterAt(lv, nx, ny) || (nx === p.x && ny === p.y)) continue;
+    if (hasFlag(lv, nx, ny, F.GLYPH)) continue;
+    const nd = distance(nx, ny, p.x, p.y);
+    if (nd < 2 || nd > dist) continue; // hold the ring: never close, never drift off
+    let score = -Math.abs(nd - dist) * 4;
+    for (const o of allies) { const od = distance(nx, ny, o.x, o.y); if (od < 4) score -= 4 - od; }
+    if (score > bestScore) { bestScore = score; best = { x: nx, y: ny }; }
+  }
+  return best;
 }
 
 function bestFlowStep(g: Game, m: Monster, flee: boolean): Pos | null {
@@ -376,9 +541,18 @@ export function monsterDrops(g: Game, m: Monster): void {
   m.held = [];
 }
 
-/** Rebuild the flow map if the player moved. */
+/** Rebuild the flow and noise maps if the player moved or the map changed. */
 export function ensureFlow(g: Game): void {
-  if (!g.flowDirty && g.flow) return;
-  g.flow = computeFlow(g.level, g.player.x, g.player.y, 40, g.flow || undefined);
+  if (!g.flowDirty && g.flow && g.noise) return;
+  const lv = g.level, p = g.player;
+  g.flow = computeFlow(lv, p.x, p.y, 40, g.flow || undefined);
+  g.noise = computeNoise(lv, p.x, p.y, 60, g.noise && g.noise.length === lv.w * lv.h ? g.noise : undefined);
   g.flowDirty = false;
+}
+
+/** Leave scent on the grid the player is standing on. Called once per player turn. */
+export function ensureScent(g: Game): void {
+  const lv = g.level;
+  if (!g.scent || g.scent.length !== lv.w * lv.h) { g.scent = new Uint16Array(lv.w * lv.h); g.scentStamp = 0; }
+  g.scentStamp = layScent(lv, g.scent, g.scentStamp, g.player.x, g.player.y);
 }

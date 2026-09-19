@@ -24,6 +24,8 @@ export interface SpriteOpts {
   alpha?: number;
   /** Asleep: draw eyes closed / slumped. */
   asleep?: boolean;
+  /** Generators only: how intact, 3 down to 1. The machine visibly comes apart as it falls. */
+  tier?: number;
 }
 
 const TAU = Math.PI * 2;
@@ -68,6 +70,7 @@ let PH = 0;      // animation phase 0..1
 let SZ = 1;      // draw scale (for a few "how many heads" decisions)
 let SLEEP = false;
 let FLASH = false;
+let TIER = 3;    // generator condition, 3 whole .. 1 nearly finished
 
 const darkOf = new Map<string, string>();
 const lightOf = new Map<string, string>();
@@ -262,7 +265,7 @@ function club(ctx: CanvasRenderingContext2D, hx: number, hy: number, len: number
 export function drawMonsterSprite(ctx: CanvasRenderingContext2D, kind: SpriteKind, x: number, y: number, opts: SpriteOpts): void {
   const size = opts.size ?? 1, facing = opts.facing ?? 1, alpha = opts.alpha ?? 1;
   setPalette(opts.color, opts.color2, !!opts.flash);
-  PH = opts.phase ?? 0; SLEEP = !!opts.asleep; SZ = size;
+  PH = opts.phase ?? 0; SLEEP = !!opts.asleep; SZ = size; TIER = opts.tier ?? 3;
   LW = Math.min(1.5, Math.max(0.45, 1 / size));
   ctx.save();
   if (alpha < 1) ctx.globalAlpha *= alpha;
@@ -601,16 +604,23 @@ function drawKind(ctx: CanvasRenderingContext2D, kind: SpriteKind): void {
     }
     case 'generator': {
       const p = (w + 1) / 2;
+      // Condition: whole, cracked open, or nearly finished. The mouth dims and the housing splits.
+      const glow = TIER >= 3 ? 1 : TIER === 2 ? 0.66 : 0.36;
       oval(ctx, 0, -1.2, 9.6, 3, D);
       boxC(ctx, -7.6, -6.5, 15.2, 6, 2.8);
-      boxC(ctx, -5.2, -10.5, 10.4, 5, 2.6);
+      if (TIER >= 2) boxC(ctx, -5.2, -10.5, 10.4, 5, 2.6);
+      else { ctx.save(); ctx.rotate(0.2); boxC(ctx, -5.2, -9.6, 10.4, 4, 2.4); ctx.restore(); }
       ball(ctx, -4.2, -4.2, 1.7, L); dot(ctx, -4.7, -4.4, 0.5, OUT); dot(ctx, -3.6, -4.4, 0.5, OUT);
-      ball(ctx, 3.6, -8.5, 1.5, L); dot(ctx, 3.1, -8.7, 0.45, OUT); dot(ctx, 4.1, -8.7, 0.45, OUT);
+      if (TIER >= 2) { ball(ctx, 3.6, -8.5, 1.5, L); dot(ctx, 3.1, -8.7, 0.45, OUT); dot(ctx, 4.1, -8.7, 0.45, OUT); }
       dot(ctx, 5.5, -4, 1, D); dot(ctx, -1, -8, 0.9, D);
-      if (!FLASH) { pathEllipse(ctx, 0, -14, 5.2 + p * 2, 5.2 + p * 2); flat(ctx, halo(C2)); }
-      ball(ctx, 0, -14, 2.8 + p * 0.8, C2);
-      dot(ctx, -0.9, -15, 0.9, fc(WHITE));
-      dot(ctx, -5.5, -12 - p, 0.6, fc(C2)); dot(ctx, 5.5, -13 + p, 0.6, fc(C2)); dot(ctx, 1, -19.5 - p, 0.6, fc(C2));
+      // Cracks, one more for every stage it has lost.
+      if (TIER <= 2) line(ctx, -4.6, -6.4, -1.8, -2.2, OUT, LW);
+      if (TIER <= 1) { line(ctx, 2.4, -6.6, 5.6, -1.6, OUT, LW); line(ctx, -6.8, -3.4, -4.4, -1.2, OUT, LW); }
+      if (!FLASH && glow > 0.4) { pathEllipse(ctx, 0, -14, (5.2 + p * 2) * glow, (5.2 + p * 2) * glow); flat(ctx, halo(C2)); }
+      ball(ctx, 0, -14, (2.8 + p * 0.8) * glow, C2);
+      dot(ctx, -0.9, -15, 0.9 * glow, fc(WHITE));
+      if (TIER >= 2) { dot(ctx, -5.5, -12 - p, 0.6, fc(C2)); dot(ctx, 5.5, -13 + p, 0.6, fc(C2)); }
+      if (TIER >= 3) dot(ctx, 1, -19.5 - p, 0.6, fc(C2));
       break;
     }
     case 'mushroom': {

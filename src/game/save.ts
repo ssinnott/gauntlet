@@ -9,6 +9,7 @@ import { computeBonuses } from './player.ts';
 import { refreshBonuses } from './effectsCore.ts';
 import { createGame } from './game.ts';
 import { normalizeOptions } from './options.ts';
+import { normalizeIgnore } from './ignore.ts';
 
 function b64(u8: Uint8Array): string {
   let s = '';
@@ -32,16 +33,16 @@ export function serialize(g: Game): string {
   const savedLevels: Record<string, unknown> = {};
   for (const [k, lv] of Object.entries(g.savedLevels)) savedLevels[k] = packLevel(lv);
   const data = {
-    v: 2, seed: g.seed, turn: g.turn, player: { ...g.player, vx: undefined, vy: undefined }, level: packLevel(g.level), stores: g.stores, flavors: g.flavors, msg: g.msg.toJSON(),
+    v: 3, seed: g.seed, turn: g.turn, player: { ...g.player, vx: undefined, vy: undefined }, level: packLevel(g.level), stores: g.stores, flavors: g.flavors, msg: g.msg.toJSON(),
     nextMonsterId: g.nextMonsterId, uniquesDead: g.uniquesDead, totalWinner: g.totalWinner, stats: g.stats, nextItemId: getNextItemId(), artifacts: artifactsMadeList(), rng: rng.state,
-    options: g.options, lore: g.lore, artifactsSeen: g.artifactsSeen, egosKnown: g.egosKnown, savedLevels,
+    options: g.options, lore: g.lore, monsterKnows: g.monsterKnows, artifactsSeen: g.artifactsSeen, egosKnown: g.egosKnown, savedLevels, ignore: g.ignore,
   };
   return JSON.stringify(data);
 }
 
 export function deserialize(json: string): Game {
   const d = JSON.parse(json);
-  if (d.v !== 1 && d.v !== 2) throw new Error('unsupported save version');
+  if (d.v !== 1 && d.v !== 2 && d.v !== 3) throw new Error('unsupported save version');
   // Build a skeleton game through createGame so every runtime hook exists, then overwrite it.
   const g = createGame(d.player.name, d.player.race, d.player.cls, d.player.sex, d.seed, { options: d.options });
   g.turn = d.turn;
@@ -50,8 +51,12 @@ export function deserialize(json: string): Game {
   g.level = unpackLevel(d.level);
   g.options = normalizeOptions(d.options);
   g.lore = d.lore || {};
+  g.monsterKnows = d.monsterKnows || {};
+  g.attacker = null;
   g.artifactsSeen = d.artifactsSeen || [];
   g.egosKnown = d.egosKnown || [];
+  g.ignore = normalizeIgnore(d.ignore);
+  g.showIgnored = false;
   g.savedLevels = {};
   for (const [k, v] of Object.entries(d.savedLevels || {})) g.savedLevels[Number(k)] = unpackLevel(v as { tiles: string; flags: string; aux: string });
   // Older saves lack the newer timed effects.
@@ -60,11 +65,12 @@ export function deserialize(json: string): Game {
   g.flavors = d.flavors;
   g.msg = new MessageLog();
   g.msg.list = d.msg.list || [];
+  g.msg.turn = d.msg.turn ?? g.turn;
   g.nextMonsterId = d.nextMonsterId;
   g.uniquesDead = d.uniquesDead || [];
   g.totalWinner = !!d.totalWinner;
   g.stats = d.stats;
-  g.flow = null; g.flowDirty = true; g.fx.length = 0; g.levelChange = null; g.inStore = -1;
+  g.flow = null; g.flowDirty = true; g.noise = null; g.scent = null; g.scentStamp = 0; g.fx.length = 0; g.sounds.length = 0; g.levelChange = null; g.inStore = -1;
   setNextItemId(d.nextItemId);
   setArtifactsMade(d.artifacts || []);
   rng.seed(d.rng);

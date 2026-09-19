@@ -8,7 +8,10 @@ import { maintainStore, storeBuy, storeSell, buyPrice, storeWants } from '../src
 import { kindOf, itemName, inscriptionTags, inscriptionConfirms } from '../src/game/items.ts';
 import { needsDir, needsItem } from '../src/game/effects.ts';
 import { serialize, deserialize } from '../src/game/save.ts';
-import { generateDungeon, isConnected } from '../src/game/gen/dungeon.ts';
+import { isConnected } from '../src/game/gen/dungeon.ts';
+import { generateLevel } from '../src/game/gen/level.ts';
+import { generateCavern } from '../src/game/gen/cavern.ts';
+import { generateLabyrinth } from '../src/game/gen/labyrinth.ts';
 import { tileAt, monsterAt, passable } from '../src/game/level.ts';
 import { T, isPassable } from '../src/game/types.ts';
 import { CLASSES } from '../src/game/data/classes.ts';
@@ -26,6 +29,16 @@ const SEEDS = Number(process.argv[2] || 6);
 const TURNS = Number(process.argv[3] || 3000);
 let failures = 0;
 const ok = (cond: boolean, msg: string) => { if (!cond) { failures++; console.log('  FAIL: ' + msg); } };
+
+/** Where two serialized games first differ, with a little context. For diagnosing a failure. */
+function firstDifference(a: string, b: string): string {
+  if (a === b) return 'identical';
+  const n = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < n && a[i] === b[i]) i++;
+  const from = Math.max(0, i - 60);
+  return `differ at ${i} of ${a.length}/${b.length}: ...${a.slice(from, i + 40)} | ...${b.slice(from, i + 40)}`;
+}
 
 function check(g: Game, where: string): void {
   const p = g.player, lv = g.level;
@@ -140,26 +153,93 @@ console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RAC
 
 // 1. Level generation at many depths: connected and populated.
 let genOk = 0, genTotal = 0;
+const kinds: Record<string, number> = {};
 const dummy = createGame('Gen', 'human', 'warrior', 'male', 12345);
 for (const depth of [1, 2, 5, 10, 15, 20, 30, 40, 50, 60, 75, 99]) {
   for (let i = 0; i < 3; i++) {
     genTotal++;
-    const r = generateDungeon(depth, {
+    const r = generateLevel(depth, {
       placeMonster: () => {}, placeThemedMonster: () => {}, placeGenerator: () => {}, placeObject: () => {}, placeGold: () => {},
     }, 'down');
+    kinds[r.level.kind || 'classic'] = (kinds[r.level.kind || 'classic'] || 0) + 1;
     if (isConnected(r.level) && passable(r.level, r.start.x, r.start.y)) genOk++;
   }
 }
-console.log(`generation: ${genOk}/${genTotal} levels connected`);
+console.log(`generation: ${genOk}/${genTotal} levels connected (${Object.entries(kinds).map(([k, n]) => `${n} ${k}`).join(', ')})`);
 ok(genOk >= genTotal * 0.9, 'too many disconnected levels');
+
+// 1b. The alternative level types, built directly so they are covered every run rather than
+// whenever the dice feel like it. Both guarantee connectivity by construction, so the bar is 100%.
+{
+  const noHooks = { placeMonster: () => {}, placeThemedMonster: () => {}, placeGenerator: () => {}, placeObject: () => {}, placeGold: () => {} };
+  let cOk = 0, cTot = 0, lOk = 0, lTot = 0;
+  for (const depth of [8, 20, 45, 80]) {
+    for (let i = 0; i < 4; i++) {
+      cTot++;
+      const c = generateCavern(depth, noHooks, 'down');
+      if (c && isConnected(c.level) && passable(c.level, c.start.x, c.start.y)) cOk++;
+      lTot++;
+      const l = generateLabyrinth(depth, noHooks, 'down');
+      if (l && isConnected(l.level) && passable(l.level, l.start.x, l.start.y)) lOk++;
+    }
+  }
+  console.log(`  caverns ${cOk}/${cTot} connected, labyrinths ${lOk}/${lTot} connected`);
+  ok(cOk === cTot, `cavern generation: only ${cOk}/${cTot} usable`);
+  ok(lOk === lTot, `labyrinth generation: only ${lOk}/${lTot} usable`);
+}
 void dummy;
 
-// 2. Play.
+// 2. Determinism. The README promises that every roll goes through the seeded rng, so a seed
+// reproduces a run. Nothing checked that until now, and it is the foundation any future lockstep
+// multiplayer would stand on, so the bar here is byte-for-byte identical saves, not "close enough".
+{
+  const SEED = 90210;
+  const SPLIT = 200, STEPS = 420;
+  // A fixed repertoire driven by the shared rng, so the rng sequence itself is part of what is
+  // compared. No wall clock, no Math.random, no iteration over anything unordered.
+  const scripted = (g: Game, i: number): void => {
+    if (g.player.dead) return;
+    if (g.levelChange) { enterLevel(g, g.levelChange.depth, g.levelChange.by); return; }
+    if (g.inStore >= 0) { g.inStore = -1; return; }
+    if (g.resting) { restStep(g); return; }
+    const t = tileAt(g.level, g.player.x, g.player.y);
+    if (t === T.STAIRS_DOWN && i % 37 === 0) { goDown(g); return; }
+    if (i % 23 === 0) { searchAround(g); return; }
+    if (i % 13 === 0) { rest(g, 2); return; }
+    if (i % 7 === 0) { pickupHere(g, true); return; }
+    let d = rng.int(1, 9);
+    if (d === 5) d = 1;
+    moveDir(g, d);
+  };
+  const play = (steps: number): Game => {
+    const g = createGame('Det', 'dwarf', 'warrior', 'male', SEED);
+    for (let i = 0; i < steps; i++) scripted(g, i);
+    return g;
+  };
+
+  const first = serialize(play(STEPS));
+  const second = serialize(play(STEPS));
+  ok(first === second, `the same seed did not reproduce the same run (${firstDifference(first, second)})`);
+
+  // And a save/restore must not perturb what comes next: save.ts stores the rng state for exactly
+  // this reason, so continuing through a round trip has to match continuing without one.
+  const live = play(SPLIT);
+  const json = serialize(live);
+  for (let i = SPLIT; i < STEPS; i++) scripted(live, i);
+  const direct = serialize(live);
+  const restored = deserialize(json);
+  for (let i = SPLIT; i < STEPS; i++) scripted(restored, i);
+  const viaSave = serialize(restored);
+  ok(direct === viaSave, `saving and restoring perturbed the run (${firstDifference(direct, viaSave)})`);
+  console.log(`determinism: ${STEPS} scripted turns reproduce byte for byte, across a save at turn ${SPLIT}`);
+}
+
+// 3. Play.
 let deaths = 0, maxDepth = 0, totalKills = 0;
 for (let seed = 1; seed <= SEEDS; seed++) {
   const cls = CLASSES[(seed - 1) % CLASSES.length], race = RACES[(seed * 3) % RACES.length];
   let g: Game;
-  const opts = seed % 3 === 0 ? { ironman: true, smartMonsters: true } : seed % 3 === 1 ? { noSelling: true, persistentLevels: true, connectedStairs: false } : {};
+  const opts = seed % 3 === 0 ? { ironman: true, smartMonsters: true } : seed % 3 === 1 ? { noSelling: true, persistentLevels: true, connectedStairs: false } : { randarts: true };
   try { g = createGame('Sim' + seed, race.id, cls.id, seed % 2 ? 'male' : 'female', seed * 7919, { options: opts }); }
   catch (e) { failures++; console.log(`  FAIL: createGame seed ${seed}: ${(e as Error).stack}`); continue; }
   let step = 0;
