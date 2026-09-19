@@ -5,7 +5,8 @@
 import { createGame, enterLevel, score } from '../src/game/game.ts';
 import { moveDir, goDown, goUp, pickupHere, quaff, read, eat, wield, dropItem, rest, restStep, cast, study, spellsAvailable, newSpellCount, fire, throwItem, aim, useStaff, zap, searchAround, travelTo, travelStep, run, runStep, openChest } from '../src/game/commands.ts';
 import { maintainStore, storeBuy, storeSell, buyPrice, storeWants } from '../src/game/stores.ts';
-import { kindOf, itemName, inscriptionTags, inscriptionConfirms } from '../src/game/items.ts';
+import { kindOf, itemName, inscriptionTags, inscriptionConfirms, makeItem, makeAware } from '../src/game/items.ts';
+import { isIgnored, itemQuality, toggleIgnoreKind } from '../src/game/ignore.ts';
 import { needsDir, needsItem } from '../src/game/effects.ts';
 import { serialize, deserialize } from '../src/game/save.ts';
 import { isConnected } from '../src/game/gen/dungeon.ts';
@@ -312,6 +313,45 @@ void dummy;
     ok(wrongTier === 0, `depth ${depth}: ${wrongTier} generators claim a tier their hit points do not support`);
     console.log(`catch-up at depth ${depth}: four absences up to 120000 turns reproduce byte for byte (${lv.monsters.length} monsters, all on legal ground)`);
   }
+}
+
+// 2c. Ignore settings. Auto-pickup is on by default, so a mistake here does not litter the floor --
+// it throws away your armour. Every case below was a real bug: grading a base kind's built-in
+// to-hit penalty as damage condemned heavy armour, ignoring an item by kind hid the ego version of
+// it, and an item whose whole worth is an ability (a Ring of Speed has no plusses at all) graded
+// 'average' and went straight past.
+{
+  const g = createGame('Ign', 'human', 'warrior', 'male', 31337);
+  const make = (kind: string, tweak: (it: Item) => void = () => {}): Item => { const it = makeItem(kind, 1); tweak(it); return it; };
+  const known = (it: Item): Item => { it.known = true; return it; };
+
+  for (const gp of Object.keys(g.ignore.quality) as (keyof typeof g.ignore.quality)[]) g.ignore.quality[gp] = 'all';
+  const artifact = known(make('short_sword', it => { it.artifact = 'sting'; }));
+  ok(!isIgnored(g, artifact), 'an artifact was ignored');
+  ok(!isIgnored(g, make('long_sword')), 'an unidentified weapon was ignored, though nothing is known about it');
+
+  // Heavy armour carries a built-in to-hit penalty; that is the base kind, not damage.
+  g.ignore.quality.body = 'worthless';
+  const heavy = known(make('hard_leather_armor'));
+  ok(itemQuality(heavy) !== 'worthless', `plain armour with a built-in to-hit penalty graded ${itemQuality(heavy)}`);
+  ok(!isIgnored(g, heavy), 'armour with a built-in to-hit penalty was ignored at the mildest setting');
+  const damaged = known(make('hard_leather_armor', it => { it.toAc = -4; it.cursed = true; }));
+  ok(isIgnored(g, damaged), 'genuinely damaged armour was not ignored');
+
+  // An item whose worth is an ability, not a number.
+  g.ignore.quality.ring = 'good';
+  const speed = known(make('ring_speed', it => { it.pval = 5; }));
+  ok(itemQuality(speed) === 'excellent', `a known Ring of Speed graded ${itemQuality(speed)}`);
+  ok(!isIgnored(g, speed), 'a known Ring of Speed was ignored at "leave all but the excellent"');
+
+  // Ignoring a kind must not hide the ego version of that kind.
+  g.ignore.quality.weapon = 'none';
+  toggleIgnoreKind(g, 'long_sword');
+  makeAware(g.flavors, 'long_sword');
+  ok(isIgnored(g, known(make('long_sword'))), 'a plain example of an ignored kind was not ignored');
+  ok(!isIgnored(g, known(make('long_sword', it => { it.ego = 'slay_evil'; }))), 'an ego item was hidden by ignoring its base kind');
+  ok(!isIgnored(g, make('long_sword')), 'an unidentified example of an ignored kind was ignored');
+  console.log('ignore: artifacts, unknowns, ability items and ego items all survive the strictest settings');
 }
 
 // 3. Monster senses. The play loop below never catches a monster that fails to close, because its

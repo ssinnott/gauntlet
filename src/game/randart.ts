@@ -148,9 +148,30 @@ function rollArtifact(r: RngInstance, base: ArtifactKind): ArtifactKind {
   // Lights keep burning: a relic lamp that needs oil is a joke.
   if (lightSource) { flags.push('NO_FUEL'); flags.push('LITE'); }
 
-  // One pval line, sometimes two flags sharing it (as the hand-written ones do).
+  // An artifact has ONE pval, shared by every flag that reads it, so it gets one pval line. Rolling
+  // a stat line and then a speed line on top let the second silently overwrite the first: the
+  // budget was charged for +6 speed and the relic shipped with +1 because MIGHT had reset the
+  // field. Speed and the attack multipliers get first refusal; a stat line fills in otherwise.
+  let pvalTaken = false;
+  // Speed is the one bonus that changes how the game is played, so it is priced accordingly.
+  if (!cursed && budget >= 40 && r.chance(0.12)) {
+    const sp = 1 + r.int(0, Math.min(5, Math.floor(budget / 22)));
+    flags.push('SPEED');
+    out.pval = sp;
+    spend(sp * 22);
+    pvalTaken = true;
+  }
+  // Extra blows and shots, likewise.
+  if (!pvalTaken && weapon && !cursed && budget >= 35 && r.chance(0.10)) {
+    const blows = 1 + r.int(0, 1);
+    flags.push('BLOWS'); out.pval = blows; spend(28 * blows); pvalTaken = true;
+  }
+  if (!pvalTaken && launcher && !cursed && budget >= 30) {
+    if (r.chance(0.4)) { flags.push('SHOTS'); out.pval = 1; spend(26); pvalTaken = true; }
+    else if (r.chance(0.4)) { flags.push('MIGHT'); out.pval = 1; spend(26); pvalTaken = true; }
+  }
   const pvalPicks = PVAL_FLAGS.filter(p => !(weapon && p.flag === 'TUNNEL' && r.chance(0.5)));
-  if (r.chance(0.75)) {
+  if (!pvalTaken && r.chance(0.75)) {
     const first = pvalPicks[r.int(0, pvalPicks.length - 1)];
     const affordable = Math.max(1, Math.min(first.max, Math.floor(budget / 2 / first.per)));
     const pval = 1 + r.int(0, affordable - 1);
@@ -161,19 +182,6 @@ function rollArtifact(r: RngInstance, base: ArtifactKind): ArtifactKind {
       const second = pvalPicks[r.int(0, pvalPicks.length - 1)];
       if (second.flag !== first.flag) { flags.push(second.flag); spend(second.per * pval); }
     }
-  }
-  // Speed is the one bonus that changes how the game is played, so it is priced accordingly.
-  if (!cursed && budget >= 40 && r.chance(0.12)) {
-    const sp = 1 + r.int(0, Math.min(5, Math.floor(budget / 22)));
-    flags.push('SPEED');
-    out.pval = sp;
-    spend(sp * 22);
-  }
-  // Extra blows and shots, likewise.
-  if (weapon && !cursed && budget >= 35 && r.chance(0.10)) { flags.push('BLOWS'); out.pval = 1 + r.int(0, 1); spend(28 * (out.pval || 1)); }
-  if (launcher && !cursed && budget >= 30) {
-    if (r.chance(0.4)) { flags.push('SHOTS'); out.pval = 1; spend(26); }
-    else if (r.chance(0.4)) { flags.push('MIGHT'); out.pval = 1; spend(26); }
   }
 
   // Now buy abilities until the budget runs out.

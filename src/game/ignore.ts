@@ -5,7 +5,7 @@
 // A setting is a quality threshold per equipment group ("ignore anything average or worse among
 // shields"), plus a list of known consumable kinds to leave on the floor. Nothing unidentified is
 // ever ignored -- you cannot judge what you have not seen -- and artifacts never are.
-import type { Item, ObjectKind, TVal } from './types.ts';
+import type { Item, ObjectFlag, ObjectKind, TVal } from './types.ts';
 import type { Game } from './state.ts';
 import { kindOf, isAware, itemFlags } from './items.ts';
 
@@ -62,6 +62,13 @@ export function groupOf(k: ObjectKind): IgnoreGroup | null { return GROUP_OF[k.t
 /** What the hero currently believes an item is worth. 'unknown' means no judgement is possible yet. */
 export type ItemQuality = 'unknown' | 'worthless' | 'average' | 'good' | 'excellent' | 'special';
 
+/** Flags that say nothing about whether a find is worth carrying. */
+const DULL_FLAGS: ObjectFlag[] = ['IGNORE_ACID', 'IGNORE_ELEC', 'IGNORE_FIRE', 'IGNORE_COLD', 'EASY_KNOW', 'SHOW_MODS'];
+/** Flags whose worth is carried by the shared pval. */
+const PVAL_FLAGS: ObjectFlag[] = ['STR', 'INT', 'WIS', 'DEX', 'CON', 'CHR', 'STEALTH', 'SEARCH', 'INFRA', 'TUNNEL', 'SPEED', 'BLOWS', 'SHOTS', 'MIGHT'];
+/** The handful that change how the game is played. These rank with an ego, not with a plus one. */
+const MAJOR_FLAGS: ObjectFlag[] = ['SPEED', 'BLOWS', 'SHOTS', 'MIGHT', 'TELEPATHY', 'FREE_ACT', 'HOLD_LIFE'];
+
 export function itemQuality(it: Item): ItemQuality {
   if (it.artifact) return 'special';
   // A pseudo-id feeling counts, and so does full knowledge.
@@ -77,8 +84,23 @@ export function itemQuality(it: Item): ItemQuality {
   }
   if (it.cursed) return 'worthless';
   if (it.ego) return 'excellent';
-  if (it.toHit < 0 || it.toDam < 0 || it.toAc < 0 || (it.pval < 0 && itemFlags(it).size > 0)) return 'worthless';
-  if (it.toHit > 0 || it.toDam > 0 || it.toAc > 0) return 'good';
+  // Judge the MAGIC, not the raw number. Plenty of base kinds carry a built-in penalty -- heavy
+  // armour has a to-hit malus -- and grading those against zero condemned Red Dragon Scale Mail as
+  // worthless, so the mildest ignore setting threw it away.
+  const k = kindOf(it);
+  const dHit = it.toHit - (k.toHit || 0);
+  const dDam = it.toDam - (k.toDam || 0);
+  const dAc = it.toAc - (k.toAc || 0);
+  const flags = itemFlags(it);
+  const pvalDriven = PVAL_FLAGS.some(f => flags.has(f));
+  if (dHit < 0 || dDam < 0 || dAc < 0 || (pvalDriven && it.pval < 0)) return 'worthless';
+  // Speed, extra blows, telepathy and the like rank with an ego rather than with a plain bonus: a
+  // hero who set a group to "leave all but the excellent" did not mean to leave a Ring of Speed.
+  for (const f of MAJOR_FLAGS) if (flags.has(f) && (!PVAL_FLAGS.includes(f) || it.pval > 0)) return 'excellent';
+  if (dHit > 0 || dDam > 0 || dAc > 0 || (pvalDriven && it.pval > 0)) return 'good';
+  // Anything that grants an actual ability is worth keeping even with no bonuses on it: a Ring of
+  // Speed has no plusses at all, and grading it 'average' meant a tidy hero would walk past one.
+  for (const f of flags) if (!DULL_FLAGS.includes(f)) return 'good';
   return 'average';
 }
 
@@ -94,9 +116,15 @@ export function isIgnored(g: Game, it: Item): boolean {
   if (it.artifact || alwaysPickUp(it)) return false;
   const k = kindOf(it);
   if (k.tval === 'gold' || k.tval === 'key' || k.tval === 'chest') return false;
-  // Consumables and devices: ignored kind by kind, and only once the hero knows what they are.
-  if (g.ignore.kinds.includes(it.kind)) return isAware(g.flavors, it.kind);
   const gp = groupOf(k);
+  // Ignored kind by kind, and only once the hero knows what they are. For a consumable or a device
+  // the kind IS the whole story. A piece of gear is still judged on its merits, though: telling the
+  // game you are done with long swords must not hide a Long Sword of Westernesse.
+  if (g.ignore.kinds.includes(it.kind) && isAware(g.flavors, it.kind)) {
+    if (!gp) return true;
+    const kq = itemQuality(it);
+    if (kq !== 'unknown' && RANK[kq] <= RANK.average) return true;
+  }
   if (!gp) return false;
   const want = THRESHOLD[g.ignore.quality[gp] ?? 'none'];
   if (want < 0) return false;
