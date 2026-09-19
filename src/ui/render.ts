@@ -6,6 +6,7 @@ import { type Level, type Monster, type Pos, T, F, isShop, isWall } from '../gam
 import { tileAt, flagAt, auxAt } from '../game/level.ts';
 import { raceOf, hasMFlag } from '../game/monster.ts';
 import { kindOf, itemIcon } from '../game/items.ts';
+import { isIgnored } from '../game/ignore.ts';
 import type { Game, Fx } from '../game/state.ts';
 import { drawMonsterSprite, drawItemIcon } from './sprites.ts';
 import { drawHero, heroPlay, type HeroSprite } from './hero.ts';
@@ -132,6 +133,7 @@ export class MapRenderer {
       }
       // Items on this row.
       for (const fi of lv.items) {
+        if (isIgnored(g, fi.item)) continue;
         if (fi.y !== y || fi.x < x0 || fi.x > x1) continue;
         const f = flagAt(lv, fi.x, fi.y);
         if (!(f & F.MARK)) continue;
@@ -152,7 +154,7 @@ export class MapRenderer {
         const mx = sx(m.vx ?? m.x) + TILE / 2, myy = sy(m.vy ?? m.y) + TILE - 2;
         const seen = (flagAt(lv, m.x, m.y) & F.SEEN) !== 0;
         drawMonsterSprite(ctx, halluc ? (['blob', 'eye', 'demon', 'dragon', 'ghost'] as const)[(m.id + Math.floor(this.phase * 5)) % 5] : r.sprite, mx, myy + (m.attackAnim ? -2 : 0), {
-          color: r.color, color2: r.color2, size: r.size || 1, facing: m.facing, phase: (this.phase + m.id * 0.17) % 1, flash: (m.hitFlash || 0) > 0 && ((m.hitFlash || 0) & 2) !== 0, alpha: seen ? 1 : 0.5, asleep: m.sleep > 0,
+          color: r.color, color2: r.color2, size: r.size || 1, facing: m.facing, phase: (this.phase + m.id * 0.17) % 1, flash: (m.hitFlash || 0) > 0 && ((m.hitFlash || 0) & 2) !== 0, alpha: seen ? 1 : 0.5, asleep: m.sleep > 0, tier: m.tier,
         });
         // Health bar for wounded visible monsters.
         if (m.hp < m.maxhp && seen) {

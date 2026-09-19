@@ -5,6 +5,7 @@ import type { Game } from './state.ts';
 import type { MonsterRace, MonsterSpell, BlowMethod, BlowEffect } from './types.ts';
 import { loreOf, knowsDetails, type MonsterLore } from './lore.ts';
 import { ELEMENT_NAME } from './monsterSpells.ts';
+import { LESSON_TEXT, lessonsKnown } from './smart.ts';
 
 const METHOD: Record<BlowMethod, string> = { HIT: 'hit', TOUCH: 'touch', PUNCH: 'punch', KICK: 'kick', CLAW: 'claw', BITE: 'bite', STING: 'sting', BUTT: 'butt', CRUSH: 'crush', ENGULF: 'engulf', CRAWL: 'crawl on you', DROOL: 'drool on you', SPIT: 'spit', GAZE: 'gaze', WAIL: 'wail', SPORE: 'release spores', BEG: 'beg', INSULT: 'insult', MOAN: 'moan', KISS: 'kiss' };
 const EFFECT: Partial<Record<BlowEffect, string>> = { POISON: 'to poison', UN_BONUS: 'to disenchant', UN_POWER: 'to drain charges', EAT_GOLD: 'to steal gold', EAT_ITEM: 'to steal items', EAT_FOOD: 'to eat your food', EAT_LITE: 'to absorb light', ACID: 'to shoot acid', ELEC: 'to electrocute', FIRE: 'to burn', COLD: 'to freeze', BLIND: 'to blind', CONFUSE: 'to confuse', TERRIFY: 'to terrify', PARALYZE: 'to paralyse', LOSE_STR: 'to reduce strength', LOSE_INT: 'to reduce intelligence', LOSE_WIS: 'to reduce wisdom', LOSE_DEX: 'to reduce dexterity', LOSE_CON: 'to reduce constitution', LOSE_CHR: 'to reduce charisma', LOSE_ALL: 'to reduce all stats', SHATTER: 'to shatter', EXP_10: 'to lower experience (by 10d6+)', EXP_20: 'to lower experience (by 20d6+)', EXP_40: 'to lower experience (by 40d6+)', EXP_80: 'to lower experience (by 80d6+)', HALLU: 'to cause hallucinations', DISENCHANT: 'to disenchant' };
@@ -109,6 +110,10 @@ export function describeRace(g: Game, r: MonsterRace, cheat = false): string[] {
     out.push(`${Pro} can ${join(parts)}.`);
   } else if (f.includes('NEVER_BLOW')) out.push(`${Pro} has no physical attacks.`);
   else if (r.blows.length) out.push('Nothing is known about its attack.');
+  // What this race has worked out about you (smart_learn), which is worth knowing before you rely
+  // on a resistance it has already seen.
+  const learnt = lessonsKnown(g, r.id);
+  if (learnt.length) out.push(`${Pro} has learnt that ${join(learnt.map(x => LESSON_TEXT[x]).filter(Boolean))}.`);
   return out;
 }
 function ordinal(n: number): string { const s = ['th', 'st', 'nd', 'rd'], v = n % 100; return s[(v - 20) % 10] || s[v] || s[0]; }

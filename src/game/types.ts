@@ -138,6 +138,11 @@ export interface MonsterRace {
   /** GENERATOR only: the race id it spawns, and how many turns between spawns. */
   spawns?: string;
   spawnEvery?: number;
+  /**
+   * GENERATOR only: the family it draws from (a themedFilter theme). An intact generator reaches
+   * deeper into that family than a broken one; `spawns` is the floor it falls back to.
+   */
+  spawnTheme?: string;
   /** ESCORT: races that appear with it. */
   escorts?: string[];
   /** A word or two of flavour for the look command. */
@@ -168,6 +173,11 @@ export interface Monster extends Pos {
   detected: boolean;
   /** GENERATOR: turns until the next spawn. */
   spawnTimer: number;
+  /**
+   * GENERATOR: how intact it is, 3 down to 1. It spawns faster and reaches deeper at 3, and the
+   * sprite comes apart as it falls. Derived from hit points, so old saves recover it.
+   */
+  tier?: number;
   /** Visual interpolation state (render only; not saved). */
   vx?: number;
   vy?: number;
@@ -564,6 +574,8 @@ export interface Level {
   leftAt?: number;
   /** The town only: was it generated in daylight? */
   daytime?: boolean;
+  /** Which generator built it. Absent means the rooms-and-corridors one (saves made before caverns). */
+  kind?: 'classic' | 'cavern' | 'labyrinth';
 }
 
 export type StoreType = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
