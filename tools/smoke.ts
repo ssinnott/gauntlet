@@ -107,6 +107,11 @@ const touchOpensInventory = await page.evaluate(() => {
 });
 await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = false; });
 
+// Every sound recipe runs at least once. The debug API bypasses Input, so audio is never unlocked
+// by the scripted keys above and none of this code would otherwise execute in a browser.
+const soundsPlayed = await page.evaluate(() => (window as any).__game.api.testAudio());
+await page.waitForTimeout(200);
+
 // Save round trip: ctrl+S writes a slot to IndexedDB, it lists on the title screen, and reading it
 // back reconstructs the same hero. Nothing is left in the old single localStorage key.
 await page.evaluate(() => (window as any).__game.api.key('s', false, true));
@@ -185,6 +190,7 @@ ok(!saveInfo.legacy, 'nothing is left behind in the old single-key save');
 ok(reloaded.started && reloaded.name === 'Smoke' && reloaded.depth === saveInfo.depth, `the slot loads back into the same hero (${JSON.stringify(reloaded)})`);
 ok(savesScreen.overlay === 'SaveSlotsOverlay' && savesScreen.listed >= 1 && savesScreen.first === 'Smoke' && savesColours > 4,
   `the saved-heroes screen lists the hero (${JSON.stringify(savesScreen)}, ${savesColours} colours)`);
+ok(soundsPlayed >= 30, `every sound recipe synthesised without throwing (${soundsPlayed} played)`);
 ok(hasLore, 'monster memory persisted to localStorage');
 ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);
 ok(touchColours > 30, `touch controls drew (${touchColours} colours)`);

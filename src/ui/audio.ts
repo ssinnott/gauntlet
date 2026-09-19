@@ -157,6 +157,20 @@ export function playQueuedSounds(g: Game): void {
   q.length = 0;
 }
 
+/**
+ * Play every recipe once. The smoke test drives the game through the debug API, which bypasses
+ * Input and therefore never unlocks audio, so without this no sound recipe would ever run in a
+ * browser during the checks -- and a recipe that throws (WebAudio rejects a zero target on an
+ * exponential ramp, for one) would ship unnoticed. Returns how many were played.
+ */
+export function playEverySound(): number {
+  unlockAudio();
+  if (!audio()) return 0;
+  let n = 0;
+  for (const id of Object.keys(RECIPES) as SoundId[]) { RECIPES[id](); n++; }
+  return n;
+}
+
 // ---------------------------------------------------------------------------------------------
 // The narrator
 

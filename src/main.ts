@@ -33,7 +33,7 @@ import type { Stat } from './game/types.ts';
 import type { Options } from './game/options.ts';
 import { MONSTER_BY_ID } from './game/data/monsters.ts';
 import { raceOf } from './game/monster.ts';
-import { playQueuedSounds, speak, unlockAudio, resetNarrator, stopSpeaking } from './ui/audio.ts';
+import { playQueuedSounds, playEverySound, speak, unlockAudio, resetNarrator, stopSpeaking } from './ui/audio.ts';
 const LORE_KEY = 'gauntlet-of-angband.lore.v1';
 
 setTextDefaults({ shadowColor: '#0a0810', outline: '#0a0810' });
@@ -63,6 +63,8 @@ class App implements Ui2 {
   private saveInFlight = false;
   private pendingSave: SaveRecord | null = null;
   private saveErrorShown = false;
+  /** Slots removed this session. A write already in flight for one must not bring it back. */
+  private deletedSlots = new Set<string>();
 
   constructor() {
     this.input = new Input(this.canvasApi.canvas, (x, y) => this.canvasApi.toInternal(x, y));
@@ -155,6 +157,9 @@ class App implements Ui2 {
       const next = this.pendingSave;
       this.pendingSave = null;
       if (!next) { this.saveInFlight = false; this.refreshSlots(); return; }
+      // The hero died (or the slot was deleted) while this snapshot was waiting: drop it, or the
+      // write would resurrect a slot the player has already seen disappear.
+      if (this.deletedSlots.has(next.id)) { flush(); return; }
       writeSave(next).then(err => {
         if (err && !this.saveErrorShown) {
           this.saveErrorShown = true;
@@ -162,7 +167,12 @@ class App implements Ui2 {
           if (this.started) this.g.msg.add(`This game cannot be saved: ${err}. Export the save (ctrl+E) to keep it.`, '#ff4040');
         }
         flush();
-      }).catch(() => { this.saveInFlight = false; });
+      }).catch(() => {
+        // writeSave resolves rather than rejecting, but never strand the queue if that changes.
+        this.saveInFlight = false;
+        const held = this.pendingSave;
+        if (held) { this.pendingSave = null; this.queueSave(held); }
+      });
     };
     flush();
   }
@@ -185,6 +195,8 @@ class App implements Ui2 {
     });
   }
   deleteSlot(id: string): void {
+    this.deletedSlots.add(id);
+    if (this.pendingSave && this.pendingSave.id === id) this.pendingSave = null;
     deleteSave(id).then(() => { if (this.currentSlot === id) this.currentSlot = null; this.refreshSlots(); });
     this.slots = this.slots.filter(s => s.id !== id);
   }
@@ -198,6 +210,7 @@ class App implements Ui2 {
     this.started = true;
     this.scoreRecorded = false;
     this.saveErrorShown = false;
+    if (this.currentSlot) this.deletedSlots.delete(this.currentSlot);
     this.lastAction = null;
     this.renderer.camLock = null;
     this.renderer.hero = buildHero(this.g.player);
@@ -224,7 +237,7 @@ class App implements Ui2 {
     if (g.inStore >= 0 && !this.overlays.some(o => o instanceof StoreScreen)) this.push(new StoreScreen(g.inStore));
     this.renderer.hero = syncHero(this.renderer.hero!, g.player);
     if (g.player.dead && !this.overlays.some(o => o instanceof DeathScreen)) {
-      if (this.currentSlot) { const id = this.currentSlot; this.currentSlot = null; deleteSave(id).then(() => this.refreshSlots()); this.slots = this.slots.filter(s => s.id !== id); }
+      if (this.currentSlot) { const id = this.currentSlot; this.currentSlot = null; this.deleteSlot(id); }
       this.overlays.length = 0;
       const rank = this.recordScore();
       if (rank > 0) g.msg.add(`You rank ${rank} in the Hall of Heroes.`, '#ffd040');
@@ -587,6 +600,8 @@ window.__game.api = {
   dump: () => characterDump(app.g),
   key: (key: string, shift = false, ctrl = false) => { app.handleKeyPublic({ key, shift, ctrl, alt: false, code: '' }); },
   step: () => { app.update(); app.render(); },
+  /** Self-test hook: synthesise every sound once. Used by tools/smoke.ts. */
+  testAudio: () => playEverySound(),
 };
 export type GameApi = {
   readonly game: Game;
@@ -596,4 +611,5 @@ export type GameApi = {
   dump(): string;
   key(key: string, shift?: boolean, ctrl?: boolean): void;
   step(): void;
+  testAudio(): number;
 };
