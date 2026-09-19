@@ -16,9 +16,10 @@ import { tileAt, monsterAt, passable, createLevel } from '../src/game/level.ts';
 import { T, isPassable } from '../src/game/types.ts';
 import { CLASSES } from '../src/game/data/classes.ts';
 import { RACES } from '../src/game/data/races.ts';
-import { MONSTERS } from '../src/game/data/monsters.ts';
+import { MONSTERS, MONSTER_BY_ID } from '../src/game/data/monsters.ts';
 import { OBJECTS } from '../src/game/data/objects.ts';
 import { rng } from '../src/lib/engine/rng.ts';
+import type { Options } from '../src/game/options.ts';
 import type { Game } from '../src/game/state.ts';
 import type { Item } from '../src/game/types.ts';
 import { characterDump } from '../src/game/dump.ts';
@@ -193,15 +194,32 @@ void dummy;
 // 2. Determinism. The README promises that every roll goes through the seeded rng, so a seed
 // reproduces a run. Nothing checked that until now, and it is the foundation any future lockstep
 // multiplayer would stand on, so the bar here is byte-for-byte identical saves, not "close enough".
+//
+// The script has to get INTO the dungeon and stay alive, or the assertion is nearly empty: a bot
+// that wanders the town exercises town generation and nothing else, and would happily pass while
+// level generation, generators, randarts, monster learning and the persistent-level catch-up were
+// all quietly non-deterministic.
 {
-  const SEED = 90210;
-  const SPLIT = 200, STEPS = 420;
-  // A fixed repertoire driven by the shared rng, so the rng sequence itself is part of what is
-  // compared. No wall clock, no Math.random, no iteration over anything unordered.
+  const STEPS = 2400, SPLIT = 1100;
+  const SETS: [string, Partial<Options>][] = [
+    ['default options', {}],
+    ['randarts, persistent levels, smart monsters', { randarts: true, persistentLevels: true, smartMonsters: true }],
+  ];
+  // Fixed cadences, never the clock and never an unseeded roll. The dive and the climb are chosen
+  // so neither lands on SPLIT-1, which would leave a level change pending across the save.
   const scripted = (g: Game, i: number): void => {
     if (g.player.dead) return;
     if (g.levelChange) { enterLevel(g, g.levelChange.depth, g.levelChange.by); return; }
     if (g.inStore >= 0) { g.inStore = -1; return; }
+    // Keep it alive, fed and mobile: a corpse exercises nothing, and the run has to get deep. This
+    // is what the diver in botTurn below does, and it is deterministic -- no roll is involved.
+    g.player.timed.invuln = 5;
+    g.player.chp = g.player.mhp;
+    g.player.food = 8000;
+    for (const k of ['blind', 'paralyzed', 'confused', 'poisoned', 'cut', 'stun', 'afraid', 'slow'] as const) g.player.timed[k] = 0;
+    if (i % 151 === 7) { g.levelChange = { depth: Math.min(90, g.level.depth + 3), by: 'teleport' }; return; }
+    // Climb back to a level already visited, so persistent levels really do get caught up.
+    if (i % 311 === 43 && g.level.depth > 4) { g.levelChange = { depth: g.level.depth - 2, by: 'up' }; return; }
     if (g.resting) { restStep(g); return; }
     const t = tileAt(g.level, g.player.x, g.player.y);
     if (t === T.STAIRS_DOWN && i % 37 === 0) { goDown(g); return; }
@@ -212,27 +230,88 @@ void dummy;
     if (d === 5) d = 1;
     moveDir(g, d);
   };
-  const play = (steps: number): Game => {
-    const g = createGame('Det', 'dwarf', 'warrior', 'male', SEED);
+  const play = (steps: number, options: Partial<Options>): Game => {
+    const g = createGame('Det', 'dwarf', 'warrior', 'male', 90210, { options });
     for (let i = 0; i < steps; i++) scripted(g, i);
     return g;
   };
 
-  const first = serialize(play(STEPS));
-  const second = serialize(play(STEPS));
-  ok(first === second, `the same seed did not reproduce the same run (${firstDifference(first, second)})`);
+  for (const [label, options] of SETS) {
+    const first = play(STEPS, options);
+    const firstJson = serialize(first);
+    const second = serialize(play(STEPS, options));
+    ok(firstJson === second, `${label}: the same seed did not reproduce the same run (${firstDifference(firstJson, second)})`);
 
-  // And a save/restore must not perturb what comes next: save.ts stores the rng state for exactly
-  // this reason, so continuing through a round trip has to match continuing without one.
-  const live = play(SPLIT);
-  const json = serialize(live);
-  for (let i = SPLIT; i < STEPS; i++) scripted(live, i);
-  const direct = serialize(live);
-  const restored = deserialize(json);
-  for (let i = SPLIT; i < STEPS; i++) scripted(restored, i);
-  const viaSave = serialize(restored);
-  ok(direct === viaSave, `saving and restoring perturbed the run (${firstDifference(direct, viaSave)})`);
-  console.log(`determinism: ${STEPS} scripted turns reproduce byte for byte, across a save at turn ${SPLIT}`);
+    // And a save/restore must not perturb what comes next: save.ts stores the rng state for exactly
+    // this reason, so continuing through a round trip has to match continuing without one.
+    const live = play(SPLIT, options);
+    const json = serialize(live);
+    for (let i = SPLIT; i < STEPS; i++) scripted(live, i);
+    const direct = serialize(live);
+    const restored = deserialize(json);
+    for (let i = SPLIT; i < STEPS; i++) scripted(restored, i);
+    const viaSave = serialize(restored);
+    ok(direct === viaSave, `${label}: saving and restoring perturbed the run (${firstDifference(direct, viaSave)})`);
+
+    // The run has to have gone somewhere, or the two assertions above prove very little.
+    const reached = first.player.maxDepth, levels = first.stats.levelsVisited;
+    const learned = Object.keys(first.monsterKnows).length, kept = Object.keys(first.savedLevels).length;
+    ok(reached >= 20 && levels >= 8, `${label}: the scripted run only reached depth ${reached} over ${levels} levels, so it guards little`);
+    console.log(`determinism (${label}): depth ${reached}, ${levels} levels, ${kept} kept, ${learned} races learnt, byte for byte across a save at ${SPLIT}`);
+  }
+}
+
+// 2b. The persistent-level catch-up, on its own. The scripted run above revisits levels, but the
+// arrivals step inside catchUpLevel is easily masked: generator spawns and breeders run first and
+// can take up all the headroom, after which the arrival loop never executes. A focused check with a
+// long, fixed absence exercises it directly.
+{
+  // Depth matters here. A deep level is already near the population ceiling, so the generator and
+  // breeder steps use up all the headroom and the arrival loop never executes at all; a shallow
+  // level has room, so every step of the catch-up is really exercised.
+  const runCatchUp = (depth: number): string => {
+    const g = createGame('Catch', 'dwarf', 'warrior', 'male', 24680, { options: { persistentLevels: true } });
+    enterLevel(g, depth, 'down');
+    for (const away of [300, 7000, 40000, 120000]) {
+      enterLevel(g, 0, 'up');
+      g.turn += away;
+      enterLevel(g, depth, 'down');
+    }
+    return serialize(g);
+  };
+  for (const depth of [1, 3, 20]) {
+    const a = runCatchUp(depth), b = runCatchUp(depth);
+    ok(a === b, `depth ${depth}: the persistent-level catch-up is not reproducible from the seed (${firstDifference(a, b)})`);
+    // The level the catch-up hands back has to be a legal one: nothing stacked, nothing standing
+    // inside a shut door or a wall it cannot pass, nothing on the hero, and no generator left
+    // claiming a tier its hit points do not support.
+    const g = deserialize(a);
+    const lv = g.level;
+    const grid = new Set<number>();
+    let stacked = 0, inDoor = 0, inWall = 0, onPlayer = 0, wrongTier = 0;
+    for (const m of lv.monsters) {
+      const k = m.y * lv.w + m.x;
+      if (grid.has(k)) stacked++;
+      grid.add(k);
+      if (m.x === g.player.x && m.y === g.player.y) onPlayer++;
+      const t = tileAt(lv, m.x, m.y);
+      const r = MONSTER_BY_ID[m.race];
+      const ghost = r.flags.includes('PASS_WALL') || r.flags.includes('KILL_WALL');
+      if (t === T.DOOR_CLOSED || t === T.SECRET_DOOR) { if (!ghost) inDoor++; }
+      else if (!isPassable(t) && !ghost) inWall++;
+      if (r.flags.includes('GENERATOR')) {
+        const f = m.maxhp > 0 ? m.hp / m.maxhp : 1;
+        const want = f > 2 / 3 ? 3 : f > 1 / 3 ? 2 : 1;
+        if (m.tier !== undefined && m.tier !== want) wrongTier++;
+      }
+    }
+    ok(stacked === 0, `depth ${depth}: ${stacked} monsters share a grid after the catch-up`);
+    ok(inDoor === 0, `depth ${depth}: ${inDoor} monsters are standing inside a shut door after the catch-up`);
+    ok(inWall === 0, `depth ${depth}: ${inWall} monsters are inside a wall they cannot pass after the catch-up`);
+    ok(onPlayer === 0, `depth ${depth}: ${onPlayer} monsters are on the hero's arrival grid`);
+    ok(wrongTier === 0, `depth ${depth}: ${wrongTier} generators claim a tier their hit points do not support`);
+    console.log(`catch-up at depth ${depth}: four absences up to 120000 turns reproduce byte for byte (${lv.monsters.length} monsters, all on legal ground)`);
+  }
 }
 
 // 3. Monster senses. The play loop below never catches a monster that fails to close, because its

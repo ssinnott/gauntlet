@@ -150,6 +150,25 @@ const reloaded = await page.evaluate(async () => {
   await new Promise(r => setTimeout(r, 600));
   return { name: app.g?.player?.name, depth: app.g?.player?.depth, started: app.started };
 });
+// A hero saved while IndexedDB was unavailable lands in the localStorage fallback. Both stores must
+// be read together: reading only IndexedDB when it happens to work would leave those heroes intact
+// on disk and permanently invisible, which is exactly how a save is silently lost.
+const fallback = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const KEY = 'gauntlet-of-angband.slot.fallbacktest';
+  localStorage.setItem(KEY, JSON.stringify({
+    id: 'fallbacktest', name: 'Fallback', race: 'elf', cls: 'ranger', lev: 7,
+    depth: 12, maxDepth: 12, turn: 500, savedAt: Date.now(), data: '{"v":3}',
+  }));
+  app.refreshSlots();
+  await new Promise(r => setTimeout(r, 500));
+  const listed = app.slots.some((s: any) => s.id === 'fallbacktest');
+  const alongside = app.slots.length >= 2;
+  app.deleteSlot('fallbacktest');
+  await new Promise(r => setTimeout(r, 500));
+  return { listed, alongside, leftBehind: !!localStorage.getItem(KEY), stillListed: app.slots.some((s: any) => s.id === 'fallbacktest') };
+});
+
 // The saved-heroes screen itself renders.
 await page.evaluate(() => {
   const app = (window as any).__game.api.app;
@@ -190,6 +209,8 @@ ok(!saveInfo.legacy, 'nothing is left behind in the old single-key save');
 ok(reloaded.started && reloaded.name === 'Smoke' && reloaded.depth === saveInfo.depth, `the slot loads back into the same hero (${JSON.stringify(reloaded)})`);
 ok(savesScreen.overlay === 'SaveSlotsOverlay' && savesScreen.listed >= 1 && savesScreen.first === 'Smoke' && savesColours > 4,
   `the saved-heroes screen lists the hero (${JSON.stringify(savesScreen)}, ${savesColours} colours)`);
+ok(fallback.listed && fallback.alongside, `a hero in the localStorage fallback is listed beside the IndexedDB ones (${JSON.stringify(fallback)})`);
+ok(!fallback.leftBehind && !fallback.stillListed, 'deleting a fallback hero clears it from both stores');
 ok(soundsPlayed >= 30, `every sound recipe synthesised without throwing (${soundsPlayed} played)`);
 ok(hasLore, 'monster memory persisted to localStorage');
 ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);

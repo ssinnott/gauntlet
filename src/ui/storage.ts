@@ -89,20 +89,27 @@ function lsList(): SaveRecord[] {
 // ---------------------------------------------------------------------------------------------
 // The API the game uses
 
+/**
+ * Every slot, from both stores. The two must be read TOGETHER, not one or the other: a write falls
+ * back to localStorage whenever an individual IndexedDB operation fails, and whether IndexedDB
+ * works can change between sessions (a private window, a storage permission, an embedded webview).
+ * Reading only IndexedDB when it happens to be available would leave every hero saved during a
+ * fallback session intact on disk and permanently invisible.
+ */
 export async function listSaves(): Promise<SaveMeta[]> {
-  const rows = await tx<SaveRecord[]>('readonly', s => s.getAll());
-  const list = rows ?? lsList();
-  return list
+  const rows = (await tx<SaveRecord[]>('readonly', s => s.getAll())) ?? [];
+  const spare = lsList().filter(r => !rows.some(x => x.id === r.id));
+  return [...rows, ...spare]
     .map(({ data: _data, ...meta }) => meta as SaveMeta)
     .sort((a, b) => b.savedAt - a.savedAt);
 }
 
 export async function readSave(id: string): Promise<string | null> {
+  // IDBObjectStore.get resolves undefined for a missing key and tx resolves null when the database
+  // is unusable, so anything but a row means "look in the other store".
   const row = await tx<SaveRecord | undefined>('readonly', s => s.get(id));
   if (row) return row.data;
-  if (row === null) {
-    try { const raw = localStorage.getItem(LS_PREFIX + id); if (raw) return (JSON.parse(raw) as SaveRecord).data; } catch { /* below */ }
-  }
+  try { const raw = localStorage.getItem(LS_PREFIX + id); if (raw) return (JSON.parse(raw) as SaveRecord).data; } catch { /* nothing there either */ }
   return null;
 }
 
@@ -120,8 +127,10 @@ export async function writeSave(rec: SaveRecord): Promise<string | null> {
 }
 
 export async function deleteSave(id: string): Promise<void> {
-  const done = await tx<undefined>('readwrite', s => s.delete(id));
-  if (done === null) { try { localStorage.removeItem(LS_PREFIX + id); } catch { /* ignore */ } }
+  // Remove it from both stores: a slot can exist in either, and a delete that missed one would
+  // bring the hero back the next time the lists are merged.
+  await tx<undefined>('readwrite', s => s.delete(id));
+  try { localStorage.removeItem(LS_PREFIX + id); } catch { /* ignore */ }
 }
 
 /**

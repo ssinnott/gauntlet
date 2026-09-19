@@ -10,8 +10,8 @@ import { createStores, maintainStore } from './stores.ts';
 import { type GenHooks } from './gen/dungeon.ts';
 import { generateLevel } from './gen/level.ts';
 import { generateTown } from './gen/town.ts';
-import { placeMonster, placeGenerator, themedFilter, monsterTurn, energyGain, monsterSpeed, updateMonsterVisibility, ensureFlow, ensureScent, raceOf, hasMFlag, createMonster, pickRace, nearFloor, removeMonster, generatorTier, generatorInterval, pickGeneratorSpawn } from './monster.ts';
-import { updateView, tileAt, setTile, addFlag, isCleanFloor, inBounds, randomEmptyFloor } from './level.ts';
+import { placeMonster, placeGenerator, themedFilter, monsterTurn, energyGain, monsterSpeed, updateMonsterVisibility, ensureFlow, ensureScent, raceOf, hasMFlag, createMonster, pickRace, nearFloor, removeMonster, generatorTier, generatorTierFor, generatorInterval, pickGeneratorSpawn } from './monster.ts';
+import { updateView, tileAt, setTile, addFlag, isCleanFloor, inBounds, randomEmptyFloor, auxAt } from './level.ts';
 import { setTimed, refreshBonuses, teleportPlayer } from './effectsCore.ts';
 import { takeHit } from './combat.ts';
 import { dropNear, disturb } from './world.ts';
@@ -144,8 +144,15 @@ export function enterLevel(g: Game, depth: number, by: 'down' | 'up' | 'none' | 
   p.x = start.x; p.y = start.y; p.vx = undefined; p.vy = undefined;
   p.depth = depth;
   if (depth > p.maxDepth) p.maxDepth = depth;
-  // Nothing may share the player's grid.
-  for (const m of level.monsters.slice()) if (m.x === p.x && m.y === p.y) removeMonster(g, m);
+  // Nothing may share the player's grid. Shove it aside rather than delete it: with the catch-up
+  // simulation a monster can now wander onto the staircase, and deleting it would take whatever it
+  // had stolen with it.
+  for (const m of level.monsters.slice()) {
+    if (m.x !== p.x || m.y !== p.y) continue;
+    const spot = nearFloor(level, p.x, p.y, 3, { x: p.x, y: p.y });
+    if (spot) { m.x = spot.x; m.y = spot.y; m.vx = undefined; m.vy = undefined; }
+    else { for (const it of m.held) dropNear(g, it, p.x, p.y); m.held = []; removeMonster(g, m); }
+  }
   g.stats.levelsVisited++;
   refreshBonuses(g);
   updateView(level, p.x, p.y, g.bonuses.lightRadius, p.timed.blind > 0);
@@ -212,6 +219,9 @@ function catchUpLevel(g: Game, lv: Level, elapsed: number, start: Pos): void {
     const r = raceOf(m);
     const frac = Math.max(1, Math.floor(m.maxhp / 100)) * (hasMFlag(r, 'REGENERATE') ? 2 : 1);
     m.hp = Math.min(m.maxhp, m.hp + frac * rounds);
+    // A generator that knitted itself back together is whole again: its tier drives the sprite, the
+    // spawn rate and how deep it reaches, and leaving it at the old broken value makes all three lie.
+    if (hasMFlag(r, 'GENERATOR')) m.tier = generatorTierFor(m);
     m.afraid = 0; m.confused = 0; m.stunned = 0; m.hasted = 0; m.slowed = 0;
     if (r.sleep > 0 && oneIn(3)) m.sleep = Math.max(m.sleep, randint0(r.sleep * 2));
   }
@@ -274,9 +284,18 @@ function catchUpLevel(g: Game, lv: Level, elapsed: number, start: Pos): void {
       if (!inBounds(lv, nx, ny)) continue;
       const t = tileAt(lv, nx, ny);
       if (t === T.PERM) continue;
-      if (!(isPassable(t) || ghost || ((t === T.DOOR_CLOSED || t === T.SECRET_DOOR) && opens))) continue;
+      // Doors open, they are not walked into. Letting a door-opener simply step onto a shut door
+      // leaves it standing inside one, which blocks its own line of sight and reads as a monster
+      // embedded in the woodwork. Unlock it is beyond a wander: a locked door just turns it back.
+      let opening = false;
+      if (!isPassable(t)) {
+        if (ghost) { /* straight through the rock */ }
+        else if ((t === T.DOOR_CLOSED || t === T.SECRET_DOOR) && opens && auxAt(lv, nx, ny) === 0) opening = true;
+        else continue;
+      }
       const key = ny * w + nx;
       if (taken.has(key)) continue;
+      if (opening) setTile(lv, nx, ny, T.DOOR_OPEN);
       taken.delete(m.y * w + m.x);
       taken.add(key);
       m.x = nx; m.y = ny; m.vx = undefined; m.vy = undefined;
