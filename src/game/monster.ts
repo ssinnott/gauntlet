@@ -1,6 +1,6 @@
 // Monster creation, placement, and the per-turn AI: waking, fleeing, group tactics, ranged
 // spells and breath, door handling, item pickup, generators. Angband's monster1/2.c and melee2.c.
-import { type Level, type Monster, type MonsterRace, type MonsterFlag, type Pos, T, F, DIR_DX, DIR_DY, isPassable, isWall, isDoorClosed } from './types.ts';
+import { type Level, type Monster, type MonsterRace, type MonsterFlag, type Pos, T, F, DIR_DX, DIR_DY, isPassable, isWall, isVein } from './types.ts';
 import { MONSTERS, MONSTER_BY_ID } from './data/monsters.ts';
 import { tileAt, setTile, monsterAt, inBounds, hasFlag, addFlag, los, computeFlow, passable, isCleanFloor, auxAt, setAux, playerCanSee, itemsAt } from './level.ts';
 import { randint0, randint1, oneIn, weightedPick, distance } from './util.ts';
@@ -23,9 +23,25 @@ export function monsterNameVisible(g: Game, m: Monster, capital = true): string 
   return monsterName(m, capital);
 }
 
-export function createMonster(g: Game, raceId: string, x: number, y: number, sleep: boolean, lv: Level = g.level): Monster {
+export function createMonster(g: Game, raceId: string, x: number, y: number, sleep: boolean, lv: Level = g.level): Monster | null {
   const r = MONSTER_BY_ID[raceId];
   if (!r) throw new Error('unknown monster race: ' + raceId);
+  // Never on top of the player or another monster: slide to the nearest free grid, or give up.
+  const blocked = (gx: number, gy: number) => (lv === g.level && gx === g.player.x && gy === g.player.y) || !!monsterAt(lv, gx, gy) || !(isPassable(tileAt(lv, gx, gy)) || (lv.depth === 0 && tileAt(lv, gx, gy) === T.GRASS));
+  if (blocked(x, y)) {
+    let found = false;
+    for (let rad = 1; rad <= 5 && !found; rad++) {
+      const cands: Pos[] = [];
+      for (let dy = -rad; dy <= rad; dy++) for (let dx = -rad; dx <= rad; dx++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== rad) continue;
+        if (!inBounds(lv, x + dx, y + dy) || blocked(x + dx, y + dy)) continue;
+        if (isVein(tileAt(lv, x + dx, y + dy))) continue;
+        cands.push({ x: x + dx, y: y + dy });
+      }
+      if (cands.length) { const c = cands[randint0(cands.length)]; x = c.x; y = c.y; found = true; }
+    }
+    if (!found) return null;
+  }
   const hp = hasMFlag(r, 'UNIQUE') ? r.hp : Math.max(1, Math.round(r.hp * (0.85 + randint0(31) / 100)));
   const m: Monster = {
     id: g.nextMonsterId++, race: raceId, x, y, hp, maxhp: hp, energy: randint0(50), speed: r.speed, sleep: 0,
@@ -60,8 +76,9 @@ export function placeMonster(g: Game, lv: Level, depth: number, x: number, y: nu
   if (!r) return null;
   return placeRace(g, lv, r, x, y, sleep, group);
 }
-export function placeRace(g: Game, lv: Level, r: MonsterRace, x: number, y: number, sleep: boolean, group: boolean): Monster {
+export function placeRace(g: Game, lv: Level, r: MonsterRace, x: number, y: number, sleep: boolean, group: boolean): Monster | null {
   const m = createMonster(g, r.id, x, y, sleep, lv);
+  if (!m) return null;
   if (group && (hasMFlag(r, 'FRIENDS') || hasMFlag(r, 'GROUP'))) {
     const n = 2 + randint0(6);
     placeGroup(g, lv, r, x, y, n, sleep);
@@ -80,9 +97,10 @@ export function placeRace(g: Game, lv: Level, r: MonsterRace, x: number, y: numb
 function placeGroup(g: Game, lv: Level, r: MonsterRace, x: number, y: number, n: number, sleep: boolean): void {
   for (let i = 0; i < n; i++) { const p = nearFloor(lv, x, y, 3); if (p) createMonster(g, r.id, p.x, p.y, sleep, lv); }
 }
-export function nearFloor(lv: Level, x: number, y: number, radius: number): Pos | null {
+export function nearFloor(lv: Level, x: number, y: number, radius: number, avoid: Pos | null = null): Pos | null {
   for (let t = 0; t < 30; t++) {
     const nx = x + randint0(radius * 2 + 1) - radius, ny = y + randint0(radius * 2 + 1) - radius;
+    if (avoid && nx === avoid.x && ny === avoid.y) continue;
     if (isCleanFloor(lv, nx, ny) || (lv.depth === 0 && (tileAt(lv, nx, ny) === T.GRASS || tileAt(lv, nx, ny) === T.ROAD) && !monsterAt(lv, nx, ny))) return { x: nx, y: ny };
   }
   return null;
@@ -179,8 +197,8 @@ export function monsterTurn(g: Game, m: Monster): void {
     const pos = nearFloor(lv, m.x, m.y, 2);
     if (pos) {
       const s = createMonster(g, r.spawns, pos.x, pos.y, false);
-      s.energy = 0;
-      if (m.visible) { g.msg.add(`${monsterName(m)} spawns ${monsterName(s, false)}!`); g.fx.push({ type: 'flash', x: pos.x, y: pos.y, color: r.color2 || r.color }); }
+      if (s) s.energy = 0;
+      if (s && m.visible) { g.msg.add(`${monsterName(m)} spawns ${monsterName(s, false)}!`); g.fx.push({ type: 'flash', x: pos.x, y: pos.y, color: r.color2 || r.color }); }
       disturb(g);
     }
     m.spawnTimer = r.spawnEvery || 20;
@@ -192,7 +210,7 @@ export function monsterTurn(g: Game, m: Monster): void {
     for (let d = 1; d <= 9; d++) if (d !== 5 && monsterAt(lv, m.x + DIR_DX[d], m.y + DIR_DY[d])) k++;
     if (k < 4 && oneIn(8 + k * 8)) {
       const pos = nearFloor(lv, m.x, m.y, 1);
-      if (pos) { const s = createMonster(g, r.id, pos.x, pos.y, false); s.energy = 0; if (m.visible) g.msg.add(`${monsterName(m)} breeds explosively!`); }
+      if (pos) { const s = createMonster(g, r.id, pos.x, pos.y, false); if (s) { s.energy = 0; if (m.visible) g.msg.add(`${monsterName(m)} breeds explosively!`); } }
     }
   }
   // Fear and low hp: flee.

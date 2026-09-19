@@ -81,7 +81,7 @@ export function monsterCastSpell(g: Game, m: Monster): boolean {
         const pos = nearFloor(g.level, p.x, p.y, 3);
         if (!pos) continue;
         const race = choice === 'S_KIN' ? raceOf(m) : pickRace(g, g.level.depth + 2, rr => choice === 'S_UNDEAD' ? rr.flags.includes('UNDEAD') : choice === 'S_DRAGON' ? rr.flags.includes('DRAGON') : choice === 'S_DEMON' ? rr.flags.includes('DEMON') : choice === 'S_ANIMAL' ? rr.flags.includes('ANIMAL') : !rr.flags.includes('UNIQUE'));
-        if (race) { const s = createMonster(g, race.id, pos.x, pos.y, false); s.energy = 0; }
+        if (race) { const s = createMonster(g, race.id, pos.x, pos.y, false); if (s) s.energy = 0; }
       }
       return true;
     }

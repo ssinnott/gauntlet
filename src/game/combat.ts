@@ -276,11 +276,12 @@ export function monsterMelee(g: Game, m: Monster): void {
   }
   for (const blow of r.blows) {
     if (p.dead) return;
+    // Angband's check_hit: power + 3 * level against three quarters of the armour class, with a
+    // flat 5% to hit or miss whatever the numbers say.
     const power = BLOW_POWER[blow.effect] ?? 60;
-    const level = r.depth;
-    const chance = power + level * 3;
-    const noMiss = blow.effect === 'HURT' ? false : false;
-    const hit = noMiss || (chance > 0 && (randint0(chance) >= Math.floor(ac * 3 / 4) || randint0(100) < 5)) && !(randint0(100) < 5 && !noMiss);
+    const chance = power + r.depth * 3;
+    const k = randint0(100);
+    const hit = k < 10 ? k < 5 : chance > 0 && randint0(chance) >= Math.floor(ac * 3 / 4);
     if (!hit) {
       if (['HIT', 'TOUCH', 'PUNCH', 'KICK', 'CLAW', 'BITE', 'STING', 'BUTT', 'CRUSH', 'ENGULF'].includes(blow.method)) g.msg.add(`${name} misses you.`, '#a0a0a0');
       continue;

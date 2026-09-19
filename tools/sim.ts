@@ -29,20 +29,39 @@ function check(g: Game, where: string): void {
   ok(p.x >= 0 && p.y >= 0 && p.x < lv.w && p.y < lv.h, `${where}: player off map`);
   ok(isPassable(tileAt(lv, p.x, p.y)), `${where}: player standing in tile ${tileAt(lv, p.x, p.y)}`);
   const seen = new Set<number>();
-  for (const m of lv.monsters) { const k = m.y * lv.w + m.x; ok(!seen.has(k), `${where}: two monsters at ${m.x},${m.y}`); seen.add(k); ok(!(m.x === p.x && m.y === p.y), `${where}: monster on player`); ok(m.hp > 0, `${where}: dead monster still on level`); }
+  for (const m of lv.monsters) { const k = m.y * lv.w + m.x; ok(!seen.has(k), `${where}: two monsters at ${m.x},${m.y}`); seen.add(k); ok(!(m.x === p.x && m.y === p.y), `${where}: monster on player: ${m.race}#${m.id} (next ${g.nextMonsterId}, energy ${m.energy}, depth ${g.level.depth}, turn ${g.turn}, ptimed ${JSON.stringify(Object.fromEntries(Object.entries(p.timed).filter(e => e[1])))}) at ${m.x},${m.y}; last: ${g.msg.list.slice(-4).map(x => x.text).join(" | ")}`); ok(m.hp > 0, `${where}: dead monster still on level`); }
   ok(p.inven.length <= 23, `${where}: inventory overflow`);
   for (const it of p.inven) ok(it.number > 0, `${where}: empty stack in pack`);
 }
 
-/** A crude bot: fight what is adjacent, otherwise wander toward unexplored space, use stairs, use items. */
-function botTurn(g: Game, step: number): void {
+/**
+ * A crude bot: fight what is adjacent, otherwise wander toward unexplored space, use stairs, use items.
+ * Even seeds play a "diver" that is healed whenever it drops low, so deep monsters, spells, breath,
+ * generators, vaults and artifacts all get exercised; odd seeds play honestly and mostly die early.
+ */
+function botTurn(g: Game, step: number, diver: boolean): void {
   const p = g.player, lv = g.level;
   if (p.dead) return;
+  if (diver && step % 200 === 199 && lv.depth > 0 && !g.levelChange) { g.levelChange = { depth: Math.min(60, lv.depth + 3), by: 'teleport' }; return; }
+  if (diver) { p.timed.invuln = 5; if (p.chp < p.mhp) { p.chp = p.mhp; } p.food = 12000; for (const t of Object.keys(p.timed) as (keyof typeof p.timed)[]) if (['blind', 'paralyzed', 'confused', 'poisoned', 'cut', 'stun', 'afraid', 'slow'].includes(t)) p.timed[t] = 0; }
   if (g.inStore >= 0) { shopAround(g); g.inStore = -1; return; }
   if (g.levelChange) { enterLevel(g, g.levelChange.depth, g.levelChange.by); return; }
   if (g.resting) { restStep(g); return; }
   if (g.travel) { travelStep(g); return; }
   if (g.running) { runStep(g); return; }
+  // In town: head for the dungeon entrance, ignore the townsfolk.
+  if (lv.depth === 0 && !g.travel && g.inStore < 0) {
+    const t = tileAt(lv, p.x, p.y);
+    if (t === T.STAIRS_DOWN) { goDown(g); return; }
+    for (let y = 0; y < lv.h; y++) for (let x = 0; x < lv.w; x++) if (tileAt(lv, x, y) === T.STAIRS_DOWN) { if (!travelTo(g, x, y)) moveDir(g, rng.int(1, 9)); return; }
+  }
+  // Divers: every so often, walk to a known down staircase (the whole level is revealed for them).
+  if (diver && lv.depth > 0 && step % 60 === 0 && !g.travel) {
+    for (let i = 0; i < lv.flags.length; i++) lv.flags[i] |= 1;
+    let best: { x: number; y: number } | null = null, bd = 1e9;
+    for (let y = 0; y < lv.h; y++) for (let x = 0; x < lv.w; x++) if (tileAt(lv, x, y) === T.STAIRS_DOWN) { const d = Math.abs(x - p.x) + Math.abs(y - p.y); if (d < bd) { bd = d; best = { x, y }; } }
+    if (best && travelTo(g, best.x, best.y)) return;
+  }
   // Use things.
   if (step % 17 === 0 && p.inven.length) {
     const it = p.inven[rng.int(0, p.inven.length - 1)];
@@ -68,13 +87,13 @@ function botTurn(g: Game, step: number): void {
   if (step % 37 === 0) { searchAround(g); return; }
   // Stairs.
   const t = tileAt(lv, p.x, p.y);
-  if (t === T.STAIRS_DOWN && rng.chance(0.7)) { goDown(g); return; }
+  if (t === T.STAIRS_DOWN && (diver || rng.chance(0.7))) { goDown(g); return; }
   if (t === T.STAIRS_UP && rng.chance(0.2)) { goUp(g); return; }
   // Chest?
   const chest = lv.items.find(fi => fi.x === p.x && fi.y === p.y && kindOf(fi.item).tval === 'chest');
   if (chest) { openChest(g, chest); return; }
   // Attack an adjacent monster, else wander (prefer a direction that is passable).
-  for (let d = 1; d <= 9; d++) { if (d === 5) continue; const m = monsterAt(lv, p.x + [0, -1, 0, 1, -1, 0, 1, -1, 0, 1][d], p.y + [0, 1, 1, 1, 0, 0, 0, -1, -1, -1][d]); if (m && m.visible) { moveDir(g, d); return; } }
+  if (lv.depth > 0) for (let d = 1; d <= 9; d++) { if (d === 5) continue; const m = monsterAt(lv, p.x + [0, -1, 0, 1, -1, 0, 1, -1, 0, 1][d], p.y + [0, 1, 1, 1, 0, 0, 0, -1, -1, -1][d]); if (m && m.visible) { moveDir(g, d); return; } }
   if (step % 7 === 0) {
     // Travel toward a random known stair or a random spot.
     const x = rng.int(1, lv.w - 2), y = rng.int(1, lv.h - 2);
@@ -132,8 +151,8 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   let step = 0;
   try {
     for (step = 0; step < TURNS && !g.player.dead; step++) {
-      botTurn(g, step);
-      if (step % 100 === 0) check(g, `seed ${seed} step ${step}`);
+      botTurn(g, step, seed % 2 === 0);
+      if (step % 25 === 0) check(g, `seed ${seed} step ${step}`);
       if (step === Math.floor(TURNS / 2)) {
         // Round-trip through the save format mid-run.
         const json = serialize(g);
@@ -151,7 +170,7 @@ for (let seed = 1; seed <= SEEDS; seed++) {
   if (g.player.dead) deaths++;
   maxDepth = Math.max(maxDepth, g.player.maxDepth);
   totalKills += g.player.kills;
-  console.log(`  seed ${seed}: ${race.name} ${cls.name} lv ${g.player.lev}, depth ${g.level.depth} (max ${g.player.maxDepth}), ${g.player.kills} kills, ${g.player.gold} gold, ${g.player.inven.length} items, ${g.player.dead ? 'died: ' + g.player.deathCause : 'alive'}, score ${score(g)}`);
+  console.log(`  seed ${seed}${seed % 2 === 0 ? ' (diver)' : ''}: ${race.name} ${cls.name} lv ${g.player.lev}, depth ${g.level.depth} (max ${g.player.maxDepth}), ${g.player.kills} kills, ${g.player.gold} gold, ${g.player.inven.length} items, ${g.player.dead ? 'died: ' + g.player.deathCause : 'alive'}, score ${score(g)}`);
 }
 console.log(`play: ${SEEDS} runs, ${deaths} deaths, deepest ${maxDepth}, ${totalKills} kills`);
 ok(totalKills > 0, 'nobody killed anything');

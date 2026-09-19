@@ -22,7 +22,7 @@ export interface GenHooks {
 }
 
 const BLOCK = 11;
-const ROOM_ATTEMPTS = 50;
+const ROOM_ATTEMPTS = 80;
 
 export function generateDungeon(depth: number, hooks: GenHooks, arrivedBy: 'down' | 'up' | 'none'): { level: Level; start: Pos } {
   for (let attempt = 0; attempt < 20; attempt++) {
@@ -51,18 +51,19 @@ function build(lv: Level, depth: number, hooks: GenHooks): boolean {
   const used = new Uint8Array(bw * bh);
   const centres: Pos[] = [];
 
-  // Rooms.
-  for (let i = 0; i < ROOM_ATTEMPTS; i++) {
+  // Rooms: keep trying until the block grid is full or the attempts run out.
+  const wanted = 9 + randint1(6);
+  for (let i = 0; i < ROOM_ATTEMPTS && centres.length < wanted; i++) {
     const kind = pickRoomKind(depth);
     const bx = randint0(bw), by = randint0(bh);
     const r = buildRoom(lv, depth, kind, bx, by, used, bw, bh);
     if (r) centres.push(r);
   }
   if (centres.length < 3) return false;
-  // Tunnels: connect each room to the next in a shuffled order, then a few extra links for loops.
+  // Tunnels: connect each room to the next in a shuffled order, then one extra link for a loop.
   shuffle(centres);
   for (let i = 1; i < centres.length; i++) tunnel(lv, centres[i - 1], centres[i]);
-  for (let i = 0; i < 3 && centres.length > 3; i++) tunnel(lv, centres[randint0(centres.length)], centres[randint0(centres.length)]);
+  if (centres.length > 3) tunnel(lv, centres[randint0(centres.length)], centres[randint0(centres.length)]);
   borderPerm(lv);
   // Streamers.
   for (let i = 0; i < 2 + randint0(2); i++) streamer(lv, T.MAGMA, 30 + randint0(60), 2);
@@ -115,9 +116,16 @@ function pickRoomKind(depth: number): RoomKind {
   return 'simple';
 }
 
+/**
+ * Reserve blocks for a room. Like Angband, a room also reserves the ring of blocks around it, which
+ * is what keeps rooms apart and leaves most of the level as solid rock for the tunnels to wind through.
+ */
 function claim(used: Uint8Array, bw: number, bh: number, bx0: number, by0: number, bx1: number, by1: number): boolean {
   if (bx0 < 0 || by0 < 0 || bx1 >= bw || by1 >= bh) return false;
-  for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) if (used[y * bw + x]) return false;
+  for (let y = by0 - 1; y <= by1 + 1; y++) for (let x = bx0 - 1; x <= bx1 + 1; x++) {
+    if (x < 0 || y < 0 || x >= bw || y >= bh) continue;
+    if (used[y * bw + x]) return false;
+  }
   for (let y = by0; y <= by1; y++) for (let x = bx0; x <= bx1; x++) used[y * bw + x] = 1;
   return true;
 }
@@ -282,10 +290,10 @@ function tunnel(lv: Level, a: Pos, b: Pos): void {
   const marks: Pos[] = [];
   while ((x !== b.x || y !== b.y) && steps++ < 2000) {
     // Occasionally change direction; always correct toward the target when way off.
-    if (oneIn(10) || (dx === 0 && dy === 0)) {
+    if (oneIn(8) || (dx === 0 && dy === 0)) {
       const px = Math.sign(b.x - x), py = Math.sign(b.y - y);
-      if (oneIn(3) || (px === 0 && py === 0)) { const r = randint0(4); dx = r === 0 ? 1 : r === 1 ? -1 : 0; dy = r === 2 ? 1 : r === 3 ? -1 : 0; }
-      else if (px !== 0 && (py === 0 || oneIn(2))) { dx = px; dy = 0; } else { dx = 0; dy = py; }
+      if (oneIn(6) && !(px === 0 && py === 0)) { const r = randint0(4); dx = r === 0 ? 1 : r === 1 ? -1 : 0; dy = r === 2 ? 1 : r === 3 ? -1 : 0; }
+      else if (px !== 0 && (py === 0 || oneIn(2))) { dx = px; dy = 0; } else if (py !== 0) { dx = 0; dy = py; }
     }
     const nx = x + dx, ny = y + dy;
     if (nx <= 0 || ny <= 0 || nx >= lv.w - 1 || ny >= lv.h - 1) { dx = Math.sign(b.x - x); dy = Math.sign(b.y - y); if (dx && dy) dy = 0; continue; }
@@ -300,7 +308,7 @@ function tunnel(lv: Level, a: Pos, b: Pos): void {
     }
     x = nx; y = ny;
   }
-  for (const m of marks) if (oneIn(2)) { const d = randint0(6); setTile(lv, m.x, m.y, d === 0 ? T.SECRET_DOOR : d < 3 ? T.DOOR_CLOSED : d < 5 ? T.DOOR_OPEN : T.DOOR_BROKEN); }
+  for (const m of marks) if (oneIn(3)) { const d = randint0(6); setTile(lv, m.x, m.y, d === 0 ? T.SECRET_DOOR : d < 3 ? T.DOOR_CLOSED : d < 5 ? T.DOOR_OPEN : T.DOOR_BROKEN); }
 }
 
 function streamer(lv: Level, t: number, len: number, chanceK: number): void {
