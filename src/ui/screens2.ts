@@ -10,7 +10,8 @@ import { kindOf, isWeapon, makeItem, isAware, baseName } from '../game/items.ts'
 import { RACES, RACE_BY_ID } from '../game/data/races.ts';
 import { CLASSES, CLASS_BY_ID } from '../game/data/classes.ts';
 import { MONSTERS, MONSTER_BY_ID } from '../game/data/monsters.ts';
-import { OBJECTS, ARTIFACTS, ARTIFACT_BY_ID, EGOS } from '../game/data/objects.ts';
+import { OBJECTS, EGOS } from '../game/data/objects.ts';
+import { artifactList, artifactById } from '../game/artifacts.ts';
 import { drawMonsterSprite, drawItemIcon } from './sprites.ts';
 import type { KeyEvent } from './input.ts';
 import { dirOfKey } from './input.ts';
@@ -19,7 +20,9 @@ import { buildHero, drawHero, type HeroSprite } from './hero.ts';
 import { describeRace, wrapText } from '../game/recall.ts';
 import { loreOf } from '../game/lore.ts';
 import { type Options, DEFAULT_OPTIONS, BIRTH_OPTIONS, GAME_OPTIONS, OPTION_TEXT } from '../game/options.ts';
+import { type IgnoreGroup, IGNORE_GROUPS, IGNORE_GROUP_LABEL, IGNORE_QUALITIES, IGNORE_QUALITY_TEXT, toggleIgnoreKind } from '../game/ignore.ts';
 import type { ScoreEntry } from '../game/scores.ts';
+import type { SaveMeta } from './storage.ts';
 import type { Ui, Overlay } from './screens.ts';
 import { rng } from '../lib/engine/rng.ts';
 
@@ -35,6 +38,12 @@ export function box(ctx: CanvasRenderingContext2D, x: number, y: number, w: numb
 /** The extra things main.ts offers beyond the base Ui. */
 export interface Ui2 extends Ui {
   scores: ScoreEntry[];
+  /** Saved heroes, newest first (cached; refreshed whenever one is written or removed). */
+  slots: SaveMeta[];
+  /** A line for the saved-heroes screen when something went wrong. */
+  notice: string;
+  loadSlot(id: string): void;
+  deleteSlot(id: string): void;
   dumpCharacter(): void;
   exportSave(): void;
   importSave(): void;
@@ -79,7 +88,7 @@ export class KnowledgeOverlay implements Overlay {
         return list.map(k => ({ text: `${k.name}`, right: `${g.flavors.names[k.id] || ''}   L${k.level}`, color: TEXT }));
       }
       case 'artifacts': {
-        const list = ARTIFACTS.filter(a => g.artifactsSeen.includes(a.id));
+        const list = artifactList().filter(a => g.artifactsSeen.includes(a.id));
         return list.length ? list.map(a => ({ text: `${kindOf({ kind: a.kind } as Item).name} ${a.name}`, right: `L${a.level}`, color: GOLD })) : [{ text: 'You have not identified any artifacts.', color: DIM }];
       }
       case 'egos': {
@@ -146,6 +155,7 @@ export class KnowledgeOverlay implements Overlay {
 // Options
 
 export class OptionsOverlay implements Overlay {
+  wantsYesNo = true;
   sel = 0;
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
     const g = ui.g;
@@ -242,6 +252,7 @@ export class LocateMode implements Overlay {
 type BirthStep = 'race' | 'class' | 'stats' | 'options' | 'name';
 const STEPS: BirthStep[] = ['race', 'class', 'stats', 'options', 'name'];
 export class BirthScreen2 implements Overlay {
+  wantsYesNo = true;
   opaque = true;
   step: BirthStep = 'race';
   race = 0; cls = 0; sex: 'male' | 'female' = 'male'; name = '';
@@ -432,4 +443,149 @@ function randomName(): string {
   const a = ['Thor', 'Merlin', 'Thyra', 'Questor', 'Grim', 'Elenna', 'Bram', 'Sable', 'Vala', 'Orin', 'Tamsin', 'Dagny', 'Sumner', 'Falcon', 'Jester', 'Tygra'];
   return a[Math.floor(Math.random() * a.length)];
 }
-export const _keep2 = [drawItemIcon, ARTIFACT_BY_ID, baseName, rng];
+export const _keep2 = [drawItemIcon, artifactById, baseName, rng];
+
+// ---------------------------------------------------------------------------------------------
+// Ignore settings (Angband's squelch): what the hero cannot be bothered to pick up
+
+export class IgnoreOverlay implements Overlay {
+  sel = 0;
+  private rows(g: Game): { group?: IgnoreGroup; kind?: string }[] {
+    return [...IGNORE_GROUPS.map(gp => ({ group: gp })), ...g.ignore.kinds.map(k => ({ kind: k }))];
+  }
+  draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
+    const g = ui.g;
+    const rows = this.rows(g);
+    const w = 640, h = 70 + rows.length * 13 + 44, x = (VIEW_W - w) / 2, y = (VIEW_H - h) / 2;
+    box(ctx, x, y, w, h, 'IGNORE');
+    let ly = y + 34;
+    drawText(ctx, g.options.ignoreItems ? 'IGNORING IS ON (= TOGGLES IT)' : 'IGNORING IS OFF (= TURNS IT ON)', x + 16, ly, { size: 1, color: g.options.ignoreItems ? '#a0ffa0' : '#ff8080' });
+    ly += 16;
+    rows.forEach((r, i) => {
+      if (i === this.sel) { ctx.fillStyle = 'rgba(255,224,96,0.15)'; ctx.fillRect(x + 6, ly - 2, w - 12, 12); }
+      if (r.group) {
+        const q = g.ignore.quality[r.group];
+        drawText(ctx, IGNORE_GROUP_LABEL[r.group], x + 20, ly, { size: 1, color: TEXT });
+        drawText(ctx, q.toUpperCase(), x + 190, ly, { size: 1, color: q === 'none' ? DIM : '#ffb060' });
+        drawText(ctx, IGNORE_QUALITY_TEXT[q], x + 290, ly, { size: 1, color: DIM });
+      } else if (r.kind) {
+        const k = OBJECTS.find(o => o.id === r.kind);
+        drawText(ctx, k ? baseName(k) : r.kind, x + 20, ly, { size: 1, color: '#ffb060' });
+        drawText(ctx, 'IGNORED KIND   (ENTER KEEPS IT AGAIN)', x + 290, ly, { size: 1, color: DIM });
+      }
+      ly += 13;
+    });
+    drawText(ctx, 'UP / DOWN SELECT   LEFT / RIGHT SET   ESC CLOSES', x + w / 2, y + h - 14, { size: 1, color: DIM, align: 'center' });
+  }
+  key(e: KeyEvent, ui: Ui): boolean {
+    const g = ui.g;
+    const rows = this.rows(g);
+    if (e.key === 'Escape' || e.key === 'O') { ui.pop(); return true; }
+    if (e.key === '=') { g.options.ignoreItems = !g.options.ignoreItems; return true; }
+    if (!rows.length) return true;
+    if (e.key === 'ArrowDown' || e.key === 'j') { this.sel = (this.sel + 1) % rows.length; return true; }
+    if (e.key === 'ArrowUp' || e.key === 'k') { this.sel = (this.sel - 1 + rows.length) % rows.length; return true; }
+    const r = rows[Math.min(this.sel, rows.length - 1)];
+    if (r.group) {
+      const cur = IGNORE_QUALITIES.indexOf(g.ignore.quality[r.group]);
+      if (e.key === 'ArrowRight' || e.key === 'l' || e.key === 'Enter' || e.key === ' ') { g.ignore.quality[r.group] = IGNORE_QUALITIES[Math.min(IGNORE_QUALITIES.length - 1, cur + 1)]; return true; }
+      if (e.key === 'ArrowLeft' || e.key === 'h') { g.ignore.quality[r.group] = IGNORE_QUALITIES[Math.max(0, cur - 1)]; return true; }
+    } else if (r.kind && (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowLeft')) {
+      toggleIgnoreKind(g, r.kind);
+      this.sel = Math.max(0, this.sel - 1);
+      return true;
+    }
+    return true;
+  }
+  click(x: number, y: number, ui: Ui): boolean {
+    const g = ui.g;
+    const rows = this.rows(g);
+    const w = 640, h = 70 + rows.length * 13 + 44, bx = (VIEW_W - w) / 2, by = (VIEW_H - h) / 2;
+    if (x < bx || x > bx + w || y < by || y > by + h) { ui.pop(); return true; }
+    const i = Math.floor((y - by - 48) / 13);
+    if (i >= 0 && i < rows.length) {
+      this.sel = i;
+      const r = rows[i];
+      if (r.group) { const cur = IGNORE_QUALITIES.indexOf(g.ignore.quality[r.group]); g.ignore.quality[r.group] = IGNORE_QUALITIES[(cur + 1) % IGNORE_QUALITIES.length]; }
+      else if (r.kind) { toggleIgnoreKind(g, r.kind); this.sel = Math.max(0, i - 1); }
+    }
+    return true;
+  }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Saved heroes
+
+const CLASS_NAME = (id: string): string => CLASS_BY_ID[id]?.name || id;
+const RACE_NAME = (id: string): string => RACE_BY_ID[id]?.name || id;
+
+function agoText(then: number, now: number): string {
+  const s = Math.max(0, Math.round((now - then) / 1000));
+  if (s < 60) return 'just now';
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m} min ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h} hour${h === 1 ? '' : 's'} ago`;
+  const d = Math.round(h / 24);
+  return `${d} day${d === 1 ? '' : 's'} ago`;
+}
+
+/** The list of saved heroes: continue one, or delete one. */
+export class SaveSlotsOverlay implements Overlay {
+  opaque = true;
+  wantsYesNo = true;
+  sel = 0;
+  confirmDelete = false;
+  draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
+    const u = ui as Ui2;
+    ctx.fillStyle = '#0b0a10'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    drawTextOutlined(ctx, 'SAVED HEROES', VIEW_W / 2, 48, { size: 4, color: '#ffd040', align: 'center', outline: '#3a1c00', thickness: 2 });
+    const slots = u.slots;
+    if (!slots.length) {
+      drawText(ctx, u.notice || 'NO SAVED HEROES YET.', VIEW_W / 2, 200, { size: 2, color: DIM, align: 'center' });
+      drawText(ctx, 'ESC GOES BACK', VIEW_W / 2, VIEW_H - 40, { size: 1, color: DIM, align: 'center' });
+      return;
+    }
+    if (this.sel >= slots.length) this.sel = slots.length - 1;
+    const now = Date.now();
+    for (let i = 0; i < slots.length && i < 12; i++) {
+      const s = slots[i], y = 110 + i * 30;
+      if (i === this.sel) { ctx.fillStyle = 'rgba(255,224,96,0.15)'; ctx.fillRect(120, y - 6, VIEW_W - 240, 26); }
+      const col = s.dead ? '#a06060' : i === this.sel ? HI : TEXT;
+      drawText(ctx, s.name.toUpperCase(), 140, y, { size: 2, color: col });
+      drawText(ctx, `${RACE_NAME(s.race)} ${CLASS_NAME(s.cls)}   LEVEL ${s.lev}`, 340, y + 2, { size: 1, color: DIM });
+      drawText(ctx, s.depth === 0 ? 'IN TOWN' : `DEPTH ${s.depth}`, 620, y + 2, { size: 1, color: '#a0a0ff' });
+      drawText(ctx, s.dead ? 'DEAD' : agoText(s.savedAt, now), VIEW_W - 140, y + 2, { size: 1, color: DIM, align: 'right' });
+    }
+    if (u.notice) drawText(ctx, u.notice, VIEW_W / 2, VIEW_H - 62, { size: 1, color: '#ff8080', align: 'center' });
+    drawText(ctx, this.confirmDelete ? 'DELETE THIS HERO? Y / N' : 'ENTER CONTINUES   D DELETES   ESC GOES BACK',
+      VIEW_W / 2, VIEW_H - 40, { size: 1, color: this.confirmDelete ? '#ff8080' : DIM, align: 'center' });
+  }
+  key(e: KeyEvent, ui: Ui): boolean {
+    const u = ui as Ui2;
+    const slots = u.slots;
+    if (this.confirmDelete) {
+      if (e.key === 'y' || e.key === 'Y') { const s = slots[this.sel]; if (s) u.deleteSlot(s.id); }
+      this.confirmDelete = false;
+      return true;
+    }
+    if (e.key === 'Escape') { u.notice = ''; ui.pop(); return true; }
+    if (!slots.length) return true;
+    if (e.key === 'ArrowDown' || e.key === 'j') { this.sel = (this.sel + 1) % slots.length; return true; }
+    if (e.key === 'ArrowUp' || e.key === 'k') { this.sel = (this.sel - 1 + slots.length) % slots.length; return true; }
+    if (e.key === 'Enter' || e.key === ' ') { const s = slots[this.sel]; if (s) u.loadSlot(s.id); return true; }
+    if (e.key === 'd' || e.key === 'D') { this.confirmDelete = true; return true; }
+    return true;
+  }
+  click(x: number, y: number, ui: Ui): boolean {
+    const u = ui as Ui2;
+    const i = Math.floor((y - 104) / 30);
+    if (i >= 0 && i < u.slots.length) {
+      if (this.sel === i) { const s = u.slots[i]; if (s) u.loadSlot(s.id); }
+      else this.sel = i;
+      return true;
+    }
+    if (y > VIEW_H - 56) { u.notice = ''; ui.pop(); }
+    return true;
+  }
+}

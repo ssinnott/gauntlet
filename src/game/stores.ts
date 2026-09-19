@@ -5,7 +5,7 @@ import { OBJECTS, OBJECT_BY_ID } from './data/objects.ts';
 import { makeItem, applyMagic, makeObject, kindOf, canStack, absorb, itemValue, isWeapon, isArmor, isAmmo, identify, makeAware, isKnown } from './items.ts';
 import { adj } from './player.ts';
 import { randint0, randint1, oneIn, weightedPick, damroll } from './util.ts';
-import type { Game } from './state.ts';
+import { type Game, playSound } from './state.ts';
 import { noteItemKnown } from './effects.ts';
 
 const OWNERS: string[][] = [
@@ -149,6 +149,7 @@ export function storeBuy(g: Game, s: Store, it: Item, n: number): Item | null {
   const price = buyPrice(g, s, it) * n;
   if (s.type !== 7 && g.player.gold < price) return null;
   n = Math.min(n, it.number);
+  playSound(g, 'shop');
   const bought: Item = { ...it, id: 0, number: n, flags: [...it.flags] };
   const k = kindOf(it);
   if (k.tval === 'wand' || k.tval === 'staff') { const c = Math.floor(it.charges * n / it.number); bought.charges = c; it.charges -= c; }
@@ -160,6 +161,7 @@ export function storeBuy(g: Game, s: Store, it: Item, n: number): Item | null {
 /** Player sells `n` of an item; the store identifies it fully. Returns gold paid. */
 export function storeSell(g: Game, s: Store, it: Item, n: number): number {
   const price = s.type === 7 ? 0 : sellPrice(g, s, it) * n;
+  playSound(g, 'shop');
   const sold: Item = { ...it, number: n, flags: [...it.flags] };
   const k = kindOf(it);
   if (k.tval === 'wand' || k.tval === 'staff') { const c = Math.floor(it.charges * n / it.number); sold.charges = c; it.charges -= c; }

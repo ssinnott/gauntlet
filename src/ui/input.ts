@@ -1,7 +1,7 @@
 // Keyboard and pointer input. Keys are queued as events for the command layer; held movement keys
 // auto-repeat so walking feels like Gauntlet rather than a typewriter.
 export interface KeyEvent { key: string; shift: boolean; ctrl: boolean; alt: boolean; code: string; }
-export interface PointerEvent2 { x: number; y: number; button: number; kind: 'down' | 'move' | 'up'; }
+export interface PointerEvent2 { x: number; y: number; button: number; kind: 'down' | 'move' | 'up'; pointerType?: string; }
 
 export class Input {
   keys = new Set<string>();
@@ -17,11 +17,13 @@ export class Input {
     canvas.addEventListener('keydown', e => this.onKey(e));
     canvas.addEventListener('keyup', e => { this.keys.delete(e.key); if (e.key === this.heldDir) this.heldDir = null; });
     window.addEventListener('blur', () => { this.keys.clear(); this.heldDir = null; });
-    canvas.addEventListener('pointerdown', e => { const p = toInternal(e.clientX, e.clientY); this.pointer.push({ x: p.x, y: p.y, button: e.button, kind: 'down' }); canvas.focus(); e.preventDefault(); });
+    canvas.addEventListener('pointerdown', e => { const p = toInternal(e.clientX, e.clientY); this.pointer.push({ x: p.x, y: p.y, button: e.button, kind: 'down', pointerType: e.pointerType }); canvas.focus(); e.preventDefault(); });
     canvas.addEventListener('pointermove', e => { const p = toInternal(e.clientX, e.clientY); this.mouse = p; });
-    canvas.addEventListener('pointerup', e => { const p = toInternal(e.clientX, e.clientY); this.pointer.push({ x: p.x, y: p.y, button: e.button, kind: 'up' }); });
+    canvas.addEventListener('pointerup', e => { const p = toInternal(e.clientX, e.clientY); this.pointer.push({ x: p.x, y: p.y, button: e.button, kind: 'up', pointerType: e.pointerType }); });
     canvas.addEventListener('contextmenu', e => e.preventDefault());
     canvas.addEventListener('wheel', e => e.preventDefault(), { passive: false });
+    canvas.addEventListener('touchstart', e => e.preventDefault(), { passive: false });
+    canvas.addEventListener('touchmove', e => e.preventDefault(), { passive: false });
     canvas.focus();
   }
   private onKey(e: KeyboardEvent): void {

@@ -43,7 +43,7 @@ export function generateDungeon(depth: number, hooks: GenHooks, arrivedBy: 'down
   return { level: lv, start: { x: 6, y: 5 } };
 }
 
-function borderPerm(lv: Level): void {
+export function borderPerm(lv: Level): void {
   for (let x = 0; x < lv.w; x++) { setTile(lv, x, 0, T.PERM); setTile(lv, x, lv.h - 1, T.PERM); }
   for (let y = 0; y < lv.h; y++) { setTile(lv, 0, y, T.PERM); setTile(lv, lv.w - 1, y, T.PERM); }
 }
@@ -73,10 +73,27 @@ function build(lv: Level, depth: number, hooks: GenHooks): boolean {
   for (let i = 0; i < 1 + randint0(2); i++) streamer(lv, T.QUARTZ, 40 + randint0(60), 3);
   // Doors at corridor junctions and where tunnels enter rooms.
   placeDoors(lv, depth);
-  // Stairs.
-  if (!allocStairs(lv, T.STAIRS_DOWN, 1 + randint0(2)) || !allocStairs(lv, T.STAIRS_UP, 1 + randint0(2))) return false;
-  // Rubble and traps.
+  // Rubble.
   for (let i = 0, n = randint1(3) + 1; i < n; i++) allocCorridor(lv, T.RUBBLE);
+  // Stairs, traps, monsters, generators and loot.
+  if (!populate(lv, depth, hooks, true)) return false;
+  // Occasional treasure in mineral veins.
+  for (let i = 0; i < lv.tiles.length; i++) {
+    if (lv.tiles[i] === T.MAGMA && oneIn(12)) lv.tiles[i] = T.MAGMA_K;
+    else if (lv.tiles[i] === T.QUARTZ && oneIn(8)) lv.tiles[i] = T.QUARTZ_K;
+  }
+  runPending(lv, hooks);
+  return true;
+}
+
+/**
+ * Everything a finished level needs whatever shape it is: staircases both ways, hidden traps,
+ * sleeping monsters, Gauntlet generators, objects and gold. Caverns and labyrinths call this too,
+ * so they are populated on exactly the same schedule as a rooms-and-corridors level.
+ * Returns false when there was nowhere to put a staircase, which means: throw it away and retry.
+ */
+export function populate(lv: Level, depth: number, hooks: GenHooks, roomObjects: boolean): boolean {
+  if (!allocStairs(lv, T.STAIRS_DOWN, 1 + randint0(2)) || !allocStairs(lv, T.STAIRS_UP, 1 + randint0(2))) return false;
   const traps = randnor(Math.min(depth, 20) / 3 + 2, 2);
   for (let i = 0; i < traps; i++) { const p = randomEmptyFloor(lv, () => rng.next()); if (p) { setTile(lv, p.x, p.y, T.TRAP_HIDDEN); setAux(lv, p.x, p.y, pickTrap(depth)); } }
   // Monsters: Angband's 14 + randint(8), plus one per extra depth band, all asleep.
@@ -90,17 +107,10 @@ function build(lv: Level, depth: number, hooks: GenHooks): boolean {
     const nGen = 1 + randint0(2) + (depth >= 15 ? 1 : 0) + (depth >= 30 ? 1 : 0);
     for (let i = 0; i < nGen; i++) { const p = randomEmptyFloor(lv, () => rng.next()); if (p) hooks.placeGenerator(lv, depth, p.x, p.y); }
   }
-  // Objects and gold.
   const nObj = Math.max(1, randnor(9, 3)), nGold = Math.max(1, randnor(3, 2)), nRoomObj = Math.max(1, randnor(4, 3));
   for (let i = 0; i < nObj; i++) allocObjectAt(lv, depth, hooks, 'any', false);
   for (let i = 0; i < nGold; i++) allocObjectAt(lv, depth, hooks, 'any', true);
-  for (let i = 0; i < nRoomObj; i++) allocObjectAt(lv, depth, hooks, 'room', false);
-  // Occasional treasure in mineral veins.
-  for (let i = 0; i < lv.tiles.length; i++) {
-    if (lv.tiles[i] === T.MAGMA && oneIn(12)) lv.tiles[i] = T.MAGMA_K;
-    else if (lv.tiles[i] === T.QUARTZ && oneIn(8)) lv.tiles[i] = T.QUARTZ_K;
-  }
-  runPending(lv, hooks);
+  for (let i = 0; i < nRoomObj; i++) allocObjectAt(lv, depth, hooks, roomObjects ? 'room' : 'any', false);
   return true;
 }
 
@@ -487,7 +497,7 @@ function tunnel(lv: Level, a: Pos, b: Pos): void {
   for (const m of marks) if (oneIn(3)) { const d = randint0(6); setTile(lv, m.x, m.y, d === 0 ? T.SECRET_DOOR : d < 3 ? T.DOOR_CLOSED : d < 5 ? T.DOOR_OPEN : T.DOOR_BROKEN); }
 }
 
-function streamer(lv: Level, t: number, len: number, chanceK: number): void {
+export function streamer(lv: Level, t: number, len: number, chanceK: number): void {
   let x = randint1(lv.w - 2), y = randint1(lv.h - 2);
   let dir = randint1(9); if (dir === 5) dir = 1;
   for (let i = 0; i < len; i++) {
@@ -551,7 +561,7 @@ function allocObjectAt(lv: Level, depth: number, hooks: GenHooks, where: 'any' |
 }
 
 /** Where the player appears: on a staircase of the matching kind (connected stairs), else anywhere. */
-function pickStart(lv: Level, arrivedBy: 'down' | 'up' | 'none'): Pos | null {
+export function pickStart(lv: Level, arrivedBy: 'down' | 'up' | 'none'): Pos | null {
   const want = arrivedBy === 'down' ? T.STAIRS_UP : arrivedBy === 'up' ? T.STAIRS_DOWN : -1;
   const cands: Pos[] = [];
   if (want >= 0) for (let y = 0; y < lv.h; y++) for (let x = 0; x < lv.w; x++) if (tileAt(lv, x, y) === want && !lv.monsters.some(m => m.x === x && m.y === y)) cands.push({ x, y });

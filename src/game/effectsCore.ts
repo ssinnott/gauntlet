@@ -9,6 +9,7 @@ import { MONSTER_BY_ID } from './data/monsters.ts';
 const raceOfM = (m: Monster) => MONSTER_BY_ID[m.race];
 const monsterNameM = (m: Monster) => { const r = raceOfM(m); const s = r.flags.includes('UNIQUE') ? r.name : 'the ' + r.name; return s[0].toUpperCase() + s.slice(1); };
 import { disturb } from './world.ts';
+import { monsterLearn } from './smart.ts';
 import type { Game } from './state.ts';
 
 export function refreshBonuses(g: Game): void {
@@ -42,13 +43,13 @@ export function setTimed(g: Game, t: Timed, v: number): boolean {
   v = Math.max(0, Math.min(10000, Math.floor(v)));
   const was = p.timed[t];
   if (was === v) return false;
-  if (t === 'paralyzed' && g.bonuses.flags.has('FREE_ACT') && v > 0) return false;
-  if (t === 'afraid' && (g.bonuses.flags.has('RES_FEAR') || p.timed.hero || p.timed.shero || p.timed.bold) && v > 0) return false;
+  if (t === 'paralyzed' && g.bonuses.flags.has('FREE_ACT') && v > 0) { monsterLearn(g, 'FREE_ACT'); return false; }
+  if (t === 'afraid' && (g.bonuses.flags.has('RES_FEAR') || p.timed.hero || p.timed.shero || p.timed.bold) && v > 0) { if (g.bonuses.flags.has('RES_FEAR')) monsterLearn(g, 'RES_FEAR'); return false; }
   if (t === 'stun' && v > was && was <= 100 && v > 100) g.msg.add('You have been knocked out!', '#ff4040');
   else if (t === 'stun' && v > was && was <= 50 && v > 50) g.msg.add('You have been heavily stunned!', '#ff8080');
   if (t === 'cut' && v > was && was <= 1000 && v > 1000) g.msg.add('You have been given a mortal wound!', '#ff4040');
-  if (t === 'blind' && g.bonuses.flags.has('RES_BLIND') && v > 0) return false;
-  if (t === 'confused' && g.bonuses.flags.has('RES_CONF') && v > 0) return false;
+  if (t === 'blind' && g.bonuses.flags.has('RES_BLIND') && v > 0) { monsterLearn(g, 'RES_BLIND'); return false; }
+  if (t === 'confused' && g.bonuses.flags.has('RES_CONF') && v > 0) { monsterLearn(g, 'RES_CONF'); return false; }
   if (was === 0 && v > 0) { const m = TIMED_ON[t]; if (m) g.msg.add(m[0], m[1]); }
   if (was > 0 && v === 0) { const m = TIMED_OFF[t]; if (m) g.msg.add(m); }
   p.timed[t] = v;
@@ -57,7 +58,11 @@ export function setTimed(g: Game, t: Timed, v: number): boolean {
   return true;
 }
 
-export function playerSavingThrow(g: Game): boolean { return randint0(100) < g.bonuses.skills.save; }
+export function playerSavingThrow(g: Game): boolean {
+  const saved = randint0(100) < g.bonuses.skills.save;
+  if (saved) monsterLearn(g, 'SAVE');
+  return saved;
+}
 
 /** Teleport the player up to `dist` grids away (Angband's teleport_player: tries far first). */
 export function teleportPlayer(g: Game, dist: number): void {

@@ -2,7 +2,8 @@
 // object2.c in spirit.
 import { rng } from '../lib/engine/rng.ts';
 import { type Item, type ObjectKind, type ObjectFlag, type TVal, type SlotName, type EgoKind, type ArtifactKind, type Sense } from './types.ts';
-import { OBJECTS, OBJECT_BY_ID, EGOS, ARTIFACTS, ARTIFACT_BY_ID, EGO_BY_ID } from './data/objects.ts';
+import { OBJECTS, OBJECT_BY_ID, EGOS, EGO_BY_ID } from './data/objects.ts';
+import { artifactList, artifactById } from './artifacts.ts';
 import { randint0, randint1, oneIn, mBonus, damroll, plural, capitalize, shuffle, weightedPick } from './util.ts';
 
 let nextItemId = 1;
@@ -11,7 +12,7 @@ export function getNextItemId(): number { return nextItemId; }
 
 export function kindOf(item: Item): ObjectKind { return OBJECT_BY_ID[item.kind]; }
 export function egoOf(item: Item): EgoKind | undefined { return item.ego ? EGO_BY_ID[item.ego] : undefined; }
-export function artifactOf(item: Item): ArtifactKind | undefined { return item.artifact ? ARTIFACT_BY_ID[item.artifact] : undefined; }
+export function artifactOf(item: Item): ArtifactKind | undefined { return item.artifact ? artifactById(item.artifact) : undefined; }
 
 // ---------------------------------------------------------------------------------------------
 // Flavours
@@ -177,7 +178,7 @@ export function artifactsMadeList(): string[] { return [...artifactsMade]; }
 
 function tryArtifact(it: Item, level: number, great: boolean): boolean {
   const k = kindOf(it);
-  const cands = ARTIFACTS.filter(a => a.kind === k.id && !artifactsMade.has(a.id));
+  const cands = artifactList().filter(a => a.kind === k.id && !artifactsMade.has(a.id));
   for (const a of cands) {
     if (a.level > level && !great) { if (randint0((a.level - level) * 2) !== 0) continue; }
     if (!oneIn(a.rarity)) continue;

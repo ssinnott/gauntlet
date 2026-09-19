@@ -93,9 +93,156 @@ await page.screenshot({ path: path.join(OUT, 'smoke-charsheet.png') });
 await page.evaluate(() => (window as any).__game.api.key('Escape'));
 const dumpLen = await page.evaluate(() => (window as any).__game.api.dump().length);
 
-// Save round trip through localStorage.
+// Touch controls: the option draws the on-screen pad, and the hit testing maps taps to the right
+// keys. The pad is the only way to play on a phone, so its geometry is worth asserting.
+await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = true; });
+await page.waitForTimeout(250);
+await page.screenshot({ path: path.join(OUT, 'smoke-touch.png') });
+const touchColours = await colours();
+const touchHits = await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  const btn = app.touch.hit(281, 481, false);       // first command button
+  const north = app.touch.hit(74, 422, false);      // top of the thumb pad
+  const west = app.touch.hit(30, 462, false);       // left of the thumb pad
+  const hub = app.touch.hit(74, 462, false);        // the pad's centre
+  const map = app.touch.hit(400, 200, false);       // open map: not the pad's business
+  const esc = app.touch.hit(app.touch.buttons(true)[0].x + 3, app.touch.buttons(true)[0].y + 3, true);
+  return { btn: btn && btn.key, north: north && north.key, west: west && west.key, hub: hub && hub.key, map, esc: esc && esc.key, visible: app.touchVisible() };
+});
+const touchOpensInventory = await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  const before = app.overlays.length;
+  app.handleKeyPublic({ key: 'i', shift: false, ctrl: false, alt: false, code: '' });
+  const after = app.overlays.length;
+  app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
+  return after > before;
+});
+await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = false; });
+
+// Every sound recipe runs at least once. The debug API bypasses Input, so audio is never unlocked
+// by the scripted keys above and none of this code would otherwise execute in a browser.
+const soundsPlayed = await page.evaluate(() => (window as any).__game.api.testAudio());
+await page.waitForTimeout(200);
+
+// Save round trip: ctrl+S writes a slot to IndexedDB, it lists on the title screen, and reading it
+// back reconstructs the same hero. Nothing is left in the old single localStorage key.
 await page.evaluate(() => (window as any).__game.api.key('s', false, true));
-const hasSave = await page.evaluate(() => !!localStorage.getItem('gauntlet-of-angband.save.v1'));
+await page.waitForTimeout(700);
+const saveInfo = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const rows: any[] = await new Promise(resolve => {
+    const req = indexedDB.open('gauntlet-of-angband', 1);
+    req.onsuccess = () => {
+      try {
+        const t = req.result.transaction('saves', 'readonly');
+        const all = t.objectStore('saves').getAll();
+        all.onsuccess = () => resolve(all.result as any[]);
+        all.onerror = () => resolve([]);
+      } catch { resolve([]); }
+    };
+    req.onerror = () => resolve([]);
+  });
+  const mine = rows.find(r => r.id === app.currentSlot);
+  return {
+    rows: rows.length,
+    name: mine?.name,
+    depth: mine?.depth,
+    hasData: typeof mine?.data === 'string' && mine.data.length > 500,
+    slots: app.slots.length,
+    hasSaveFlag: app.hasSave(),
+    legacy: !!localStorage.getItem('gauntlet-of-angband.save.v1'),
+  };
+});
+// Loading the slot back gives the same hero.
+const reloaded = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const id = app.currentSlot;
+  app.quitToTitle();
+  app.loadSlot(id);
+  await new Promise(r => setTimeout(r, 600));
+  return { name: app.g?.player?.name, depth: app.g?.player?.depth, started: app.started };
+});
+// A hero saved while IndexedDB was unavailable lands in the localStorage fallback. Both stores must
+// be read together: reading only IndexedDB when it happens to work would leave those heroes intact
+// on disk and permanently invisible, which is exactly how a save is silently lost.
+const fallback = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const KEY = 'gauntlet-of-angband.slot.fallbacktest';
+  localStorage.setItem(KEY, JSON.stringify({
+    id: 'fallbacktest', name: 'Fallback', race: 'elf', cls: 'ranger', lev: 7,
+    depth: 12, maxDepth: 12, turn: 500, savedAt: Date.now(), data: '{"v":3}',
+  }));
+  app.refreshSlots();
+  await new Promise(r => setTimeout(r, 500));
+  const listed = app.slots.some((s: any) => s.id === 'fallbacktest');
+  const alongside = app.slots.length >= 2;
+  app.deleteSlot('fallbacktest');
+  await new Promise(r => setTimeout(r, 500));
+  return { listed, alongside, leftBehind: !!localStorage.getItem(KEY), stillListed: app.slots.some((s: any) => s.id === 'fallbacktest') };
+});
+
+// A stale IndexedDB row must not win over a newer fallback copy. One failed IndexedDB write puts a
+// snapshot in localStorage and leaves an older row behind; preferring IndexedDB would then show and
+// load hours-old progress without a word.
+const staleness = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const id = app.slots[0]?.id;
+  if (!id) return { ok: false, reason: 'no slot to test with' };
+  const older = app.slots[0].savedAt;
+  localStorage.setItem('gauntlet-of-angband.slot.' + id, JSON.stringify({
+    ...app.slots[0], name: 'Newer', savedAt: older + 60000, data: '{"v":3,"newer":true}',
+  }));
+  app.refreshSlots();
+  await new Promise(r => setTimeout(r, 500));
+  const shown = app.slots.find((s: any) => s.id === id);
+  localStorage.removeItem('gauntlet-of-angband.slot.' + id);
+  app.refreshSlots();
+  await new Promise(r => setTimeout(r, 500));
+  return { ok: true, name: shown?.name, savedAt: shown?.savedAt === older + 60000, restored: app.slots[0]?.name };
+});
+
+// Touch buttons must never be read as movement: the vi movement keys overlap the command letters,
+// so the STAFF button ('u') used to walk the hero north-east instead.
+const buttonKeys = await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  const g = app.g;
+  const before = { x: g.player.x, y: g.player.y };
+  app.handleKeyPublic({ key: 'u', shift: false, ctrl: false, alt: false, code: 'touch' });
+  const afterButton = { x: g.player.x, y: g.player.y };
+  while (app.overlays.length) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
+  const msgsBefore = g.msg.list.length;
+  app.handleKeyPublic({ key: 'u', shift: false, ctrl: false, alt: false, code: '' });
+  const afterKey = { x: g.player.x, y: g.player.y };
+  // A real vi key resolves to a direction whether or not the step lands: walking into a wall still
+  // proves dirOfKey read it as north-east.
+  const walled = g.msg.list.slice(msgsBefore).some((m: any) => /wall in the way/i.test(m.text));
+  while (app.overlays.length) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
+  const plain = app.touch.buttons(true, false).map((b: any) => b.key);
+  const asking = app.touch.buttons(true, true).map((b: any) => b.key);
+  return {
+    buttonMoved: afterButton.x !== before.x || afterButton.y !== before.y,
+    viActed: afterKey.x !== afterButton.x || afterKey.y !== afterButton.y || walled,
+    plainHasYesNo: plain.includes('y') || plain.includes('n'),
+    askingHasYesNo: asking.includes('y') && asking.includes('n'),
+  };
+});
+
+// The saved-heroes screen itself renders.
+await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  app.quitToTitle();
+  app.handleKeyPublic({ key: 'c', shift: false, ctrl: false, alt: false, code: '' });
+});
+await page.waitForTimeout(300);
+await page.screenshot({ path: path.join(OUT, 'smoke-saves.png') });
+const savesScreen = await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  const top = app.overlays[app.overlays.length - 1];
+  return { overlay: top && top.constructor && top.constructor.name, listed: app.slots.length, first: app.slots[0] && app.slots[0].name };
+});
+const savesColours = await colours();
+await page.evaluate(() => (window as any).__game.api.app.handleKeyPublic({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }));
+await page.waitForTimeout(500);
 const hasLore = await page.evaluate(() => !!localStorage.getItem('gauntlet-of-angband.lore.v1'));
 
 // A second hero made through the full birth API with point-bought stats and birth options.
@@ -114,9 +261,25 @@ ok(townColours > 30, `town drew (${townColours} colours)`);
 ok(state1.depth === 0 && state1.hp > 0, `character created in town at ${state1.x},${state1.y} with ${state1.monsters} townsfolk`);
 ok(state2.depth === 1, `descended to dungeon level ${state2.depth} (${state2.monsters} monsters, ${state2.items} objects, turn ${state2.turn})`);
 ok(dungeonColours > 30, `dungeon drew (${dungeonColours} colours)`);
-ok(hasSave, 'ctrl+S wrote a save to localStorage');
+ok(saveInfo.rows >= 1 && saveInfo.hasData && saveInfo.name === 'Smoke', `ctrl+S wrote a slot to IndexedDB (${JSON.stringify(saveInfo)})`);
+ok(saveInfo.slots >= 1 && saveInfo.hasSaveFlag, 'the saved hero shows in the slot list');
+ok(!saveInfo.legacy, 'nothing is left behind in the old single-key save');
+ok(reloaded.started && reloaded.name === 'Smoke' && reloaded.depth === saveInfo.depth, `the slot loads back into the same hero (${JSON.stringify(reloaded)})`);
+ok(savesScreen.overlay === 'SaveSlotsOverlay' && savesScreen.listed >= 1 && savesScreen.first === 'Smoke' && savesColours > 4,
+  `the saved-heroes screen lists the hero (${JSON.stringify(savesScreen)}, ${savesColours} colours)`);
+ok(fallback.listed && fallback.alongside, `a hero in the localStorage fallback is listed beside the IndexedDB ones (${JSON.stringify(fallback)})`);
+ok(!fallback.leftBehind && !fallback.stillListed, 'deleting a fallback hero clears it from both stores');
+ok(staleness.ok && staleness.name === 'Newer' && staleness.savedAt && staleness.restored === 'Smoke', `the newer of two copies of a slot wins (${JSON.stringify(staleness)})`);
+ok(!buttonKeys.buttonMoved, `a touch command button moved the hero instead of running its command (${JSON.stringify(buttonKeys)})`);
+ok(buttonKeys.viActed, `the vi movement keys stopped working for real key presses (${JSON.stringify(buttonKeys)})`);
+ok(!buttonKeys.plainHasYesNo && buttonKeys.askingHasYesNo, `the touch bar offers YES/NO only where the screen asks (${JSON.stringify(buttonKeys)})`);
+ok(soundsPlayed >= 30, `every sound recipe synthesised without throwing (${soundsPlayed} played)`);
 ok(hasLore, 'monster memory persisted to localStorage');
 ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);
+ok(touchColours > 30, `touch controls drew (${touchColours} colours)`);
+ok(touchHits.visible === true && touchHits.btn === 'i' && touchHits.north === 'ArrowUp' && touchHits.west === 'ArrowLeft' && touchHits.hub === 'g' && touchHits.map === null && touchHits.esc === 'Escape',
+  `touch hit testing maps taps to keys (${JSON.stringify(touchHits)})`);
+ok(touchOpensInventory, 'a touch button opens the screen it names');
 ok(dumpLen > 200, `character dump has ${dumpLen} characters`);
 ok(autoState.turn > autoBefore.turn && (autoState.x !== autoBefore.x || autoState.y !== autoBefore.y || autoState.depth > 1), `autoplay played the hero (${autoState.turn - autoBefore.turn} game turns, depth ${autoState.depth})`);
 ok(autoState.on || autoState.dead, 'autoplay stayed on while the bot played');

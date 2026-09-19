@@ -25,7 +25,7 @@ import { distance } from '../game/util.ts';
 import { createPlayer } from '../game/player.ts';
 import { makeItem } from '../game/items.ts';
 import { buildHero, drawHero, type HeroSprite } from './hero.ts';
-import { BirthScreen2, HighScoresOverlay, RecallOverlay, type Ui2 } from './screens2.ts';
+import { BirthScreen2, HighScoresOverlay, RecallOverlay, SaveSlotsOverlay, type Ui2 } from './screens2.ts';
 import { chestTrapName, realmWords } from '../game/commands.ts';
 import { wrapText } from '../game/recall.ts';
 import { characterDump } from '../game/dump.ts';
@@ -50,6 +50,11 @@ export interface Overlay {
   click?(x: number, y: number, ui: Ui): boolean;
   /** Draw the map beneath (default true). */
   opaque?: boolean;
+  /**
+   * This screen asks a yes/no question, so the touch navigation bar should offer YES and NO. Most
+   * screens must NOT: on the title screen 'n' is the shortcut for NEW GAME.
+   */
+  wantsYesNo?: boolean;
 }
 
 const BG = '#14121c', EDGE = '#5a5470', TEXT = '#e8e4d8', DIM = '#8a869a', HI = '#ffe060', GOLD = '#ffd040';
@@ -239,6 +244,7 @@ export class TextPrompt implements Overlay {
   }
 }
 export class Confirm implements Overlay {
+  wantsYesNo = true;
   constructor(public prompt: string, public onYes: () => void) {}
   draw(ctx: CanvasRenderingContext2D): void {
     ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(MAP_X, MAP_Y, MAP_W, 16);
@@ -336,6 +342,7 @@ export class InventoryScreen implements Overlay {
     if (where !== 'equip') acts.push(['drop', 'Drop']);
     acts.push(['inspect', 'Inspect']);
     acts.push(['inscribe', 'Inscribe']);
+    if (!it.artifact) acts.push(['ignore', ui.g.ignore.kinds.includes(it.kind) ? 'Stop ignoring these' : 'Ignore these from now on']);
     if (where !== 'equip') acts.push(['destroy', 'Destroy']);
     ui.push(new Menu(itemName(it, ui.g.flavors), acts.map(a => ({ text: a[1], value: a[0] })), (l, i, u) => { u.pop(); u.pop(); this.onAction(it, where, l.value as string); }, { width: 360, letters: true }));
   }
@@ -573,14 +580,16 @@ const HELP = [
   'i  e     inventory / equipment    w  wield/wear    t  take off    d  drop    k  destroy    x  l  look (r recalls)    D  disarm',
   'q  quaff potion    r  read scroll    E  eat    a  aim wand    u  use staff    z  zap rod    A  activate    Enter  repeat last',
   'f  fire missile    v  throw          F  refuel light          m  p  cast / pray     b  browse     G  study     T  tunnel',
-  'C  character (F dumps)   M  map   ctrl+L  locate   ~  knowledge   /  recall   =  options   V  hall of heroes   {  }  inscribe',
-  'ctrl+P  messages   ctrl+S  save   ctrl+X  save and quit   ctrl+E  export save   ctrl+F  level feeling   Q  retire   ctrl+A  autoplay',
+  'C  character (F dumps)   M  map   ctrl+L  locate   ~  knowledge   /  recall   =  options   O  ignore   V  hall of heroes   {  }  inscribe',
+  'ctrl+P  messages   ctrl+S  save   ctrl+X  save and quit   ctrl+E  export save   ctrl+F  level feeling   ctrl+O  show ignored   Q  retire',
   'MOUSE   click the map to travel there; while aiming, click a monster to target it; * cycles targets',
   '',
   'KEYS open locked doors instantly (or pick the lock).  GENERATORS spawn monsters until smashed.',
   'FOOD keeps you alive; your light burns out.  Gold, keys and items are picked up as you walk.',
   'Unknown potions and scrolls are learned by use.  Word of Recall hops between town and your deepest level.',
   'INSCRIPTIONS: {@q1} answers 1 at the quaff prompt (@r @f @z ... likewise); {!q} asks before quaffing, {!*} before anything.',
+  'IGNORE (O): set how choosy you are per kind of gear and stop picking up junk. Nothing unknown is ignored; {=g} always picks up.',
+  'TOUCH: tap anywhere on a phone for a thumb pad and command buttons; menus get a navigation bar.',
   'Before you dive: a lantern, flasks of oil, Cure Light Wounds, Phase Door, and rations.',
   'AUTOPLAY (ctrl+A, or the option in =) hands the hero to a bot that shops, explores, fights and dives. Any key takes it back.',
 ];
@@ -686,7 +695,7 @@ export class TitleScreen implements Overlay {
   }
   choose(ui: Ui): void {
     if (this.sel === 0) ui.push(new BirthScreen2());
-    else if (this.sel === 1) { if (!ui.loadGame()) ui.g.msg.add('No saved game.'); }
+    else if (this.sel === 1) ui.push(new SaveSlotsOverlay());
     else if (this.sel === 2) ui.push(new HighScoresOverlay());
     else if (this.sel === 3) (ui as Ui2).importSave();
     else ui.push(new HelpOverlay());

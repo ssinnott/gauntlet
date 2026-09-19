@@ -2,7 +2,7 @@
 // Angband 3.0's damage formulas and a spell picker that weighs the situation (Angband's
 // remove_bad_spells / choose_attack_spell) for SMART monsters or when the smart-monsters birth
 // option is on.
-import { type Monster, type MonsterSpell, type Element, type Stat, type MonsterRace, type ObjectFlag, type Timed } from './types.ts';
+import { type Monster, type MonsterSpell, type Element, type Stat, type MonsterRace } from './types.ts';
 import { raceOf, hasMFlag, monsterName, monsterNameVisible, createMonster, nearFloor, pickRace } from './monster.ts';
 import { takeHit, loseExp } from './combat.ts';
 import { project, breathe } from './projection.ts';
@@ -14,6 +14,7 @@ import { setTile, tileAt, isCleanFloor, setAux, hasFlag } from './level.ts';
 import { T, F, TRAP_KINDS, DIR_DX, DIR_DY } from './types.ts';
 import type { Game } from './state.ts';
 import { noteSpell } from './lore.ts';
+import { type Lesson, ELEM_LESSON, monsterKnowsLesson, monsterLearn, asAttacker } from './smart.ts';
 
 const BOLT_ELEM: Partial<Record<MonsterSpell, Element>> = { BOLT_ACID: 'acid', BOLT_ELEC: 'elec', BOLT_FIRE: 'fire', BOLT_COLD: 'cold', BOLT_POIS: 'pois', BOLT_NETHER: 'nether', BOLT_MANA: 'mana', MISSILE: 'missile', ARROW: 'missile', BOLT_WATER: 'water', BOLT_PLASMA: 'plasma', BOLT_ICE: 'ice' };
 const BALL_ELEM: Partial<Record<MonsterSpell, Element>> = { BALL_ACID: 'acid', BALL_ELEC: 'elec', BALL_FIRE: 'fire', BALL_COLD: 'cold', BALL_POIS: 'pois', BALL_NETHER: 'nether', BALL_DARK: 'dark', BALL_MANA: 'mana', BALL_CHAOS: 'chaos', BALL_WATER: 'water' };
@@ -27,20 +28,8 @@ const ESCAPES: MonsterSpell[] = ['BLINK', 'TPORT', 'TELE_AWAY', 'TELE_LEVEL'];
 const ANNOY: MonsterSpell[] = ['SHRIEK', 'SCARE', 'CONF', 'BLIND', 'SLOW', 'HOLD', 'DARKNESS', 'TRAPS', 'FORGET', 'TELE_TO', 'DRAIN_MANA', 'MIND_BLAST', 'BRAIN_SMASH'];
 const TACTIC: MonsterSpell[] = ['HEAL', 'HASTE'];
 
-/** Which player flag makes a spell's element pointless (Angband's smart_learn logic, without the learning). */
-function resistedBy(elem: Element, flags: Set<ObjectFlag>, timed: Record<Timed, number>): boolean {
-  switch (elem) {
-    case 'acid': return flags.has('IM_ACID') || (flags.has('RES_ACID') && timed.oppose_acid > 0);
-    case 'elec': return flags.has('IM_ELEC') || (flags.has('RES_ELEC') && timed.oppose_elec > 0);
-    case 'fire': return flags.has('IM_FIRE') || (flags.has('RES_FIRE') && timed.oppose_fire > 0);
-    case 'cold': case 'ice': return flags.has('IM_COLD') || (flags.has('RES_COLD') && timed.oppose_cold > 0);
-    case 'pois': return flags.has('RES_POIS') && timed.oppose_pois > 0;
-    case 'nether': return flags.has('RES_NETHER'); case 'lite': return flags.has('RES_LITE'); case 'dark': return flags.has('RES_DARK');
-    case 'sound': return flags.has('RES_SOUND'); case 'chaos': return flags.has('RES_CHAOS'); case 'conf': return flags.has('RES_CONF');
-    case 'nexus': return flags.has('RES_NEXUS'); case 'disen': return flags.has('RES_DISEN'); case 'shards': return flags.has('RES_SHARDS');
-    default: return false;
-  }
-}
+/** Spells whose only bite is the effect a good saving throw shrugs off. */
+const SAVE_SPELLS: MonsterSpell[] = ['CAUSE_1', 'CAUSE_2', 'CAUSE_3', 'CAUSE_4', 'FORGET', 'TELE_LEVEL'];
 
 /** Pick a spell for the monster. Dumb monsters pick at random; smart ones weigh the situation. */
 export function chooseSpell(g: Game, m: Monster): MonsterSpell | null {
@@ -50,19 +39,22 @@ export function chooseSpell(g: Game, m: Monster): MonsterSpell | null {
   const smart = hasMFlag(r, 'SMART') || g.options.smartMonsters;
   const dist = distance(p.x, p.y, m.x, m.y);
   if (smart) {
-    // Drop attacks the player is known to shrug off, and pointless utility.
-    const f = g.bonuses.flags, t = p.timed;
+    // Drop attacks this race has WATCHED the hero shrug off, and pointless utility. Note that it
+    // reads its own memory, not the player's equipment: until you show it, it does not know.
+    const knows = (l: Lesson) => monsterKnowsLesson(g, m, l);
     spells = spells.filter(s => {
       const el = BOLT_ELEM[s] || BALL_ELEM[s] || BR_ELEM[s];
-      if (el && resistedBy(el, f, t) && !oneIn(4)) return false;
-      if (s === 'HOLD' && f.has('FREE_ACT')) return false;
-      if (s === 'SLOW' && f.has('FREE_ACT') && !oneIn(3)) return false;
-      if (s === 'BLIND' && f.has('RES_BLIND')) return false;
-      if (s === 'CONF' && f.has('RES_CONF')) return false;
-      if (s === 'SCARE' && (f.has('RES_FEAR') || t.hero || t.shero)) return false;
+      const lesson = el ? ELEM_LESSON[el] : undefined;
+      if (lesson && knows(lesson) && !oneIn(4)) return false;
+      if (s === 'HOLD' && knows('FREE_ACT')) return false;
+      if (s === 'SLOW' && knows('FREE_ACT') && !oneIn(3)) return false;
+      if (s === 'BLIND' && knows('RES_BLIND')) return false;
+      if (s === 'CONF' && knows('RES_CONF')) return false;
+      if (s === 'SCARE' && knows('RES_FEAR')) return false;
+      if (SAVE_SPELLS.includes(s) && knows('SAVE') && oneIn(2)) return false;
       if (s === 'HEAL' && m.hp >= m.maxhp) return false;
       if (s === 'HASTE' && m.hasted) return false;
-      if (s === 'DRAIN_MANA' && p.csp === 0) return false;
+      if (s === 'DRAIN_MANA' && knows('NO_MANA')) return false;
       if (s === 'TELE_TO' && dist <= 1) return false;
       if ((s === 'BLINK' || s === 'TPORT') && !m.afraid && m.hp > m.maxhp / 3) return oneIn(4);
       return true;
@@ -93,6 +85,9 @@ export function chooseSpell(g: Game, m: Monster): MonsterSpell | null {
 
 /** Cast one spell from the race's list. Returns false if nothing was cast (so the monster moves instead). */
 export function monsterCastSpell(g: Game, m: Monster): boolean {
+  return asAttacker(g, m, () => castChosenSpell(g, m));
+}
+function castChosenSpell(g: Game, m: Monster): boolean {
   const r = raceOf(m), p = g.player;
   const choice = chooseSpell(g, m);
   if (!choice) return false;
@@ -159,7 +154,7 @@ export function monsterCastSpell(g: Game, m: Monster): boolean {
       return true;
     }
     case 'MIND_BLAST': case 'BRAIN_SMASH': { g.msg.add(seen ? `${name} gazes at you with psionic energy.` : 'You feel something focusing on your mind.', '#ffb0b0'); if (save()) { g.msg.add('You resist the effects!'); return true; } takeHit(g, choice === 'MIND_BLAST' ? damroll(7, 8) : damroll(12, 15), cause); if (choice === 'BRAIN_SMASH') { setTimed(g, 'confused', p.timed.confused + randint1(4) + 4); setTimed(g, 'slow', p.timed.slow + randint1(4) + 4); if (!g.bonuses.flags.has('FREE_ACT')) setTimed(g, 'paralyzed', randint1(4) + 4); setTimed(g, 'stun', p.timed.stun + randint1(8) + 8); } else setTimed(g, 'confused', p.timed.confused + randint1(4) + 4); return true; }
-    case 'DRAIN_MANA': { if (p.csp > 0) { const d = Math.min(p.csp, randint1(level) + 1); p.csp -= d; m.hp = Math.min(m.maxhp, m.hp + d * 6); g.msg.add(seen ? `${name} draws psychic energy from you!` : 'Something drains your mana!', '#ffb0b0'); } return true; }
+    case 'DRAIN_MANA': { if (p.csp > 0) { const d = Math.min(p.csp, randint1(level) + 1); p.csp -= d; m.hp = Math.min(m.maxhp, m.hp + d * 6); g.msg.add(seen ? `${name} draws psychic energy from you!` : 'Something drains your mana!', '#ffb0b0'); } else if (p.msp <= 0) monsterLearn(g, 'NO_MANA'); return true; }
     case 'SCARE': g.msg.add(seen ? `${name} casts a fearful illusion.` : 'You hear scary noises.'); if (g.bonuses.flags.has('RES_FEAR') || save()) g.msg.add('You refuse to be frightened.'); else setTimed(g, 'afraid', p.timed.afraid + randint1(4) + 4); return true;
     case 'CONF': g.msg.add(seen ? `${name} creates a mesmerising illusion.` : 'You hear puzzling noises.'); if (g.bonuses.flags.has('RES_CONF') || save()) g.msg.add('You disbelieve the feeble spell.'); else setTimed(g, 'confused', p.timed.confused + randint1(4) + 4); return true;
     case 'BLIND': g.msg.add(seen ? `${name} casts a spell, burning your eyes!` : 'You hear a mumbling.'); if (g.bonuses.flags.has('RES_BLIND') || save()) g.msg.add('You resist the effects!'); else setTimed(g, 'blind', 12 + randint1(4)); return true;

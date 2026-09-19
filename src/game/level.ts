@@ -158,6 +158,81 @@ export function computeFlow(lv: Level, px: number, py: number, maxDist: number, 
   return flow;
 }
 
+/** What a closed door costs a sound trying to get through it, in noise-flow units. */
+export const DOOR_MUFFLE = 5;
+export const NOISE_MAX = 0xffff;
+
+/**
+ * Noise flow: the cost of the quietest path from the player to each grid. Unlike the plain flow
+ * map this is a weighted search -- a closed door muffles a shout -- so a monster that cannot see
+ * you hears you around corners but not through a shut door two rooms away. A monster hears the
+ * player when the value at its own grid is within its hearing range (see hearRange in monster.ts),
+ * which is where the hero's stealth comes in.
+ *
+ * Weights are tiny integers, so a ring of buckets does the job of a priority queue. The ring holds
+ * DOOR_MUFFLE + 1 buckets, which is strictly more than the heaviest edge, so a grid inserted while
+ * bucket `cost` is draining can never land back in that same bucket.
+ */
+export function computeNoise(lv: Level, px: number, py: number, maxCost: number, out?: Uint16Array): Uint16Array {
+  const w = lv.w, h = lv.h;
+  const noise = out && out.length === w * h ? out : new Uint16Array(w * h);
+  noise.fill(NOISE_MAX);
+  const span = DOOR_MUFFLE + 1;
+  const buckets: number[][] = [];
+  for (let i = 0; i < span; i++) buckets.push([]);
+  const cap = Math.min(maxCost, NOISE_MAX - 1);
+  noise[py * w + px] = 0;
+  buckets[0].push(py * w + px);
+  for (let cost = 0; cost <= cap; cost++) {
+    const b = buckets[cost % span];
+    while (b.length) {
+      const i = b.pop()!;
+      if (noise[i] !== cost) continue; // already reached more quietly
+      const x = i % w, y = (i / w) | 0;
+      for (let k = 1; k <= 9; k++) {
+        if (k === 5) continue;
+        const nx = x + DIR_DX[k], ny = y + DIR_DY[k];
+        if (nx < 0 || ny < 0 || nx >= w || ny >= h) continue;
+        const j = ny * w + nx;
+        const t = lv.tiles[j];
+        let step: number;
+        if (t === T.DOOR_CLOSED || t === T.SECRET_DOOR) step = DOOR_MUFFLE;
+        else if (isPassable(t)) step = 1;
+        else continue;
+        const nc = cost + step;
+        if (nc > cap || nc >= noise[j]) continue;
+        noise[j] = nc;
+        buckets[nc % span].push(j);
+      }
+    }
+  }
+  return noise;
+}
+
+/** How many player turns a scent trail is worth following. */
+export const SCENT_MAX = 80;
+/** The stamp counter is a Uint16; wrap it well before it overflows. */
+const SCENT_WRAP = 0xff00;
+
+/**
+ * Lay scent on the grid the player is standing on. Grids hold the stamp of the turn the player was
+ * last there, so age is a subtraction and nothing has to be decayed grid by grid every turn.
+ * Returns the current stamp.
+ */
+export function layScent(lv: Level, scent: Uint16Array, stamp: number, px: number, py: number): number {
+  let s = stamp + 1;
+  if (s >= SCENT_WRAP) { scent.fill(0); s = 1; }
+  scent[py * lv.w + px] = s;
+  return s;
+}
+/** How many turns ago the player passed this grid, or -1 if the trail is cold. */
+export function scentAge(scent: Uint16Array, stamp: number, i: number): number {
+  const v = scent[i];
+  if (v === 0) return -1;
+  const age = stamp - v;
+  return age >= 0 && age <= SCENT_MAX ? age : -1;
+}
+
 /** BFS path over grids the player remembers as passable, for click-to-travel. Returns the steps (excluding start). */
 export function findPath(lv: Level, x0: number, y0: number, x1: number, y1: number, maxLen = 400): Pos[] | null {
   if (!inBounds(lv, x1, y1)) return null;

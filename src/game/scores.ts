@@ -12,9 +12,9 @@ export interface ScoreEntry {
 export const SCORES_KEY = 'gauntlet-of-angband.scores.v1';
 export const SCORES_MAX = 50;
 
-export function scoreEntry(g: Game): ScoreEntry {
+export function scoreEntry(g: Game, today: string): ScoreEntry {
   const p = g.player;
-  return { name: p.name, race: RACE_BY_ID[p.race].name, cls: CLASS_BY_ID[p.cls].name, title: title(p), lev: p.lev, depth: p.depth, maxDepth: p.maxDepth, score: score(g), cause: g.totalWinner && !p.dead ? 'retired in glory' : p.deathCause || 'unknown', turns: Math.floor(g.turn / 10), kills: p.kills, gold: p.gold, date: new Date().toISOString().slice(0, 10), winner: g.totalWinner };
+  return { name: p.name, race: RACE_BY_ID[p.race].name, cls: CLASS_BY_ID[p.cls].name, title: title(p), lev: p.lev, depth: p.depth, maxDepth: p.maxDepth, score: score(g), cause: g.totalWinner && !p.dead ? 'retired in glory' : p.deathCause || 'unknown', turns: Math.floor(g.turn / 10), kills: p.kills, gold: p.gold, date: today, winner: g.totalWinner };
 }
 /** Insert an entry, keep the table sorted and bounded, and return the new rank (1-based). */
 export function addScore(list: ScoreEntry[], e: ScoreEntry): number {
