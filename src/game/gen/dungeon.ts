@@ -101,7 +101,6 @@ function build(lv: Level, depth: number, hooks: GenHooks): boolean {
     else if (lv.tiles[i] === T.QUARTZ && oneIn(8)) lv.tiles[i] = T.QUARTZ_K;
   }
   runPending(lv, hooks);
-  lv.feeling = 0;
   return true;
 }
 
@@ -433,6 +432,10 @@ function buildVault(lv: Level, depth: number, tpl: VaultTemplate, bx: number, by
   if (!ok) return null;
   const x0 = bx * BLOCK + Math.floor((w * BLOCK - tw) / 2), y0 = by * BLOCK + Math.floor((h * BLOCK - th) / 2);
   const placed = placeVault(lv, tpl, x0, y0, depth, deferredHooks(lv), rows);
+  // Angband's build_type7/8: the vault's rating feeds the level feeling, and a vault makes the level
+  // "special" at depth 50 or above it on a fading chance.
+  lv.rating += placed.rating;
+  if (depth <= 50 || randint1((depth - 40) * (depth - 40) + 1) < 400) lv.special = true;
   lv.rooms.push({ x1: x0, y1: y0, x2: x0 + tw - 1, y2: y0 + th - 1, lit: false });
   const ents = placed.entrances.filter(p => p.x >= 1 && p.y >= 1 && p.x <= lv.w - 2 && p.y <= lv.h - 2);
   if (ents.length) { const e = ents[randint0(ents.length)]; setTile(lv, e.x, e.y, T.FLOOR); return e; }

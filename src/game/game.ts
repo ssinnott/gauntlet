@@ -10,7 +10,7 @@ import { createStores, maintainStore } from './stores.ts';
 import { generateDungeon, type GenHooks } from './gen/dungeon.ts';
 import { generateTown } from './gen/town.ts';
 import { placeMonster, placeGenerator, themedFilter, monsterTurn, energyGain, monsterSpeed, updateMonsterVisibility, ensureFlow, raceOf, hasMFlag, createMonster, pickRace, nearFloor, removeMonster } from './monster.ts';
-import { updateView, tileAt, setTile, addFlag, hasFlag, isCleanFloor } from './level.ts';
+import { updateView, tileAt, setTile, addFlag, isCleanFloor } from './level.ts';
 import { setTimed, refreshBonuses, teleportPlayer } from './effectsCore.ts';
 import { takeHit } from './combat.ts';
 import { dropNear, disturb } from './world.ts';
@@ -98,7 +98,7 @@ export function enterLevel(g: Game, depth: number, by: 'down' | 'up' | 'none' | 
   depth = Math.max(0, Math.min(deepestAllowed(g), depth));
   const arrivedBy = g.options.connectedStairs ? (by === 'down' ? 'down' : by === 'up' ? 'up' : 'none') : 'none';
   // Persistent levels: stash the one we are leaving and restore the one we return to.
-  if (g.options.persistentLevels && g.level && g.level.depth > 0) g.savedLevels[g.level.depth] = g.level;
+  if (g.options.persistentLevels && g.level && g.level.depth > 0) { g.level.leftAt = g.turn; g.savedLevels[g.level.depth] = g.level; }
   // The level is generated with the game rng, so the seed reproduces the run; the player's
   // position is set before monsters are placed so nothing spawns on top of them.
   let level: Level, start: Pos;
@@ -109,8 +109,16 @@ export function enterLevel(g: Game, depth: number, by: 'down' | 'up' | 'none' | 
     const cands: Pos[] = [];
     for (let y = 0; y < level.h; y++) for (let x = 0; x < level.w; x++) if ((want < 0 ? isCleanFloor(level, x, y) : tileAt(level, x, y) === want) && !level.monsters.some(m => m.x === x && m.y === y)) cands.push({ x, y });
     start = cands.length ? cands[randint0(cands.length)] : { x: 1, y: 1 };
-    // Monsters heal and wander a little while you were away.
-    for (const m of level.monsters) { m.hp = Math.min(m.maxhp, m.hp + Math.floor(m.maxhp / 4)); m.energy = randint0(50); }
+    // Monsters regenerate for the time you were away (Angband's regen_monsters: a hundredth of their
+    // hit points every hundred game turns, twice that for REGENERATE), and their turn order is reshuffled.
+    const ticks = Math.floor((g.turn - (level.leftAt ?? g.turn)) / 100);
+    for (const m of level.monsters) {
+      const r = raceOf(m);
+      const frac = Math.max(1, Math.floor(m.maxhp / 100)) * (hasMFlag(r, 'REGENERATE') ? 2 : 1);
+      m.hp = Math.min(m.maxhp, m.hp + frac * ticks);
+      m.energy = randint0(50);
+    }
+    level.leftAt = undefined;
   } else if (depth === 0) {
     const day = isDaytime(g.turn);
     const r = generateTown({ placeTownMonster: (lv, x, y) => { const race = pickRace(g, 0); if (race) createMonster(g, race.id, x, y, true, lv); } }, arrivedBy === 'up' ? 'up' : 'none', day);
@@ -163,15 +171,18 @@ function removeUpStairs(lv: Level): void { for (let i = 0; i < lv.tiles.length; 
 export let autosaveHook: ((g: Game) => void) | null = null;
 export function setAutosaveHook(f: ((g: Game) => void) | null): void { autosaveHook = f; }
 
+/**
+ * Angband 3.0's level feeling: the generator's rating (vaults) plus out-of-depth monsters and good
+ * objects, against Angband's thresholds; a vault at shallow depth or an artifact on the floor makes
+ * the level "special" (good_item_flag).
+ */
 function levelFeeling(g: Game): number {
   const lv = g.level;
-  let danger = 0;
-  for (const m of lv.monsters) { const r = raceOf(m); if (r.depth > lv.depth) danger += (r.depth - lv.depth) * 5; if (hasMFlag(r, 'UNIQUE')) danger += 30; }
-  let loot = 0;
-  for (const fi of lv.items) { const k = kindOf(fi.item); if (fi.item.artifact) loot += 200; else if (fi.item.ego) loot += 40; else if (k.level > lv.depth + 5) loot += 10; }
-  const score = danger + loot;
-  if (lv.rooms.length && hasFlag(lv, 0, 0, 0)) { /* noop */ }
-  if (score >= 250) return 1; if (score >= 150) return 2; if (score >= 100) return 3; if (score >= 60) return 4; if (score >= 35) return 5; if (score >= 20) return 6; if (score >= 10) return 7; if (score >= 5) return 8; if (score > 0) return 9; return 10;
+  let rating = lv.rating || 0, special = !!lv.special;
+  for (const m of lv.monsters) { const r = raceOf(m); if (r.depth > lv.depth) rating += r.depth - lv.depth; if (hasMFlag(r, 'UNIQUE')) rating += 6; }
+  for (const fi of lv.items) { const k = kindOf(fi.item); if (fi.item.artifact) special = true; else if (fi.item.ego) rating += 8; else if (k.level > lv.depth + 5) rating += 2; }
+  if (special) return 1;
+  if (rating > 100) return 2; if (rating > 80) return 3; if (rating > 60) return 4; if (rating > 40) return 5; if (rating > 30) return 6; if (rating > 20) return 7; if (rating > 10) return 8; if (rating > 5) return 9; return 10;
 }
 function feelingText(f: number): string {
   return ['', 'You feel there is something special about this level!', 'Omens of death haunt this place!', 'This place seems murderous.', 'This place seems terribly dangerous.',
@@ -192,7 +203,6 @@ export function runWorld(g: Game): void {
   let guard = 0;
   while (p.energy < 100 && !p.dead && !g.levelChange && guard++ < 10000) {
     g.turn++;
-    g.level.age++;
     if (g.turn % 10 === 0) processWorld(g);
     if (p.dead || g.levelChange) break;
     ensureFlow(g);

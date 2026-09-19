@@ -5,7 +5,7 @@ import { drawText, drawTextOutlined, measureText } from '../lib/engine/text.ts';
 import { rrect } from '../lib/art/shapes.ts';
 import type { Game } from '../game/state.ts';
 import { type Item, type SlotName, type Pos, SLOTS, SLOT_LABEL, STATS, T, F, isWall, isShop, STORE_NAMES } from '../game/types.ts';
-import { kindOf, itemName, itemFlags, isKnown, isAware, itemIcon, isWearable, isWeapon, isArmor, isAmmo, tvalLabel } from '../game/items.ts';
+import { kindOf, itemName, itemFlags, isKnown, isAware, itemIcon, isWearable, isWeapon, isArmor, isAmmo, tvalLabel, inscriptionTags, inscriptionConfirms } from '../game/items.ts';
 import { statText, title, expToLevel, totalAc, meleeSkill, bowSkill } from '../game/player.ts';
 import { RACES, RACE_BY_ID } from '../game/data/races.ts';
 import { CLASSES, CLASS_BY_ID } from '../game/data/classes.ts';
@@ -136,7 +136,11 @@ export function itemLine(g: Game, it: Item, where: ItemWhere, slot?: SlotName): 
   const w = kindOf(it).weight * it.number / 10;
   return { text: (slot ? SLOT_LABEL[slot].padEnd(14) + ' ' : '') + name, color: col, value: it, right: `${w.toFixed(1)} LB`, icon: itemIcon(k), iconColor: k.color };
 }
-export function pickItem(ui: Ui, prompt: string, filter: (it: Item) => boolean, wheres: ItemWhere[], onPick: (it: Item, where: ItemWhere) => void, onCancel?: () => void): void {
+/**
+ * Pick an item from the pack, quiver, equipment or floor. `cmd` is the command letter for Angband's
+ * command inscriptions: at the quaff prompt (`cmd` = 'q') pressing 1 takes the item inscribed `@q1`.
+ */
+export function pickItem(ui: Ui, prompt: string, filter: (it: Item) => boolean, wheres: ItemWhere[], onPick: (it: Item, where: ItemWhere) => void, onCancel?: () => void, cmd?: string): void {
   const g = ui.g, p = g.player;
   const lines: MenuLine[] = [];
   const meta: { it: Item; where: ItemWhere }[] = [];
@@ -146,7 +150,13 @@ export function pickItem(ui: Ui, prompt: string, filter: (it: Item) => boolean, 
   if (wheres.includes('equip')) for (const s of SLOTS) { const it = p.equip[s]; if (it) add(it, 'equip', s); }
   if (wheres.includes('floor')) for (const fi of itemsAt(g.level, p.x, p.y)) add(fi.item, 'floor');
   if (!lines.length) { g.msg.add('You have nothing suitable.'); onCancel?.(); return; }
-  ui.push(new Menu(prompt, lines, (l, i, u) => { u.pop(); onPick(meta[i].it, meta[i].where); }, { onCancel: () => onCancel?.(), width: 560 }));
+  const multiKey = cmd ? (e: KeyEvent, _l: MenuLine, u: Ui): boolean => {
+    if (!/^[0-9]$/.test(e.key)) return false;
+    const i = meta.findIndex(m => inscriptionTags(m.it, cmd).includes(e.key));
+    if (i < 0) return false;
+    u.pop(); onPick(meta[i].it, meta[i].where); return true;
+  } : undefined;
+  ui.push(new Menu(prompt, lines, (l, i, u) => { u.pop(); onPick(meta[i].it, meta[i].where); }, { onCancel: () => onCancel?.(), width: 560, multiKey }));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -396,8 +406,10 @@ export class StoreScreen implements Overlay {
           g.msg.add(s.type === 7 ? `You leave ${itemName(sold, g.flavors)} at home.` : `You sold ${itemName(sold, g.flavors)} for ${paid} gold.`, GOLD);
           refreshBonuses(g);
         };
-        if (it.number > 1) ui.push(new QuantityPrompt(`${s.type === 7 ? 'Drop off' : 'Sell'} how many? (${price} each)`, it.number, doSell)); else doSell(1);
-      });
+        const ask = () => { if (it.number > 1) ui.push(new QuantityPrompt(`${s.type === 7 ? 'Drop off' : 'Sell'} how many? (${price} each)`, it.number, doSell)); else doSell(1); };
+        // An item inscribed {!s} or {!*} asks before it is sold.
+        if (s.type !== 7 && inscriptionConfirms(it, 's')) ui.push(new Confirm(`Really sell ${itemName(it, g.flavors)}?`, ask)); else ask();
+      }, undefined, s.type === 7 ? 'd' : 's');
       return true;
     }
     if (e.key === 'x') { const it = s.stock[this.sel]; if (it) g.msg.add(describeItem(g, it)); return true; }
@@ -555,41 +567,27 @@ export class MapOverlay implements Overlay {
 // Help, messages
 
 const HELP = [
-  'MOVE: ARROWS / NUMPAD / HJKLYUBN      RUN: SHIFT+DIR      HOLD A KEY TO KEEP WALKING',
-  'WALK INTO: MONSTERS TO ATTACK, DOORS TO OPEN, RUBBLE AND VEINS TO DIG, SHOPS TO ENTER',
-  '< > STAIRS     , OR G PICK UP     R REST     S SEARCH     O OPEN CHEST     C CLOSE DOOR     D DISARM',
-  'I INVENTORY    E EQUIPMENT   W WIELD   T TAKE OFF   K DESTROY   X/L LOOK AROUND   M LEVEL MAP',
-  'Q QUAFF   READ WITH R? NO: SHIFT+R READ   E? NO: SHIFT+E EAT   A AIM WAND   U USE STAFF   Z ZAP ROD   F FIRE   V THROW',
-  'M CAST SPELL / P PRAY   B BROWSE BOOKS   G STUDY A NEW SPELL   A ACTIVATE   SHIFT+F REFUEL',
-  'SHIFT+C CHARACTER SHEET   SHIFT+M FULL MAP   CTRL+P MESSAGE LOG   CTRL+S SAVE   CTRL+X SAVE AND QUIT',
-  'MOUSE: CLICK THE MAP TO TRAVEL THERE, CLICK A MONSTER WHEN AIMING TO TARGET IT',
+  'MOVE     ARROWS / NUMPAD / H J K L Y U B N   (HOLD TO KEEP WALKING)     RUN  SHIFT + DIRECTION',
+  'WALK INTO monsters to attack, doors to open, rubble and veins to dig, a shop door to trade',
+  '<  >     take stairs      ,  g  pick up / hold    R  rest    s  search    o  open    c  close    ctrl+B  bash    ctrl+J  jam (spike)',
+  'i  e     inventory / equipment    w  wield/wear    t  take off    d  drop    k  destroy    x  l  look (r recalls)    D  disarm',
+  'q  quaff potion    r  read scroll    E  eat    a  aim wand    u  use staff    z  zap rod    A  activate    Enter  repeat last',
+  'f  fire missile    v  throw          F  refuel light          m  p  cast / pray     b  browse     G  study     T  tunnel',
+  'C  character (F dumps)   M  map   ctrl+L  locate   ~  knowledge   /  recall   =  options   V  hall of heroes   {  }  inscribe',
+  'ctrl+P  messages   ctrl+S  save   ctrl+X  save and quit   ctrl+E  export save   ctrl+F  level feeling   Q  retire',
+  'MOUSE   click the map to travel there; while aiming, click a monster to target it; * cycles targets',
   '',
-  'GAUNTLET RULES: KEYS OPEN LOCKED DOORS. GENERATORS SPAWN MONSTERS UNTIL YOU SMASH THEM.',
-  'FOOD KEEPS YOU ALIVE. GOLD AND POTIONS ARE PICKED UP AS YOU WALK. THE DEEPER, THE DEADLIER.',
-  'ANGBAND RULES: IDENTIFY POTIONS BY DRINKING THEM. RECALL TAKES YOU BETWEEN TOWN AND DEPTH.',
-  'BUY A LANTERN, FLASKS OF OIL, CURE LIGHT WOUNDS AND PHASE DOOR BEFORE YOU DIVE.',
+  'KEYS open locked doors instantly (or pick the lock).  GENERATORS spawn monsters until smashed.',
+  'FOOD keeps you alive; your light burns out.  Gold, keys and items are picked up as you walk.',
+  'Unknown potions and scrolls are learned by use.  Word of Recall hops between town and your deepest level.',
+  'INSCRIPTIONS: {@q1} answers 1 at the quaff prompt (@r @f @z ... likewise); {!q} asks before quaffing, {!*} before anything.',
+  'Before you dive: a lantern, flasks of oil, Cure Light Wounds, Phase Door, and rations.',
 ];
 export class HelpOverlay implements Overlay {
   draw(ctx: CanvasRenderingContext2D): void {
     const w = 900, h = 60 + HELP.length * 12 + 20, x = (VIEW_W - w) / 2, y = (VIEW_H - h) / 2;
     box(ctx, x, y, w, h, 'GAUNTLET OF ANGBAND');
-    // A cleaner key list than the draft above.
-    const lines = [
-      'MOVE     ARROWS / NUMPAD / H J K L Y U B N   (HOLD TO KEEP WALKING)     RUN  SHIFT + DIRECTION',
-      'WALK INTO monsters to attack, doors to open, rubble and veins to dig, a shop door to trade',
-      '<  >     take stairs      ,  g  pick up / hold    R  rest    s  search    o  open    c  close    B  bash    j  jam (spike)',
-      'i  e     inventory / equipment    w  wield/wear    t  take off    d  drop    k  destroy    x  l  look (r recalls)    D  disarm',
-      'q  quaff potion    r  read scroll    E  eat    a  aim wand    u  use staff    z  zap rod    A  activate    n  repeat',
-      'f  fire missile    v  throw          F  refuel light          m  p  cast / pray     b  browse     G  study     T  tunnel',
-      'C  character (F dumps)   M  map   L  locate   ~  knowledge   =  options   ctrl+P  messages   ctrl+S  save   Q  retire',
-      'MOUSE   click the map to travel there; while aiming, click a monster to target it; * cycles targets',
-      '',
-      'KEYS open locked doors instantly (or pick the lock).  GENERATORS spawn monsters until smashed.',
-      'FOOD keeps you alive; your light burns out.  Gold, keys and items are picked up as you walk.',
-      'Unknown potions and scrolls are learned by use.  Word of Recall hops between town and your deepest level.',
-      'Before you dive: a lantern, flasks of oil, Cure Light Wounds, Phase Door, and rations.',
-    ];
-    for (let i = 0; i < lines.length; i++) drawText(ctx, lines[i], x + 16, y + 34 + i * 12, { size: 1, color: i < 8 ? TEXT : '#c0c0ff' });
+    for (let i = 0; i < HELP.length; i++) drawText(ctx, HELP[i], x + 16, y + 34 + i * 12, { size: 1, color: i < 9 ? TEXT : '#c0c0ff' });
     drawText(ctx, 'ESC CLOSES', x + w / 2, y + h - 14, { size: 1, color: DIM, align: 'center' });
   }
   key(_e: KeyEvent, ui: Ui): boolean { ui.pop(); return true; }

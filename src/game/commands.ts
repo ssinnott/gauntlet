@@ -56,7 +56,7 @@ export function moveDir(g: Game, dir: number, opts: { running?: boolean; travel?
     endTurn(g);
     return;
   }
-  if (t === T.DOOR_CLOSED) { if (auxAt(lv, nx, ny) >= 100) { if (!opts.running && !opts.travel) g.msg.add('The door appears to be stuck. (B bashes it)'); disturb(g); return; } openDoor(g, nx, ny); return; }
+  if (t === T.DOOR_CLOSED) { if (auxAt(lv, nx, ny) >= 100) { if (!opts.running && !opts.travel) g.msg.add('The door appears to be stuck. (ctrl+B bashes it)'); disturb(g); return; } openDoor(g, nx, ny); return; }
   if (t === T.RUBBLE || isVein(t) || t === T.GRANITE || t === T.SECRET_DOOR) {
     if (opts.running || opts.travel) { disturb(g); return; }
     if (t === T.SECRET_DOOR || t === T.GRANITE) {

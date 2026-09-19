@@ -5,7 +5,7 @@ import { type Level, type Pos, T, F, isPassable, blocksLos, isWall, DIR_DX, DIR_
 export const MAX_SIGHT = 20;
 
 export function createLevel(w: number, h: number, depth: number): Level {
-  return { depth, w, h, tiles: new Uint8Array(w * h).fill(T.GRANITE), flags: new Uint8Array(w * h), aux: new Uint8Array(w * h), monsters: [], items: [], rooms: [], feeling: 0, age: 0 };
+  return { depth, w, h, tiles: new Uint8Array(w * h).fill(T.GRANITE), flags: new Uint8Array(w * h), aux: new Uint8Array(w * h), monsters: [], items: [], rooms: [], feeling: 0, rating: 0, special: false };
 }
 
 export function inBounds(lv: Level, x: number, y: number): boolean { return x >= 0 && y >= 0 && x < lv.w && y < lv.h; }

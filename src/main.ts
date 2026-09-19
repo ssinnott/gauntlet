@@ -9,7 +9,7 @@ import type { Game } from './game/state.ts';
 import { createGame, enterLevel, setAutosaveHook } from './game/game.ts';
 import { serialize, deserialize } from './game/save.ts';
 import * as C from './game/commands.ts';
-import { kindOf, itemName, isAmmo, isWearable, identify } from './game/items.ts';
+import { kindOf, itemName, isAmmo, isWearable, identify, inscriptionConfirms } from './game/items.ts';
 import { needsDir, needsItem, type EffectCtx } from './game/effects.ts';
 import { type Item, type Pos, T, DIR_DX, DIR_DY, dirOf } from './game/types.ts';
 import { tileAt, itemsAt, monsterAt, auxAt } from './game/level.ts';
@@ -290,7 +290,7 @@ class App implements Ui2 {
       case '~': case '|': this.push(new KnowledgeOverlay()); break;
       case '=': this.push(new OptionsOverlay()); break;
       case 'V': this.push(new HighScoresOverlay()); break;
-      case '{': pickItem(this, 'Inscribe which item?', () => true, ['inven', 'equip', 'quiver'], (it, w) => this.itemAction(it, w, 'inscribe')); break;
+      case '{': pickItem(this, 'Inscribe which item?', () => true, ['inven', 'equip', 'quiver'], (it, w) => this.itemAction(it, w, 'inscribe'), undefined, '{'); break;
       case '}': pickItem(this, 'Uninscribe which item?', it => !!it.inscription, ['inven', 'equip', 'quiver'], (it) => { it.inscription = undefined; g.msg.add('Inscription removed.'); }); break;
       case '/': { const m = g.level.monsters.filter(mm => mm.visible).sort((a, b) => Math.abs(a.x - p.x) + Math.abs(a.y - p.y) - Math.abs(b.x - p.x) - Math.abs(b.y - p.y))[0]; if (m) this.push(new RecallOverlay(raceOf(m))); else g.msg.add('No monster in view to recall.'); break; }
       case '>': C.goDown(g); break;
@@ -298,20 +298,20 @@ class App implements Ui2 {
       case 'R': this.push(new Menu('REST', [{ text: 'As needed', value: -1 }, { text: '10 turns', value: 10 }, { text: '50 turns', value: 50 }, { text: '200 turns', value: 200 }], (l, i, ui) => { ui.pop(); C.rest(g, l.value as number); }, { width: 300 })); break;
       case 'i': this.push(new InventoryScreen((it, w, a) => this.itemAction(it, w, a), 'inven')); break;
       case 'e': this.push(new InventoryScreen((it, w, a) => this.itemAction(it, w, a), 'equip')); break;
-      case 'w': pickItem(this, 'Wear or wield which item?', it => isWearable(kindOf(it)) && !isAmmo(kindOf(it)), ['inven', 'floor'], (it, w) => this.itemAction(it, w, 'wield')); break;
-      case 't': case 'T': if (e.key === 'T') { this.dirThen('Tunnel', (d) => { this.lastAction = () => { C.tunnelInto(g, p.x + DIR_DX[d], p.y + DIR_DY[d]); this.afterAction(); }; this.lastAction(); }, false); break; } pickItem(this, 'Take off which item?', () => true, ['equip'], (it) => this.itemAction(it, 'equip', 'takeoff')); break;
-      case 'd': pickItem(this, 'Drop which item?', () => true, ['inven', 'quiver', 'equip'], (it, w) => this.itemAction(it, w, 'drop')); break;
-      case 'k': pickItem(this, 'Destroy which item?', () => true, ['inven', 'quiver', 'floor'], (it, w) => this.itemAction(it, w, 'destroy')); break;
-      case 'q': pickItem(this, 'Quaff which potion?', it => kindOf(it).tval === 'potion', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'quaff')); break;
-      case 'r': pickItem(this, 'Read which scroll?', it => kindOf(it).tval === 'scroll', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'read')); break;
-      case 'E': pickItem(this, 'Eat what?', it => kindOf(it).tval === 'food', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'eat')); break;
-      case 'a': pickItem(this, 'Aim which wand?', it => kindOf(it).tval === 'wand', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'aim')); break;
-      case 'u': pickItem(this, 'Use which staff?', it => kindOf(it).tval === 'staff', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'use')); break;
-      case 'z': pickItem(this, 'Zap which rod?', it => kindOf(it).tval === 'rod', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'zap')); break;
-      case 'A': pickItem(this, 'Activate which item?', it => !!it.artifact || (kindOf(it).flags || []).includes('ACTIVATE'), ['equip'], (it) => this.itemAction(it, 'equip', 'activate')); break;
-      case 'F': pickItem(this, 'Refuel with what?', it => kindOf(it).tval === 'flask' || kindOf(it).id === 'torch', ['inven'], (it) => this.itemAction(it, 'inven', 'fuel')); break;
-      case 'v': pickItem(this, 'Throw which item?', () => true, ['inven', 'quiver', 'floor'], (it, w) => this.itemAction(it, w, 'throw')); break;
-      case 'f': if (!p.equip.bow) { g.msg.add('You have nothing to fire with.'); break; } pickItem(this, 'Fire which ammunition?', it => isAmmo(kindOf(it)) && kindOf(it).tval === kindOf(p.equip.bow!).ammo, ['quiver', 'inven', 'floor'], (it, w) => this.itemAction(it, w, 'fire')); break;
+      case 'w': pickItem(this, 'Wear or wield which item?', it => isWearable(kindOf(it)) && !isAmmo(kindOf(it)), ['inven', 'floor'], (it, w) => this.itemAction(it, w, 'wield'), undefined, 'w'); break;
+      case 't': case 'T': if (e.key === 'T') { this.dirThen('Tunnel', (d) => { this.lastAction = () => { C.tunnelInto(g, p.x + DIR_DX[d], p.y + DIR_DY[d]); this.afterAction(); }; this.lastAction(); }, false); break; } pickItem(this, 'Take off which item?', () => true, ['equip'], (it) => this.itemAction(it, 'equip', 'takeoff'), undefined, 't'); break;
+      case 'd': pickItem(this, 'Drop which item?', () => true, ['inven', 'quiver', 'equip'], (it, w) => this.itemAction(it, w, 'drop'), undefined, 'd'); break;
+      case 'k': pickItem(this, 'Destroy which item?', () => true, ['inven', 'quiver', 'floor'], (it, w) => this.itemAction(it, w, 'destroy'), undefined, 'k'); break;
+      case 'q': pickItem(this, 'Quaff which potion?', it => kindOf(it).tval === 'potion', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'quaff'), undefined, 'q'); break;
+      case 'r': pickItem(this, 'Read which scroll?', it => kindOf(it).tval === 'scroll', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'read'), undefined, 'r'); break;
+      case 'E': pickItem(this, 'Eat what?', it => kindOf(it).tval === 'food', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'eat'), undefined, 'E'); break;
+      case 'a': pickItem(this, 'Aim which wand?', it => kindOf(it).tval === 'wand', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'aim'), undefined, 'a'); break;
+      case 'u': pickItem(this, 'Use which staff?', it => kindOf(it).tval === 'staff', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'use'), undefined, 'u'); break;
+      case 'z': pickItem(this, 'Zap which rod?', it => kindOf(it).tval === 'rod', ['inven', 'floor'], (it) => this.itemAction(it, 'inven', 'zap'), undefined, 'z'); break;
+      case 'A': pickItem(this, 'Activate which item?', it => !!it.artifact || (kindOf(it).flags || []).includes('ACTIVATE'), ['equip'], (it) => this.itemAction(it, 'equip', 'activate'), undefined, 'A'); break;
+      case 'F': pickItem(this, 'Refuel with what?', it => kindOf(it).tval === 'flask' || kindOf(it).id === 'torch', ['inven'], (it) => this.itemAction(it, 'inven', 'fuel'), undefined, 'F'); break;
+      case 'v': pickItem(this, 'Throw which item?', () => true, ['inven', 'quiver', 'floor'], (it, w) => this.itemAction(it, w, 'throw'), undefined, 'v'); break;
+      case 'f': if (!p.equip.bow) { g.msg.add('You have nothing to fire with.'); break; } pickItem(this, 'Fire which ammunition?', it => isAmmo(kindOf(it)) && kindOf(it).tval === kindOf(p.equip.bow!).ammo, ['quiver', 'inven', 'floor'], (it, w) => this.itemAction(it, w, 'fire'), undefined, 'f'); break;
       case 'm': case 'p': spellMenu(this, 'cast', id => this.castSpell(id)); break;
       case 'b': spellMenu(this, 'browse', () => {}); break;
       case 'G': if (C.newSpellCount(g) <= 0) g.msg.add('You cannot learn any new spells right now.'); else if (CLASS_BY_ID[p.cls].realm === 'prayer') { C.study(g); this.afterAction(); } else spellMenu(this, 'study', id => { C.study(g, id); this.afterAction(); }); break;
@@ -408,9 +408,11 @@ class App implements Ui2 {
     else afterItem();
     void p;
   }
-  /** Perform an item action chosen from a picker or the inventory screen. */
-  itemAction(it: Item, where: ItemWhere, action: string): void {
+  /** Perform an item action chosen from a picker or the inventory screen. An item inscribed {!q} (or {!*}) asks first. */
+  itemAction(it: Item, where: ItemWhere, action: string, verified = false): void {
     const g = this.g, p = g.player, k = kindOf(it);
+    const letter = ACTION_KEY[action];
+    if (!verified && letter && inscriptionConfirms(it, letter)) { this.push(new Confirm(`Really ${ACTION_VERB[action]} ${itemName(it, g.flavors, { count: false })}?`, () => this.itemAction(it, where, action, true))); return; }
     const fromFloor = where === 'floor';
     const takeFirst = (): boolean => {
       if (!fromFloor) return true;
@@ -441,6 +443,9 @@ class App implements Ui2 {
     }
   }
 }
+/** The Angband command letter for each item action, for `!` inscriptions (destroy already confirms). */
+const ACTION_KEY: Record<string, string> = { wield: 'w', takeoff: 't', drop: 'd', quaff: 'q', read: 'r', eat: 'E', aim: 'a', use: 'u', zap: 'z', activate: 'A', fuel: 'F', throw: 'v', fire: 'f' };
+const ACTION_VERB: Record<string, string> = { wield: 'wield', takeoff: 'take off', drop: 'drop', quaff: 'quaff', read: 'read', eat: 'eat', aim: 'aim', use: 'use', zap: 'zap', activate: 'activate', fuel: 'refuel with', throw: 'throw', fire: 'fire' };
 function describe(g: Game, it: Item): string {
   const k = kindOf(it);
   return (k.desc || '') + (it.known ? '' : ' (not fully known)');

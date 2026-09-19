@@ -110,9 +110,10 @@ export function applyMagic(it: Item, level: number, good: boolean, great: boolea
   let power = 0;
   if (good || randint0(100) < f1) { power = 1; if (great || randint0(100) < f2) power = 2; }
   else if (randint0(100) < f1) { power = -1; if (randint0(100) < f2) power = -2; }
-  const rolls = power >= 2 ? 1 : 0;
+  // Artifact rolls as in Angband: one for an excellent object, four for a forced-great one, none otherwise.
+  const rolls = great ? 4 : power >= 2 ? 1 : 0;
   if (allowArtifacts && (isWeapon(k) || isArmor(k) || k.tval === 'bow' || k.tval === 'light' || k.tval === 'ring' || k.tval === 'amulet') && it.number === 1) {
-    for (let i = 0; i < rolls + 1; i++) if (tryArtifact(it, level, power >= 2)) return;
+    for (let i = 0; i < rolls; i++) if (tryArtifact(it, level, great)) return;
   }
   if (isWeapon(k) || k.tval === 'bow' || isAmmo(k)) {
     const tohit1 = randint1(5) + mBonus(5, level), todam1 = randint1(5) + mBonus(5, level);
@@ -179,7 +180,7 @@ function tryArtifact(it: Item, level: number, great: boolean): boolean {
   const cands = ARTIFACTS.filter(a => a.kind === k.id && !artifactsMade.has(a.id));
   for (const a of cands) {
     if (a.level > level && !great) { if (randint0((a.level - level) * 2) !== 0) continue; }
-    if (!oneIn(great ? Math.max(1, a.rarity / 2) : a.rarity)) continue;
+    if (!oneIn(a.rarity)) continue;
     makeArtifact(it, a);
     return true;
   }
@@ -400,4 +401,25 @@ export function senseItem(it: Item, heavy: boolean): Sense | undefined {
   if (it.ego) return heavy ? 'excellent' : 'good';
   if (it.toHit > 0 || it.toDam > 0 || it.toAc > 0) return 'good';
   return heavy ? 'average' : undefined;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Command inscriptions (Angband's `@q1` and `!*` conventions)
+
+/** The digits inscribed for a command letter: `@q1@q2` on a potion answers 1 or 2 at the quaff prompt. */
+export function inscriptionTags(it: Item, cmd: string): string[] {
+  const out: string[] = [];
+  if (!it.inscription) return out;
+  const re = /@(.)(\d)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(it.inscription))) if (m[1] === cmd) out.push(m[2]);
+  return out;
+}
+/** Does the inscription ask for confirmation before this command: `!q` before quaffing, `!*` before anything. */
+export function inscriptionConfirms(it: Item, cmd: string): boolean {
+  if (!it.inscription) return false;
+  const re = /!(.)/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(it.inscription))) if (m[1] === cmd || m[1] === '*') return true;
+  return false;
 }

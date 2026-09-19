@@ -34,7 +34,6 @@ export const TOWN_DAWN = 10000;
 
 /** Inventory capacity and equipment slots. */
 export const INVEN_MAX = 23;
-export const QUIVER_MAX = 40;
 /** Stacks the quiver can hold. */
 export const QUIVER_SLOTS = 8;
 
