@@ -414,8 +414,10 @@ function bestScentStep(g: Game, m: Monster): Pos | null {
 
 /**
  * Pack tactics. Wolves and their like used to jitter one step in three, which read as confusion.
- * Now they hold their distance and spread out until two of the pack are already on the player,
- * then everyone piles in at once.
+ * Now they close by the shortest route and use the choice between EQUALLY close grids to stay out
+ * of each other's way, so the pack arrives spread around the hero rather than queued up behind its
+ * leader. Closing must always outrank spreading: scoring it the other way round is a deadlock, and
+ * a pack that prefers to hold station will circle a motionless hero forever.
  */
 function packStep(g: Game, m: Monster, dist: number): Pos | null {
   const lv = g.level, p = g.player;

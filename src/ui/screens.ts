@@ -50,6 +50,11 @@ export interface Overlay {
   click?(x: number, y: number, ui: Ui): boolean;
   /** Draw the map beneath (default true). */
   opaque?: boolean;
+  /**
+   * This screen asks a yes/no question, so the touch navigation bar should offer YES and NO. Most
+   * screens must NOT: on the title screen 'n' is the shortcut for NEW GAME.
+   */
+  wantsYesNo?: boolean;
 }
 
 const BG = '#14121c', EDGE = '#5a5470', TEXT = '#e8e4d8', DIM = '#8a869a', HI = '#ffe060', GOLD = '#ffd040';
@@ -239,6 +244,7 @@ export class TextPrompt implements Overlay {
   }
 }
 export class Confirm implements Overlay {
+  wantsYesNo = true;
   constructor(public prompt: string, public onYes: () => void) {}
   draw(ctx: CanvasRenderingContext2D): void {
     ctx.fillStyle = 'rgba(0,0,0,0.7)'; ctx.fillRect(MAP_X, MAP_Y, MAP_W, 16);

@@ -98,19 +98,27 @@ function lsList(): SaveRecord[] {
  */
 export async function listSaves(): Promise<SaveMeta[]> {
   const rows = (await tx<SaveRecord[]>('readonly', s => s.getAll())) ?? [];
-  const spare = lsList().filter(r => !rows.some(x => x.id === r.id));
-  return [...rows, ...spare]
+  // Merge on the NEWER copy, not on whichever store answered first. A single failed IndexedDB
+  // write drops one snapshot into localStorage while a stale row is left behind in IndexedDB;
+  // preferring IndexedDB would then quietly show and load hours-old progress.
+  const byId = new Map<string, SaveRecord>();
+  for (const r of rows) byId.set(r.id, r);
+  for (const r of lsList()) { const cur = byId.get(r.id); if (!cur || r.savedAt > cur.savedAt) byId.set(r.id, r); }
+  return [...byId.values()]
     .map(({ data: _data, ...meta }) => meta as SaveMeta)
     .sort((a, b) => b.savedAt - a.savedAt);
 }
 
 export async function readSave(id: string): Promise<string | null> {
-  // IDBObjectStore.get resolves undefined for a missing key and tx resolves null when the database
-  // is unusable, so anything but a row means "look in the other store".
+  // Read both stores and hand back the newer, for the reason above. IDBObjectStore.get resolves
+  // undefined for a missing key and tx resolves null when the database is unusable, so neither
+  // means "there is nothing anywhere".
   const row = await tx<SaveRecord | undefined>('readonly', s => s.get(id));
+  let spare: SaveRecord | null = null;
+  try { const raw = localStorage.getItem(LS_PREFIX + id); if (raw) spare = JSON.parse(raw) as SaveRecord; } catch { /* nothing there */ }
+  if (row && spare) return (spare.savedAt > row.savedAt ? spare : row).data;
   if (row) return row.data;
-  try { const raw = localStorage.getItem(LS_PREFIX + id); if (raw) return (JSON.parse(raw) as SaveRecord).data; } catch { /* nothing there either */ }
-  return null;
+  return spare ? spare.data : null;
 }
 
 /** Returns null on success, or a short reason the player can be told. */

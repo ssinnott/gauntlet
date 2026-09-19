@@ -59,24 +59,29 @@ export class TouchPad {
     return out;
   }
 
-  /** Buttons for whatever overlay is on top: enough to drive any keyboard list. */
-  private overlayButtons(): TouchButton[] {
-    const items: [string, string, boolean?][] = [['ESC', 'Escape'], ['UP', 'ArrowUp'], ['DOWN', 'ArrowDown'], ['LEFT', 'ArrowLeft'], ['RIGHT', 'ArrowRight'], ['TAB', 'Tab'], ['ENTER', 'Enter'], ['YES', 'y'], ['NO', 'n']];
+  /**
+   * Buttons for whatever overlay is on top: enough to drive any keyboard list. YES and NO only
+   * appear where the overlay actually asks a question -- on the title screen 'n' means NEW GAME,
+   * so a bar that always offered NO dropped a curious player into character creation.
+   */
+  private overlayButtons(yesNo: boolean): TouchButton[] {
+    const items: [string, string, boolean?][] = [['ESC', 'Escape'], ['UP', 'ArrowUp'], ['DOWN', 'ArrowDown'], ['LEFT', 'ArrowLeft'], ['RIGHT', 'ArrowRight'], ['TAB', 'Tab'], ['ENTER', 'Enter']];
+    if (yesNo) items.push(['YES', 'y'], ['NO', 'n']);
     const w = 66, h = 30, gap = 5;
     const total = items.length * w + (items.length - 1) * gap;
     const x0 = (VIEW_W - total) / 2;
     return items.map(([label, key], i) => ({ x: x0 + i * (w + gap), y: VIEW_H - 40, w, h, label, key }));
   }
 
-  buttons(overlayOpen: boolean): TouchButton[] { return overlayOpen ? this.overlayButtons() : this.mapButtons(); }
+  buttons(overlayOpen: boolean, yesNo = false): TouchButton[] { return overlayOpen ? this.overlayButtons(yesNo) : this.mapButtons(); }
   nextPage(): void { this.page = (this.page + 1) % PAGES.length; }
 
   /**
    * What a tap means. Returns a direction key, a button, or null when the tap belongs to the map
    * (click-to-travel and the rest keep working).
    */
-  hit(x: number, y: number, overlayOpen: boolean): TouchButton | null {
-    for (const b of this.buttons(overlayOpen)) {
+  hit(x: number, y: number, overlayOpen: boolean, yesNo = false): TouchButton | null {
+    for (const b of this.buttons(overlayOpen, yesNo)) {
       if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) return b;
     }
     if (overlayOpen) return null;
@@ -92,11 +97,11 @@ export class TouchPad {
     return { x: PAD_CX, y: PAD_CY, w: 0, h: 0, label: String(dir), key: DIR_KEY[dir] };
   }
 
-  draw(ctx: CanvasRenderingContext2D, overlayOpen: boolean): void {
+  draw(ctx: CanvasRenderingContext2D, overlayOpen: boolean, yesNo = false): void {
     ctx.save();
     ctx.globalAlpha = 0.72;
     if (!overlayOpen) this.drawPad(ctx);
-    for (const b of this.buttons(overlayOpen)) {
+    for (const b of this.buttons(overlayOpen, yesNo)) {
       rrect(ctx, b.x, b.y, b.w, b.h, 5, 'rgba(24,20,36,0.85)', '#5a5470', 2);
       drawText(ctx, b.label, b.x + b.w / 2, b.y + b.h / 2 - 3, { size: 1, color: '#ffe060', align: 'center' });
     }

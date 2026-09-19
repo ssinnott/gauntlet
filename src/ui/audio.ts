@@ -35,13 +35,21 @@ function audio(): AudioContext | null {
   } catch { broken = true; ctx = null; return null; }
 }
 
-/** Call from the first real key press or tap: browsers block audio until then. */
+/**
+ * Call from every key press and tap until it takes: browsers block audio until a gesture, and on
+ * iOS a resume() that lands a frame after the tap simply does not work. Latching "unlocked" on the
+ * attempt rather than the result silenced the whole session after one miss -- and worse, a
+ * suspended context's clock does not advance, so everything scheduled into it piles up and fires
+ * at once whenever it finally starts.
+ */
 export function unlockAudio(): void {
   if (unlocked || broken) return;
   const c = audio();
   if (!c) return;
-  unlocked = true;
-  try { if (c.state === 'suspended') void c.resume(); } catch { /* nothing to be done */ }
+  if (c.state === 'running') { unlocked = true; return; }
+  try {
+    void c.resume().then(() => { unlocked = c.state === 'running'; }).catch(() => { /* the next gesture tries again */ });
+  } catch { /* the next gesture tries again */ }
 }
 
 export function setVolume(v: number): void { if (master) master.gain.value = Math.max(0, Math.min(1, v)); }
@@ -143,7 +151,10 @@ export function playQueuedSounds(g: Game): void {
   const q = g.sounds;
   if (!q.length) return;
   if (!g.options.sound || !unlocked || broken) { q.length = 0; return; }
-  if (!audio()) { q.length = 0; return; }
+  const c = audio();
+  // Never schedule into a context that is not actually running: its clock is stopped, so the whole
+  // backlog would fire in one blast the moment it resumed.
+  if (!c || c.state !== 'running') { q.length = 0; return; }
   const seen = new Set<SoundId>();
   let played = 0;
   for (const id of q) {
@@ -164,8 +175,9 @@ export function playQueuedSounds(g: Game): void {
  * exponential ramp, for one) would ship unnoticed. Returns how many were played.
  */
 export function playEverySound(): number {
-  unlockAudio();
-  if (!audio()) return 0;
+  const c = audio();
+  if (!c) return 0;
+  try { void c.resume(); } catch { /* the recipes are still exercised */ }
   let n = 0;
   for (const id of Object.keys(RECIPES) as SoundId[]) { RECIPES[id](); n++; }
   return n;

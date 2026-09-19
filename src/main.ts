@@ -86,7 +86,7 @@ class App implements Ui2 {
   private recordScore(): number {
     if (this.scoreRecorded) return -1;
     this.scoreRecorded = true;
-    const rank = addScore(this.scores, scoreEntry(this.g));
+    const rank = addScore(this.scores, scoreEntry(this.g, new Date().toISOString().slice(0, 10)));
     try { localStorage.setItem(SCORES_KEY, JSON.stringify(this.scores)); } catch { /* ignore */ }
     this.saveLore();
     return rank;
@@ -256,12 +256,23 @@ class App implements Ui2 {
     const out: PointerEvent2[] = [];
     for (const c of clicks) {
       if (c.kind !== 'down') { out.push(c); continue; }
-      const b = this.touch.hit(c.x, c.y, this.overlays.length > 0);
+      const b = this.touch.hit(c.x, c.y, this.overlays.length > 0, this.topWantsYesNo());
       if (!b) { out.push(c); continue; }
       if (b.page) { this.touch.nextPage(); continue; }
-      this.handleKeyPublic({ key: b.key, shift: !!b.shift, ctrl: !!b.ctrl, alt: false, code: '' });
+      // A button press is an interruption like any other key. It does not pass through
+      // Input.queue, so the "any key stops running, resting and travelling" rule below would
+      // otherwise never see it, and a sidestep during a long walk would be silently undone.
+      if (this.started) { const g = this.g; g.running = null; g.resting = 0; g.travel = null; g.repeating = null; }
+      // code 'touch' marks the press as synthetic, so handleKey does not read a command letter as
+      // a vi movement key. Without it the STAFF button ('u') walked the hero north-east.
+      this.handleKeyPublic({ key: b.key, shift: !!b.shift, ctrl: !!b.ctrl, alt: false, code: 'touch' });
     }
     return out;
+  }
+  /** Does the screen on top actually ask a yes/no question? */
+  private topWantsYesNo(): boolean {
+    const top = this.overlays[this.overlays.length - 1];
+    return !!(top && top.wantsYesNo);
   }
 
   /**
@@ -365,7 +376,7 @@ class App implements Ui2 {
       if (this.g.level.depth === 0) this.drawShopLabels(ctx);
     }
     for (const o of this.overlays) o.draw(ctx, this);
-    if (this.touchVisible()) this.touch.draw(ctx, this.overlays.length > 0);
+    if (this.touchVisible()) this.touch.draw(ctx, this.overlays.length > 0, this.topWantsYesNo());
     this.canvasApi.present();
   }
   private drawShopLabels(ctx: CanvasRenderingContext2D): void {
@@ -388,8 +399,11 @@ class App implements Ui2 {
 
   handleKey(e: KeyEvent): void {
     const g = this.g, p = g.player;
-    if (this.renderer.busy() && dirOfKey(e)) return;
-    const dir = dirOfKey(e);
+    // A press synthesised by an on-screen button always means the command on the button, never a
+    // movement: the vi keys overlap the command letters (u, b, n, h, j, k, l, y).
+    const fromButton = e.code === 'touch';
+    if (this.renderer.busy() && dirOfKey(e, !fromButton)) return;
+    const dir = dirOfKey(e, !fromButton);
     if (dir && dir !== 5 && !e.ctrl) {
       const running = e.shift || (e.key.length === 1 && e.key !== e.key.toLowerCase() && /[A-Z]/.test(e.key));
       const nx = p.x + DIR_DX[dir], ny = p.y + DIR_DY[dir];

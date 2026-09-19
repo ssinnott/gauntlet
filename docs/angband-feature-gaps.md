@@ -80,8 +80,11 @@ and are not listed as gaps.
   door muffles a shout, and the hero's stealth shrinks every monster's hearing at once, so stealth
   finally matters while things are awake and not only while they are asleep. Animals follow a
   decaying scent trail instead, so a hound comes round the corner the hero went round.
-- **Pack tactics.** Monsters with FRIENDS hold their distance and spread out rather than queueing
-  up in the corridor behind the leader, and pile in together once two of the pack are engaged.
+- **Pack tactics.** Monsters with FRIENDS close by the shortest route, but where two grids are
+  equally close they take the one further from the rest of the pack. So a pack arrives spread
+  around the hero instead of queued up in the corridor behind its leader, and it always arrives:
+  an earlier version scored holding station above closing, and packs circled a resting hero
+  forever without landing a blow.
 - **smart_learn.** SMART monsters used to read the hero's equipment, which is omniscience rather
   than cunning. They now learn: an attack that is resisted, an effect a defence refuses and a
   saving throw that succeeds all teach the attacking race something, and it stops spending turns on

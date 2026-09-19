@@ -21,7 +21,7 @@ import { MONSTERS, MONSTER_BY_ID } from '../src/game/data/monsters.ts';
 import { OBJECTS } from '../src/game/data/objects.ts';
 import { rng } from '../src/lib/engine/rng.ts';
 import type { Options } from '../src/game/options.ts';
-import type { Game } from '../src/game/state.ts';
+import { type Game, FX_QUEUE_MAX, SOUND_QUEUE_MAX } from '../src/game/state.ts';
 import type { Item } from '../src/game/types.ts';
 import { characterDump } from '../src/game/dump.ts';
 import { describeRace } from '../src/game/recall.ts';
@@ -352,6 +352,18 @@ void dummy;
   ok(!isIgnored(g, known(make('long_sword', it => { it.ego = 'slay_evil'; }))), 'an ego item was hidden by ignoring its base kind');
   ok(!isIgnored(g, make('long_sword')), 'an unidentified example of an ignored kind was ignored');
   console.log('ignore: artifacts, unknowns, ability items and ego items all survive the strictest settings');
+}
+
+// 2d. Nothing may grow without bound. The queues the UI drains are not drained headless -- which is
+// what a lockstep replay would also be -- so each needs a cap, and only the sound queue had one.
+{
+  const g = createGame('Grow', 'human', 'warrior', 'male', 4242);
+  enterLevel(g, 3, 'down');
+  for (let i = 0; i < 5000; i++) { g.player.chp = g.player.mhp; g.player.food = 8000; passTurn(g); }
+  ok(g.fx.length <= FX_QUEUE_MAX, `the effect queue grew to ${g.fx.length} over 5000 headless turns`);
+  ok(g.sounds.length <= SOUND_QUEUE_MAX, `the sound queue grew to ${g.sounds.length} over 5000 headless turns`);
+  ok(g.msg.list.length <= 300, `the message log grew to ${g.msg.list.length}`);
+  console.log(`growth: after 5000 parked turns, fx ${g.fx.length}, sounds ${g.sounds.length}, messages ${g.msg.list.length}`);
 }
 
 // 3. Monster senses. The play loop below never catches a monster that fails to close, because its

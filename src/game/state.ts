@@ -29,6 +29,13 @@ export type SoundId =
 
 /** How many queued sounds to keep. The headless simulator never drains the queue, so it is capped. */
 export const SOUND_QUEUE_MAX = 24;
+/**
+ * And the same for visual effects, for the same reason: fx is drained by the renderer, which does
+ * not exist headless, so a long run on one level grew it without bound (measured at twelve thousand
+ * entries after forty thousand turns). A frame only ever produces a handful, so trimming the oldest
+ * past this cap cannot drop anything the player would have seen.
+ */
+export const FX_QUEUE_MAX = 256;
 
 export interface Game {
   seed: number;

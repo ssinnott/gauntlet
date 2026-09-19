@@ -155,6 +155,7 @@ export class KnowledgeOverlay implements Overlay {
 // Options
 
 export class OptionsOverlay implements Overlay {
+  wantsYesNo = true;
   sel = 0;
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
     const g = ui.g;
@@ -251,6 +252,7 @@ export class LocateMode implements Overlay {
 type BirthStep = 'race' | 'class' | 'stats' | 'options' | 'name';
 const STEPS: BirthStep[] = ['race', 'class', 'stats', 'options', 'name'];
 export class BirthScreen2 implements Overlay {
+  wantsYesNo = true;
   opaque = true;
   step: BirthStep = 'race';
   race = 0; cls = 0; sex: 'male' | 'female' = 'male'; name = '';
@@ -531,6 +533,7 @@ function agoText(then: number, now: number): string {
 /** The list of saved heroes: continue one, or delete one. */
 export class SaveSlotsOverlay implements Overlay {
   opaque = true;
+  wantsYesNo = true;
   sel = 0;
   confirmDelete = false;
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {

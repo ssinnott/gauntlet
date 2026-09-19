@@ -21,6 +21,7 @@ import { RACE_BY_ID } from './data/races.ts';
 import { MONSTER_BY_ID, MONSTERS } from './data/monsters.ts';
 import { FOOD_MAX, FOOD_FULL, FOOD_HUNGRY, FOOD_WEAK, FOOD_FAINT, FOOD_STARVE, MAX_DEPTH, TOWN_DAWN } from '../constants.ts';
 import { type Options, normalizeOptions } from './options.ts';
+import { FX_QUEUE_MAX } from './state.ts';
 import { defaultIgnore } from './ignore.ts';
 import { setArtifactSet } from './artifacts.ts';
 import { buildRandartSet } from './randart.ts';
@@ -378,6 +379,8 @@ export function runWorld(g: Game): void {
     }
     p.energy += energyGain(g.bonuses.speed);
   }
+  // Nothing drains the effect queue without a renderer, so bound it here.
+  if (g.fx.length > FX_QUEUE_MAX) g.fx.splice(0, g.fx.length - FX_QUEUE_MAX);
   if (!p.dead) {
     updateView(g.level, p.x, p.y, g.bonuses.lightRadius, p.timed.blind > 0);
     updateMonsterVisibility(g);

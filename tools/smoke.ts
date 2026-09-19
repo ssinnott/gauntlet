@@ -169,6 +169,52 @@ const fallback = await page.evaluate(async () => {
   return { listed, alongside, leftBehind: !!localStorage.getItem(KEY), stillListed: app.slots.some((s: any) => s.id === 'fallbacktest') };
 });
 
+// A stale IndexedDB row must not win over a newer fallback copy. One failed IndexedDB write puts a
+// snapshot in localStorage and leaves an older row behind; preferring IndexedDB would then show and
+// load hours-old progress without a word.
+const staleness = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const id = app.slots[0]?.id;
+  if (!id) return { ok: false, reason: 'no slot to test with' };
+  const older = app.slots[0].savedAt;
+  localStorage.setItem('gauntlet-of-angband.slot.' + id, JSON.stringify({
+    ...app.slots[0], name: 'Newer', savedAt: older + 60000, data: '{"v":3,"newer":true}',
+  }));
+  app.refreshSlots();
+  await new Promise(r => setTimeout(r, 500));
+  const shown = app.slots.find((s: any) => s.id === id);
+  localStorage.removeItem('gauntlet-of-angband.slot.' + id);
+  app.refreshSlots();
+  await new Promise(r => setTimeout(r, 500));
+  return { ok: true, name: shown?.name, savedAt: shown?.savedAt === older + 60000, restored: app.slots[0]?.name };
+});
+
+// Touch buttons must never be read as movement: the vi movement keys overlap the command letters,
+// so the STAFF button ('u') used to walk the hero north-east instead.
+const buttonKeys = await page.evaluate(() => {
+  const app = (window as any).__game.api.app;
+  const g = app.g;
+  const before = { x: g.player.x, y: g.player.y };
+  app.handleKeyPublic({ key: 'u', shift: false, ctrl: false, alt: false, code: 'touch' });
+  const afterButton = { x: g.player.x, y: g.player.y };
+  while (app.overlays.length) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
+  const msgsBefore = g.msg.list.length;
+  app.handleKeyPublic({ key: 'u', shift: false, ctrl: false, alt: false, code: '' });
+  const afterKey = { x: g.player.x, y: g.player.y };
+  // A real vi key resolves to a direction whether or not the step lands: walking into a wall still
+  // proves dirOfKey read it as north-east.
+  const walled = g.msg.list.slice(msgsBefore).some((m: any) => /wall in the way/i.test(m.text));
+  while (app.overlays.length) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
+  const plain = app.touch.buttons(true, false).map((b: any) => b.key);
+  const asking = app.touch.buttons(true, true).map((b: any) => b.key);
+  return {
+    buttonMoved: afterButton.x !== before.x || afterButton.y !== before.y,
+    viActed: afterKey.x !== afterButton.x || afterKey.y !== afterButton.y || walled,
+    plainHasYesNo: plain.includes('y') || plain.includes('n'),
+    askingHasYesNo: asking.includes('y') && asking.includes('n'),
+  };
+});
+
 // The saved-heroes screen itself renders.
 await page.evaluate(() => {
   const app = (window as any).__game.api.app;
@@ -211,6 +257,10 @@ ok(savesScreen.overlay === 'SaveSlotsOverlay' && savesScreen.listed >= 1 && save
   `the saved-heroes screen lists the hero (${JSON.stringify(savesScreen)}, ${savesColours} colours)`);
 ok(fallback.listed && fallback.alongside, `a hero in the localStorage fallback is listed beside the IndexedDB ones (${JSON.stringify(fallback)})`);
 ok(!fallback.leftBehind && !fallback.stillListed, 'deleting a fallback hero clears it from both stores');
+ok(staleness.ok && staleness.name === 'Newer' && staleness.savedAt && staleness.restored === 'Smoke', `the newer of two copies of a slot wins (${JSON.stringify(staleness)})`);
+ok(!buttonKeys.buttonMoved, `a touch command button moved the hero instead of running its command (${JSON.stringify(buttonKeys)})`);
+ok(buttonKeys.viActed, `the vi movement keys stopped working for real key presses (${JSON.stringify(buttonKeys)})`);
+ok(!buttonKeys.plainHasYesNo && buttonKeys.askingHasYesNo, `the touch bar offers YES/NO only where the screen asks (${JSON.stringify(buttonKeys)})`);
 ok(soundsPlayed >= 30, `every sound recipe synthesised without throwing (${soundsPlayed} played)`);
 ok(hasLore, 'monster memory persisted to localStorage');
 ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);
