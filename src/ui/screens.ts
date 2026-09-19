@@ -22,6 +22,9 @@ import { dirOfKey } from './input.ts';
 import { refreshBonuses } from '../game/effectsCore.ts';
 import { SPELL_BY_ID } from '../game/data/spells.ts';
 import { distance } from '../game/util.ts';
+import { createPlayer } from '../game/player.ts';
+import { makeItem } from '../game/items.ts';
+import { buildHero, drawHero, type HeroSprite } from './hero.ts';
 
 export interface Ui {
   g: Game;
@@ -704,7 +707,15 @@ export class BirthScreen implements Overlay {
       ly += 14;
       drawText(ctx, `HIT DIE ${d.hitDie}   EXP ${d.expPct}%`, x, ly, { size: 1, color: DIM }); ly += 11;
       if (this.step === 0) { const r = d as typeof RACES[number]; drawText(ctx, `INFRAVISION ${r.infra * 10} FT   ${r.flags.join(' ').replace(/_/g, ' ')}`, x, ly, { size: 1, color: '#a0c0ff' }); }
-      else { const c = d as typeof CLASSES[number]; drawText(ctx, `PLAYS AS THE GAUNTLET ${c.hero.toUpperCase()}   ${c.realm ? c.realm.toUpperCase() + ' USER' : 'NO MAGIC'}   ${c.maxAttacks} MAX BLOWS`, x, ly, { size: 1, color: '#a0c0ff' }); ly += 11; drawText(ctx, 'STARTS WITH: ' + c.startItems.map(([k, n]) => (n > 1 ? n + ' ' : '') + (kindOf({ kind: k } as Item)?.name || k)).join(', ').toUpperCase().slice(0, 100), x, ly, { size: 1, color: DIM }); }
+      else {
+        const c = d as typeof CLASSES[number];
+        drawText(ctx, `PLAYS AS THE GAUNTLET ${c.hero.toUpperCase()}   ${c.realm ? c.realm.toUpperCase() + ' USER' : 'NO MAGIC'}   ${c.maxAttacks} MAX BLOWS`, x, ly, { size: 1, color: '#a0c0ff' }); ly += 11;
+        const kit = wrap('STARTS WITH: ' + c.startItems.map(([k, n]) => (n > 1 ? n + ' ' : '') + (kindOf({ kind: k } as Item)?.name || k)).join(', '), 70);
+        for (const line of kit) { drawText(ctx, line, x, ly, { size: 1, color: DIM }); ly += 11; }
+        ly -= 11;
+        // The hero as it will be drawn in the dungeon, big.
+        this.preview(ctx, c.id, ui);
+      }
       const skills = d.skills;
       ly += 22;
       drawText(ctx, `MELEE ${skills.melee}  BOWS ${skills.bows}  STEALTH ${skills.stealth}  SEARCH ${skills.search}  DISARM ${skills.disarm}  DEVICE ${skills.device}  SAVE ${skills.save}`, x, ly, { size: 1, color: DIM });
@@ -714,6 +725,22 @@ export class BirthScreen implements Overlay {
       drawText(ctx, this.name + ((ui.frame >> 4) % 2 ? '_' : ' '), VIEW_W / 2, 130, { size: 3, color: HI, align: 'center' });
       drawText(ctx, 'TYPE A NAME AND PRESS ENTER (OR ENTER FOR A RANDOM ONE)', VIEW_W / 2, 180, { size: 1, color: DIM, align: 'center' });
     }
+  }
+  private previewFor: HeroSprite | null = null;
+  private previewCls = '';
+  private preview(ctx: CanvasRenderingContext2D, cls: string, ui: Ui): void {
+    if (!this.previewFor || this.previewCls !== cls) {
+      const p = createPlayer('Preview', RACES[this.race].id, cls, this.sex);
+      const w = CLASS_BY_ID[cls].startItems.find(([k]) => isWeapon(kindOf({ kind: k } as Item)));
+      if (w) p.equip.weapon = makeItem(w[0], 1);
+      this.previewFor = buildHero(p);
+      this.previewCls = cls;
+    }
+    ctx.save();
+    ctx.translate(VIEW_W - 150, 330);
+    ctx.scale(3, 3);
+    drawHero(ctx, this.previewFor, 0, 0, (ui.frame >> 6) % 2 ? -1 : 1);
+    ctx.restore();
   }
   key(e: KeyEvent, ui: Ui): boolean {
     if (this.step < 2) {
