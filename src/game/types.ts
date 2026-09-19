@@ -556,8 +556,12 @@ export interface Level {
   items: FloorItem[];
   rooms: Room[];
   feeling: number;
-  /** Turns spent on this level. */
-  age: number;
+  /** Danger and treasure rating accumulated during generation (vaults), for the level feeling. */
+  rating: number;
+  /** A vault or artifact made this level "special" (Angband's good_item_flag). */
+  special: boolean;
+  /** Persistent levels: the game turn the player last left this level. */
+  leftAt?: number;
   /** The town only: was it generated in daylight? */
   daytime?: boolean;
 }

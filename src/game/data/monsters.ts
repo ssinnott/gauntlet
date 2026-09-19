@@ -1,4 +1,4 @@
-// Monster races: Angband 3.0's bestiary trimmed to ~200 races plus Gauntlet-style generators.
+// Monster races: Angband 3.0's bestiary to depth 100 (Morgoth) plus Gauntlet-style generators.
 // Depth 0 is the town. speed is Angband speed minus 110. hp is the average.
 import type { MonsterRace, Blow, BlowMethod, BlowEffect } from '../types.ts';
 

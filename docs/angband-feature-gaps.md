@@ -2,8 +2,9 @@
 
 This started as a survey of what Gauntlet of Angband did not do that Angband 3.0.x does. Most of
 it has since been built; this page records what is in, how it maps to Angband, and what is still
-out. Gauntlet-specific additions (generators, keys, the Gauntlet HUD, auto-pickup) are deliberate
-departures and are not listed as gaps.
+out. Gauntlet-specific additions (generators, keys, the Gauntlet HUD, auto-pickup) and the smaller
+level (132 x 66 and 100 levels deep, against Angband's 198 x 66 and 127) are deliberate departures
+and are not listed as gaps.
 
 ## Headline numbers
 
@@ -32,7 +33,10 @@ departures and are not listed as gaps.
   bolts and mana, chaos and water balls.
 - Chests have locks (picked with the disarm skill) and eight Angband trap kinds; `D` disarms them.
 - The quiver holds its intended number of stacks.
-- Inscriptions can be added and removed (`{`, `}`).
+- Inscriptions can be added and removed (`{`, `}`), and Angband's command inscriptions are honoured:
+  `@q1` answers `1` at the quaff prompt (likewise `@r`, `@E`, `@a`, `@u`, `@z`, `@f`, `@v`, `@w`, `@t`,
+  `@d`, `@k`, `@A`, `@F` and `@s` in a store), `!q` asks before quaffing, `!s` before selling and `!*`
+  before anything.
 
 ### Player systems
 - Knowledge browser (`~`): monster memory with Angband-style recall text built from what the hero
@@ -47,6 +51,9 @@ departures and are not listed as gaps.
 - Stun has light, heavy and knocked-out tiers; cuts run from grazes to mortal wounds that do not
   close by themselves.
 - Angband's energy table replaces the linear one.
+- Level feelings follow Angband 3.0's: the vaults' ratings, out-of-depth monsters and good objects
+  against Angband's thresholds, and a vault at shallow depth or an artifact on the floor makes the
+  level "special". `ctrl+F` repeats the feeling.
 - Rogues, rangers, paladins and blackguards have their own spell tables; Banishment asks for a race;
   Word of Recall asks whether to reset the recall depth.
 - The town has a day/night cycle with more townsfolk after dark.
@@ -69,7 +76,10 @@ departures and are not listed as gaps.
 - Randarts (random artifact sets).
 - Monster memory does not learn the player's resistances the way `smart_learn` does; SMART monsters
   simply know them.
-- Persistent levels keep monsters and items but do not age them beyond a little healing.
+- Persistent levels keep monsters and items; monsters regenerate for the time you were away, but
+  nothing else happens on a level you are not on (no wandering, no new monsters).
+- Count prefixes (`0` and a number), walking without pickup (auto-pickup is an option instead),
+  squelch settings, macros and keymap editing.
 - Angband 4.2 features that were never in scope for 3.0 parity: rune-based identification and rune
   curses, cavern and labyrinth level types, shapechanges, throwing weapons as a class, level
   feelings that need exploration, and the 4.2 class books.

@@ -34,7 +34,7 @@ races: the eleven Angband ones plus Dark-Elf, Half-Giant, Barbarian, Ent, Beorni
 
 The rest of the keyset: `~` the knowledge browser (monster memory, known objects, artifacts, egos,
 uniques, kills), `/` recall the nearest monster, `=` options, `D` disarm (traps and chests), `c`
-close, `T` tunnel, `B` or walking into a stuck door bashes it, `ctrl+J` jams a door with a spike,
+close, `T` tunnel, `ctrl+B` or walking into a stuck door bashes it, `ctrl+J` jams a door with a spike,
 `ctrl+L` scrolls the map, `Enter` repeats the last command, `V` the Hall of Heroes, `C` then `F`
 writes a character dump, `ctrl+E` exports the save (the title screen imports one).
 

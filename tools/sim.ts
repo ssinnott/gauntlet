@@ -5,7 +5,7 @@
 import { createGame, enterLevel, score } from '../src/game/game.ts';
 import { moveDir, goDown, goUp, pickupHere, quaff, read, eat, wield, dropItem, rest, restStep, cast, study, spellsAvailable, newSpellCount, fire, throwItem, aim, useStaff, zap, searchAround, travelTo, travelStep, run, runStep, openChest } from '../src/game/commands.ts';
 import { maintainStore, storeBuy, storeSell, buyPrice, storeWants } from '../src/game/stores.ts';
-import { kindOf, itemName } from '../src/game/items.ts';
+import { kindOf, itemName, inscriptionTags, inscriptionConfirms } from '../src/game/items.ts';
 import { needsDir, needsItem } from '../src/game/effects.ts';
 import { serialize, deserialize } from '../src/game/save.ts';
 import { generateDungeon, isConnected } from '../src/game/gen/dungeon.ts';
@@ -17,6 +17,7 @@ import { MONSTERS } from '../src/game/data/monsters.ts';
 import { OBJECTS } from '../src/game/data/objects.ts';
 import { rng } from '../src/lib/engine/rng.ts';
 import type { Game } from '../src/game/state.ts';
+import type { Item } from '../src/game/types.ts';
 import { characterDump } from '../src/game/dump.ts';
 import { describeRace } from '../src/game/recall.ts';
 import { bashDoor, jamDoor, disarm, passTurn } from '../src/game/commands.ts';
@@ -128,6 +129,14 @@ function shopAround(g: Game): void {
 }
 
 console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RACES.length} races, ${CLASSES.length} classes`);
+
+// Command inscriptions parse as Angband's do: `@q1` tags a command letter, `!k` / `!*` ask first.
+{
+  const it = { inscription: '@q1@q2@r3!k' } as unknown as Item;
+  ok(inscriptionTags(it, 'q').join('') === '12' && inscriptionTags(it, 'r').join('') === '3' && inscriptionTags(it, 'f').length === 0, 'inscription @ tags');
+  ok(inscriptionConfirms(it, 'k') && !inscriptionConfirms(it, 'q'), 'inscription ! confirmations');
+  ok(inscriptionConfirms({ inscription: 'my sword !*' } as unknown as Item, 'd') && !inscriptionConfirms({} as Item, 'd'), 'inscription !* confirms everything');
+}
 
 // 1. Level generation at many depths: connected and populated.
 let genOk = 0, genTotal = 0;
