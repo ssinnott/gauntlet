@@ -1,0 +1,19 @@
+{
+  // Type checking only; nothing is emitted. The dev server transforms each .ts file on request with
+  // esbuild and `npm run build` bundles a single dist/index.html. See src/lib (the vendored
+  // game-engine) and its docs for why imports name '.ts' files directly.
+  "compilerOptions": {
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "lib": ["es2022", "dom"],
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "tools/**/*.ts", "types/**/*.d.ts"]
+}

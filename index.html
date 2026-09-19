@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b0a10">
+<link rel="icon" href="data:,">
+<title>Gauntlet of Angband</title>
+<style>
+  html, body { margin: 0; padding: 0; background: #0b0a10; width: 100%; height: 100%; overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas#stage { display: block; image-rendering: pixelated; image-rendering: crisp-edges; outline: none;
+                 touch-action: none; -webkit-user-select: none; user-select: none; }
+  #errors { position: fixed; left: 0; top: 0; max-width: 100%; margin: 0; padding: 6px 8px; box-sizing: border-box;
+            background: rgba(120, 0, 0, .9); color: #fff; font: 12px/1.4 monospace; white-space: pre-wrap; z-index: 10; display: none; }
+</style>
+</head>
+<body>
+<canvas id="stage" width="960" height="540" tabindex="0"></canvas>
+<pre id="errors"></pre>
+<script>
+  // Installed before the module graph loads so an import or transform failure is captured too.
+  (function () {
+    var hooks = window.__game = { ready: false, errors: [] };
+    var box = document.getElementById('errors');
+    function record(msg) {
+      hooks.errors.push(String(msg));
+      if (box) { box.style.display = 'block'; box.textContent = hooks.errors.slice(-8).join('\n'); }
+    }
+    window.addEventListener('error', function (e) {
+      var m = e.message || (e.error && e.error.message) || 'unknown error';
+      if (e.filename) m += ' (' + e.filename.replace(/^.*\//, '') + ':' + e.lineno + ')';
+      record(m);
+    });
+    window.addEventListener('unhandledrejection', function (e) {
+      var r = e.reason; record('unhandled rejection: ' + (r && r.message ? r.message : r));
+    });
+  })();
+</script>
+<script type="module" src="src/main.ts"></script>
+</body>
+</html>
