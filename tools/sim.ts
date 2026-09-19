@@ -45,7 +45,7 @@ function check(g: Game, where: string): void {
 function botTurn(g: Game, step: number, diver: boolean): void {
   const p = g.player, lv = g.level;
   if (p.dead) return;
-  if (diver && step % 200 === 199 && lv.depth > 0 && !g.levelChange) { g.levelChange = { depth: Math.min(60, lv.depth + 3), by: 'teleport' }; return; }
+  if (diver && step % 200 === 199 && lv.depth > 0 && !g.levelChange) { g.levelChange = { depth: Math.min(100, lv.depth + 5), by: 'teleport' }; return; }
   if (diver) { p.timed.invuln = 5; if (p.chp < p.mhp) { p.chp = p.mhp; } p.food = 12000; for (const t of Object.keys(p.timed) as (keyof typeof p.timed)[]) if (['blind', 'paralyzed', 'confused', 'poisoned', 'cut', 'stun', 'afraid', 'slow'].includes(t)) p.timed[t] = 0; }
   if (g.inStore >= 0) { shopAround(g); g.inStore = -1; return; }
   if (g.levelChange) { enterLevel(g, g.levelChange.depth, g.levelChange.by); return; }

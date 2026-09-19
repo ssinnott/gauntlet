@@ -9,16 +9,16 @@ departures and are not listed as gaps.
 
 | Area | Gauntlet now | Angband 3.0.x |
 | --- | --- | --- |
-| Monster races | MONSTER_COUNT (GENERATOR_COUNT of them generators) | ~550 |
-| Uniques | UNIQUE_COUNT | ~100 |
+| Monster races | 510 (11 of them generators) | ~550 |
+| Uniques | 77 | ~100 |
 | Deepest monster | 100 (Morgoth), 99 (Sauron) | 100 (Morgoth), 99 (Sauron) |
-| Object kinds | OBJECT_COUNT | ~500 |
-| Ego types | EGO_COUNT | ~130 |
-| Artifacts | ARTIFACT_COUNT | 128 |
-| Spell realms / books | 4 realms, BOOK_COUNT books, SPELL_COUNT spells | 2 realms, 18 books |
+| Object kinds | 430 | ~500 |
+| Ego types | 112 | ~130 |
+| Artifacts | 121 | 128 |
+| Spell realms / books | 4 realms, 28 books, 176 spells | 2 realms, 18 books |
 | Classes / races | 10 / 17 | 6 / 11 |
 | Trap kinds | 17 | 16 |
-| Vault templates | VAULT_COUNT (lesser + greater) | ~50 |
+| Vault templates | 33 (lesser + greater) | ~50 |
 
 ## Done
 
@@ -54,7 +54,7 @@ departures and are not listed as gaps.
 ### Content
 - Bestiary to depth 100 with the missing uniques including the nine Ringwraiths, Sauron (level 99)
   and Morgoth (level 100), who is now the win condition; Sauron must die before level 100 opens.
-- ARTIFACT_COUNT artifacts and EGO_COUNT egos following Angband 3.0's lists, including the rings of
+- 121 artifacts and 112 egos following Angband 3.0's lists, including the rings of
   Power, the One Ring, Morgoth's crown and the cursed egos.
 - Mage books 8 and 9 (Tenser's, Kelek's), priest books 8 and 9 (Godly Insights, Holy Infusions),
   five nature books for druids and five necromantic tomes for necromancers and blackguards.

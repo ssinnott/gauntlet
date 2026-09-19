@@ -67,7 +67,7 @@ src/game/                pure game logic: no DOM anywhere below here
   lore.ts                monster memory; recall.ts writes it up; dump.ts the character dump
   options.ts             birth and game options; scores.ts the Hall of Heroes
   gen/vaults.ts          hand-drawn lesser and greater vaults in Angband's vault.txt glyphs
-  data/                  monsters (MONSTER_COUNT), objects (OBJECT_COUNT kinds, EGO_COUNT egos, ARTIFACT_COUNT artifacts), spells (SPELL_COUNT in four realms), races, classes
+  data/                  monsters (510), objects (430 kinds, 112 egos, 121 artifacts), spells (176 in four realms), races, classes
 src/ui/                  everything that draws
   render.ts              the 3/4 map: floors, raised walls, doors, items, monsters, effects
   sprites.ts             procedural cel-shaded monster sprites (43 families) and item icons

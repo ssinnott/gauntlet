@@ -298,7 +298,7 @@ export function disarm(g: Game, dir: number): void {
   if (j < 2) j = 2;
   if (randint0(100) < j) { g.msg.add(`You have disarmed the ${TRAP_KINDS[kind]}.`, '#a0ffa0'); gainExp(g, 5 + kind); setTile(lv, x, y, T.FLOOR); }
   else if (randint0(100) < j + 20) { g.msg.add(`You failed to disarm the ${TRAP_KINDS[kind]}.`); g.repeating = { cmd: 'disarm', dir, left: 20 }; }
-  else { g.msg.add('You set off the trap!', '#ff8080'); movePlayerTo(g, x, y); hitTrap(g, x, y); }
+  else { g.msg.add('You set off the trap!', '#ff8080'); if (!monsterAt(lv, x, y)) movePlayerTo(g, x, y); hitTrap(g, x, y); }
   endTurn(g);
 }
 
