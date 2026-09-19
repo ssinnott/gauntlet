@@ -574,7 +574,7 @@ const HELP = [
   'q  quaff potion    r  read scroll    E  eat    a  aim wand    u  use staff    z  zap rod    A  activate    Enter  repeat last',
   'f  fire missile    v  throw          F  refuel light          m  p  cast / pray     b  browse     G  study     T  tunnel',
   'C  character (F dumps)   M  map   ctrl+L  locate   ~  knowledge   /  recall   =  options   V  hall of heroes   {  }  inscribe',
-  'ctrl+P  messages   ctrl+S  save   ctrl+X  save and quit   ctrl+E  export save   ctrl+F  level feeling   Q  retire',
+  'ctrl+P  messages   ctrl+S  save   ctrl+X  save and quit   ctrl+E  export save   ctrl+F  level feeling   Q  retire   ctrl+A  autoplay',
   'MOUSE   click the map to travel there; while aiming, click a monster to target it; * cycles targets',
   '',
   'KEYS open locked doors instantly (or pick the lock).  GENERATORS spawn monsters until smashed.',
@@ -582,6 +582,7 @@ const HELP = [
   'Unknown potions and scrolls are learned by use.  Word of Recall hops between town and your deepest level.',
   'INSCRIPTIONS: {@q1} answers 1 at the quaff prompt (@r @f @z ... likewise); {!q} asks before quaffing, {!*} before anything.',
   'Before you dive: a lantern, flasks of oil, Cure Light Wounds, Phase Door, and rations.',
+  'AUTOPLAY (ctrl+A, or the option in =) hands the hero to a bot that shops, explores, fights and dives. Any key takes it back.',
 ];
 export class HelpOverlay implements Overlay {
   draw(ctx: CanvasRenderingContext2D): void {

@@ -61,6 +61,18 @@ await page.screenshot({ path: path.join(OUT, 'smoke-dungeon.png') });
 const dungeonColours = await colours();
 const state2 = await page.evaluate(() => { const g = (window as any).__game.api.game; return { depth: g.level.depth, hp: g.player.chp, monsters: g.level.monsters.length, items: g.level.items.length, turn: g.turn }; });
 
+// Autoplay: ctrl+A hands the hero to the bot, and a real key press takes it back.
+const autoBefore = await page.evaluate(() => { const g = (window as any).__game.api.game; return { turn: g.turn, x: g.player.x, y: g.player.y }; });
+await page.evaluate(() => { const api = (window as any).__game.api; api.key('a', false, true); for (let i = 0; i < 400; i++) api.step(); });
+await page.waitForTimeout(200);
+await page.screenshot({ path: path.join(OUT, 'smoke-autoplay.png') });
+const autoState = await page.evaluate(() => { const g = (window as any).__game.api.game; return { turn: g.turn, x: g.player.x, y: g.player.y, on: g.options.autoplay, dead: g.player.dead, depth: g.level.depth }; });
+await page.evaluate(() => {
+  document.getElementById('stage')!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+  const api = (window as any).__game.api; for (let i = 0; i < 4; i++) api.step();
+});
+const autoStopped = await page.evaluate(() => !(window as any).__game.api.game.options.autoplay);
+
 // Inventory screen renders.
 await page.evaluate(() => (window as any).__game.api.key('i'));
 await page.waitForTimeout(300);
@@ -106,6 +118,9 @@ ok(hasSave, 'ctrl+S wrote a save to localStorage');
 ok(hasLore, 'monster memory persisted to localStorage');
 ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);
 ok(dumpLen > 200, `character dump has ${dumpLen} characters`);
+ok(autoState.turn > autoBefore.turn && (autoState.x !== autoBefore.x || autoState.y !== autoBefore.y || autoState.depth > 1), `autoplay played the hero (${autoState.turn - autoBefore.turn} game turns, depth ${autoState.depth})`);
+ok(autoState.on || autoState.dead, 'autoplay stayed on while the bot played');
+ok(autoStopped, 'a key press took control back from autoplay');
 ok(state3.cls === 'necromancer' && state3.ironman === true && state3.int >= 17 && state3.hp > 0, `birth with point-buy and birth options works (${JSON.stringify(state3)})`);
 console.log(bad ? '\nSMOKE FAILED' : '\nSMOKE OK: the game runs in a browser with no build step. Screenshots in dist/.');
 process.exit(bad ? 1 : 0);

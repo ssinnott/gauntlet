@@ -26,7 +26,7 @@ export class Input {
   }
   private onKey(e: KeyboardEvent): void {
     if (e.key === 'Tab' || e.key === ' ' || e.key.startsWith('Arrow') || e.key === 'Backspace') e.preventDefault();
-    if (e.ctrlKey && (e.key === 's' || e.key === 'S' || e.key === 'x' || e.key === 'X')) e.preventDefault();
+    if (e.ctrlKey && 'sSxXaA'.includes(e.key)) e.preventDefault();
     if (e.repeat) return; // we do our own repeat for direction keys; other keys never repeat
     this.keys.add(e.key);
     const ev: KeyEvent = { key: e.key, shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, code: e.code };
