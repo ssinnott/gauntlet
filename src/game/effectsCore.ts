@@ -4,7 +4,10 @@
 import { type Timed, type Monster, F, T } from './types.ts';
 import { computeBonuses, recomputeHp, recomputeMana } from './player.ts';
 import { tileAt, isEmptyFloor, hasFlag, updateView, monsterAt } from './level.ts';
-import { randint0, randint1, distance } from './util.ts';
+import { randint0, randint1, distance, oneIn as oneInM } from './util.ts';
+import { MONSTER_BY_ID } from './data/monsters.ts';
+const raceOfM = (m: Monster) => MONSTER_BY_ID[m.race];
+const monsterNameM = (m: Monster) => { const r = raceOfM(m); const s = r.flags.includes('UNIQUE') ? r.name : 'the ' + r.name; return s[0].toUpperCase() + s.slice(1); };
 import { disturb } from './world.ts';
 import type { Game } from './state.ts';
 
@@ -22,6 +25,7 @@ const TIMED_ON: Partial<Record<Timed, [string, string]>> = {
   blessed: ['You feel righteous!', '#a0ffa0'], sinvis: ['Your eyes feel very sensitive!', '#a0ffa0'], sinfra: ['Your eyes begin to tingle!', '#a0ffa0'], oppose_acid: ['You feel resistant to acid!', '#a0ffa0'],
   oppose_elec: ['You feel resistant to electricity!', '#a0ffa0'], oppose_fire: ['You feel resistant to fire!', '#a0ffa0'], oppose_cold: ['You feel resistant to cold!', '#a0ffa0'], oppose_pois: ['You feel resistant to poison!', '#a0ffa0'],
   telepathy: ['Your mind expands!', '#a0ffa0'], recall: ['The air about you becomes charged...', '#ffd040'], deep_descent: ['The floor opens beneath you!', '#ffd040'],
+  stoneskin: ['Your skin turns to stone!', '#a0ffa0'], regen: ['You feel your wounds knitting!', '#a0ffa0'], bold: ['You feel bold!', '#a0ffa0'], terror: ['You feel the need to run away, and fast!', '#ffd040'], bloodlust: ['You feel a lust for blood!', '#ff8080'], oppose_conf: ['You feel clear-headed!', '#a0ffa0'],
 };
 const TIMED_OFF: Partial<Record<Timed, string>> = {
   fast: 'You feel yourself slow down.', slow: 'You feel yourself speed up.', blind: 'You can see again.', paralyzed: 'You can move again.', confused: 'You feel less confused now.',
@@ -29,6 +33,7 @@ const TIMED_OFF: Partial<Record<Timed, string>> = {
   protevil: 'You no longer feel safe from evil.', invuln: 'You feel vulnerable once more.', hero: 'The heroism wears off.', shero: 'You feel less berserk.', shield: 'Your mystic shield crumbles away.',
   blessed: 'The prayer has expired.', sinvis: 'Your eyes feel less sensitive.', sinfra: 'Your eyes stop tingling.', oppose_acid: 'You feel less resistant to acid.', oppose_elec: 'You feel less resistant to electricity.',
   oppose_fire: 'You feel less resistant to fire.', oppose_cold: 'You feel less resistant to cold.', oppose_pois: 'You feel less resistant to poison.', telepathy: 'Your mind retracts.', recall: 'A tension leaves the air around you...',
+  stoneskin: 'Your skin returns to normal.', regen: 'You feel your wounds knit more slowly.', bold: 'You feel less bold.', terror: 'You no longer feel the need to run.', bloodlust: 'Your lust for blood fades.', oppose_conf: 'You feel less clear-headed.',
 };
 
 /** Set a timed effect to `v` turns, with the on/off messages. Returns true if something changed. */
@@ -38,7 +43,10 @@ export function setTimed(g: Game, t: Timed, v: number): boolean {
   const was = p.timed[t];
   if (was === v) return false;
   if (t === 'paralyzed' && g.bonuses.flags.has('FREE_ACT') && v > 0) return false;
-  if (t === 'afraid' && (g.bonuses.flags.has('RES_FEAR') || p.timed.hero || p.timed.shero) && v > 0) return false;
+  if (t === 'afraid' && (g.bonuses.flags.has('RES_FEAR') || p.timed.hero || p.timed.shero || p.timed.bold) && v > 0) return false;
+  if (t === 'stun' && v > was && was <= 100 && v > 100) g.msg.add('You have been knocked out!', '#ff4040');
+  else if (t === 'stun' && v > was && was <= 50 && v > 50) g.msg.add('You have been heavily stunned!', '#ff8080');
+  if (t === 'cut' && v > was && was <= 1000 && v > 1000) g.msg.add('You have been given a mortal wound!', '#ff4040');
   if (t === 'blind' && g.bonuses.flags.has('RES_BLIND') && v > 0) return false;
   if (t === 'confused' && g.bonuses.flags.has('RES_CONF') && v > 0) return false;
   if (was === 0 && v > 0) { const m = TIMED_ON[t]; if (m) g.msg.add(m[0], m[1]); }
@@ -54,6 +62,7 @@ export function playerSavingThrow(g: Game): boolean { return randint0(100) < g.b
 /** Teleport the player up to `dist` grids away (Angband's teleport_player: tries far first). */
 export function teleportPlayer(g: Game, dist: number): void {
   const p = g.player, lv = g.level;
+  if (g.bonuses.flags.has('NO_TELEPORT') && dist > 10) { g.msg.add('Something prevents you from teleporting.'); return; }
   let min = Math.floor(dist / 2);
   for (let tries = 0; tries < 1000; tries++) {
     if (tries % 100 === 99) { dist *= 2; min = Math.floor(min / 2); }
@@ -76,6 +85,7 @@ export function movePlayerTo(g: Game, x: number, y: number): void {
 }
 export function teleportMonster(g: Game, m: Monster, dist: number): void {
   const lv = g.level;
+  if (raceOfM(m).flags.includes('RES_TELE') && dist > 20 && !oneInM(3)) { if (m.visible) g.msg.add(`${monsterNameM(m)} resists!`); return; }
   let min = Math.floor(dist / 2);
   for (let tries = 0; tries < 500; tries++) {
     if (tries % 100 === 99) { dist *= 2; min = Math.floor(min / 2); }

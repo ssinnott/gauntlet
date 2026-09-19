@@ -1,14 +1,18 @@
 // Mage and priest spell lists, modelled on Angband 3.0. `book` names the ObjectKind id holding the spell.
-import type { SpellDef, Effect } from '../types.ts';
+import type { SpellDef, Effect, Realm } from '../types.ts';
 
 type S = [id: string, name: string, level: number, mana: number, fail: number, exp: number, effect: Effect, desc: string, aimed?: boolean];
+/** Per-class tables: [level, mana, fail, exp] for the classes that share the realm (Angband's magic_info). */
+type ClassTable = Record<string, [number, number, number, number]>;
+function book(realm: Realm, bookId: string, list: S[], tables: Record<string, ClassTable> = {}): SpellDef[] {
+  return list.map(([id, name, level, mana, fail, exp, effect, desc, aimed]) => ({ id, name, realm, book: bookId, level, mana, fail, exp, effect, desc, aimed: !!aimed, classes: tables[id] }));
+}
 
-function magic(book: string, list: S[]): SpellDef[] {
-  return list.map(([id, name, level, mana, fail, exp, effect, desc, aimed]) => ({ id, name, realm: 'magic', book, level, mana, fail, exp, effect, desc, aimed: !!aimed }));
-}
-function prayer(book: string, list: S[]): SpellDef[] {
-  return list.map(([id, name, level, mana, fail, exp, effect, desc, aimed]) => ({ id, name, realm: 'prayer', book, level, mana, fail, exp, effect, desc, aimed: !!aimed }));
-}
+const magic = (bookId: string, list: S[], tables?: Record<string, ClassTable>) => book('magic', bookId, list, tables);
+const prayer = (bookId: string, list: S[], tables?: Record<string, ClassTable>) => book('prayer', bookId, list, tables);
+const nature = (bookId: string, list: S[], tables?: Record<string, ClassTable>) => book('nature', bookId, list, tables);
+const necro = (bookId: string, list: S[], tables?: Record<string, ClassTable>) => book('necro', bookId, list, tables);
+export const _realms = [nature, necro];
 
 export const SPELLS: SpellDef[] = [
   ...magic('magic_book_1', [

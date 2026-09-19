@@ -6,6 +6,7 @@ import { makeItem, applyMagic, makeObject, kindOf, canStack, absorb, itemValue, 
 import { adj } from './player.ts';
 import { randint0, randint1, oneIn, weightedPick, damroll } from './util.ts';
 import type { Game } from './state.ts';
+import { noteItemKnown } from './effects.ts';
 
 const OWNERS: string[][] = [
   ['Bilbo the Friendly', 'Rincewind the Chicken', 'Sultan the Midget', 'Lyar-el the Comely'],
@@ -22,9 +23,9 @@ const ALWAYS: Record<number, string[]> = {
   0: ['ration', 'torch', 'flask_oil', 'spike', 'potion_clw', 'scroll_word_of_recall', 'iron_shot', 'arrow', 'bolt', 'cloak', 'key', 'hard_biscuit', 'strip_of_venison', 'lantern'],
   1: ['soft_leather_armor', 'hard_leather_cap', 'leather_gloves', 'soft_leather_boots', 'small_leather_shield'],
   2: ['dagger', 'short_sword', 'sling', 'short_bow', 'iron_shot', 'arrow', 'bolt', 'main_gauche'],
-  3: ['prayer_book_1', 'potion_clw', 'scroll_blessing', 'scroll_remove_curse'],
+  3: ['prayer_book_1', 'nature_book_1', 'potion_clw', 'scroll_blessing', 'scroll_remove_curse'],
   4: ['potion_clw', 'potion_csw', 'scroll_phase_door', 'scroll_word_of_recall', 'scroll_identify'],
-  5: ['magic_book_1', 'wand_magic_missile', 'wand_stinking_cloud', 'staff_light', 'rod_detect_trap'],
+  5: ['magic_book_1', 'necro_book_1', 'wand_magic_missile', 'wand_stinking_cloud', 'staff_light', 'rod_detect_trap'],
   6: [], 7: [],
 };
 /** The wider list a store draws from when restocking. */
@@ -32,9 +33,9 @@ const NORMAL: Record<number, string[]> = {
   0: ['ration', 'hard_biscuit', 'strip_of_venison', 'slime_mold', 'torch', 'lantern', 'flask_oil', 'spike', 'shovel', 'pick', 'cloak', 'soft_leather_boots', 'potion_apple_juice', 'potion_water', 'key', 'scroll_word_of_recall'],
   1: ['soft_leather_armor', 'soft_studded_leather', 'hard_leather_armor', 'hard_studded_leather', 'leather_scale_mail', 'metal_scale_mail', 'chain_mail', 'augmented_chain_mail', 'bar_chain_mail', 'metal_brigandine', 'small_leather_shield', 'small_metal_shield', 'large_leather_shield', 'large_metal_shield', 'hard_leather_cap', 'metal_cap', 'iron_helm', 'steel_helm', 'leather_gloves', 'gauntlets', 'soft_leather_boots', 'hard_leather_boots', 'metal_shod_boots', 'cloak', 'fur_cloak'],
   2: ['dagger', 'main_gauche', 'rapier', 'short_sword', 'sabre', 'cutlass', 'tulwar', 'broad_sword', 'long_sword', 'scimitar', 'bastard_sword', 'mace', 'war_hammer', 'morning_star', 'flail', 'lead_filled_mace', 'quarterstaff', 'spear', 'awl_pike', 'trident', 'pike', 'beaked_axe', 'broad_axe', 'battle_axe', 'lance', 'sling', 'short_bow', 'long_bow', 'light_crossbow', 'heavy_crossbow', 'iron_shot', 'rounded_pebble', 'arrow', 'bolt'],
-  3: ['prayer_book_1', 'prayer_book_2', 'prayer_book_3', 'prayer_book_4', 'potion_clw', 'potion_csw', 'potion_ccw', 'potion_boldness', 'potion_heroism', 'potion_slow_poison', 'potion_neutralize_poison', 'scroll_blessing', 'scroll_holy_chant', 'scroll_remove_curse', 'scroll_word_of_recall', 'scroll_protection_from_evil', 'mace', 'war_hammer', 'morning_star', 'flail'],
+  3: ['prayer_book_1', 'prayer_book_2', 'prayer_book_3', 'prayer_book_4', 'nature_book_1', 'nature_book_2', 'potion_clw', 'potion_csw', 'potion_ccw', 'potion_boldness', 'potion_heroism', 'potion_slow_poison', 'potion_neutralize_poison', 'scroll_blessing', 'scroll_holy_chant', 'scroll_remove_curse', 'scroll_word_of_recall', 'scroll_protection_from_evil', 'mace', 'war_hammer', 'morning_star', 'flail'],
   4: ['potion_clw', 'potion_csw', 'potion_ccw', 'potion_resist_heat', 'potion_resist_cold', 'potion_infravision', 'potion_slow_poison', 'potion_neutralize_poison', 'potion_boldness', 'potion_heroism', 'potion_berserk', 'potion_speed', 'scroll_phase_door', 'scroll_word_of_recall', 'scroll_identify', 'scroll_light', 'scroll_monster_confusion', 'scroll_magic_mapping', 'scroll_treasure_detection', 'scroll_trap_detection', 'scroll_door_stair_location', 'scroll_detect_invisible', 'scroll_recharging', 'scroll_enchant_weapon_to_hit', 'scroll_enchant_weapon_to_dam', 'scroll_enchant_armour', 'scroll_satisfy_hunger', 'scroll_remove_curse', 'scroll_deep_descent', 'scroll_teleport'],
-  5: ['magic_book_1', 'magic_book_2', 'magic_book_3', 'magic_book_4', 'ring_protection', 'ring_resist_fire', 'ring_resist_cold', 'ring_feather_falling', 'ring_see_invisible', 'ring_free_action', 'amulet_slow_digestion', 'amulet_resist_acid', 'amulet_resist_lightning', 'wand_magic_missile', 'wand_stinking_cloud', 'staff_light', 'staff_detect_evil', 'staff_mapping', 'staff_teleportation', 'staff_cure_light_wounds', 'rod_treasure_location', 'rod_detect_trap', 'rod_detect_door', 'rod_illumination'],
+  5: ['magic_book_1', 'magic_book_2', 'magic_book_3', 'magic_book_4', 'necro_book_1', 'necro_book_2', 'ring_protection', 'ring_resist_fire', 'ring_resist_cold', 'ring_feather_falling', 'ring_see_invisible', 'ring_free_action', 'amulet_slow_digestion', 'amulet_resist_acid', 'amulet_resist_lightning', 'wand_magic_missile', 'wand_stinking_cloud', 'staff_light', 'staff_detect_evil', 'staff_mapping', 'staff_teleportation', 'staff_cure_light_wounds', 'rod_treasure_location', 'rod_detect_trap', 'rod_detect_door', 'rod_illumination'],
   6: [], 7: [],
 };
 const STORE_TURNS = 1000;
@@ -118,6 +119,7 @@ export function buyPrice(g: Game, s: Store, it: Item): number {
 }
 /** What the store pays for one of `it` (never more than the owner's purse). */
 export function sellPrice(g: Game, s: Store, it: Item): number {
+  if (g.options.noSelling && s.type !== 7) return 0;
   const base = itemValue(it, g.flavors, isKnown(it, g.flavors));
   const factor = 100 * 100 / (s.greed * adj.chrGold(g.bonuses.stat.CHR) / 100);
   let price = Math.floor(base * factor / 100 / 1.4);
@@ -133,9 +135,9 @@ export function storeWants(s: Store, it: Item): boolean {
     case 0: return ['food', 'light', 'flask', 'spike', 'shot', 'arrow', 'bolt', 'digger', 'cloak', 'key'].includes(k.tval);
     case 1: return isArmor(k);
     case 2: return isWeapon(k) || k.tval === 'bow' || isAmmo(k);
-    case 3: return k.tval === 'prayer_book' || k.tval === 'hafted' || k.tval === 'potion' || k.tval === 'scroll';
+    case 3: return k.tval === 'prayer_book' || k.tval === 'nature_book' || k.tval === 'hafted' || k.tval === 'potion' || k.tval === 'scroll';
     case 4: return k.tval === 'potion' || k.tval === 'scroll';
-    case 5: return ['magic_book', 'ring', 'amulet', 'wand', 'staff', 'rod'].includes(k.tval);
+    case 5: return ['magic_book', 'necro_book', 'ring', 'amulet', 'wand', 'staff', 'rod'].includes(k.tval);
     case 6: return true;
   }
   return false;
@@ -162,7 +164,7 @@ export function storeSell(g: Game, s: Store, it: Item, n: number): number {
   const k = kindOf(it);
   if (k.tval === 'wand' || k.tval === 'staff') { const c = Math.floor(it.charges * n / it.number); sold.charges = c; it.charges -= c; }
   identify(sold, g.flavors);
-  if (s.type !== 7) { identify(it, g.flavors); g.player.gold += price; s.purse = Math.max(0, s.purse - price); }
+  if (s.type !== 7) { identify(it, g.flavors); noteItemKnown(g, it); g.player.gold += price; s.purse = Math.max(0, s.purse - price); }
   if (s.type === 7 || (kindOf(sold).cost > 0 && !sold.cursed)) addToStock(g, s, sold);
   return price;
 }

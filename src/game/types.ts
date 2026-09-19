@@ -65,10 +65,11 @@ export const F = {
   SEEN: 16,  // VIEW and lit: the player can actually see it right now
   TEMP: 32,  // scratch
   VAULT: 64, // inside a vault: no teleport-to, no stairs
+  GLYPH: 128, // a glyph of warding: monsters cannot enter (they may break it)
 } as const;
 
 /** Trap kinds stored in Level.aux on a TRAP / TRAP_HIDDEN tile. */
-export const TRAP_KINDS = ['trap door', 'pit', 'spiked pit', 'dart trap (strength)', 'dart trap (dexterity)', 'dart trap (constitution)', 'teleport rune', 'fire trap', 'acid trap', 'poison gas', 'sleep gas', 'summoning rune', 'alarm', 'strange rune (confusion)'] as const;
+export const TRAP_KINDS = ['trap door', 'pit', 'spiked pit', 'dart trap (strength)', 'dart trap (dexterity)', 'dart trap (constitution)', 'teleport rune', 'fire trap', 'acid trap', 'poison gas', 'sleep gas', 'summoning rune', 'alarm', 'strange rune (confusion)', 'poison pit', 'dart trap (slowness)', 'blinding gas'] as const;
 
 // ---------------------------------------------------------------------------------------------
 // Monsters
@@ -91,15 +92,21 @@ export type MonsterFlag =
   | 'IM_ACID' | 'IM_ELEC' | 'IM_FIRE' | 'IM_COLD' | 'IM_POIS' | 'HURT_LITE' | 'HURT_ROCK' | 'HURT_FIRE' | 'HURT_COLD'
   | 'NO_FEAR' | 'NO_CONF' | 'NO_SLEEP' | 'NO_STUN'
   | 'DROP_60' | 'DROP_90' | 'DROP_1D2' | 'DROP_2D2' | 'DROP_4D2' | 'ONLY_GOLD' | 'ONLY_ITEM' | 'DROP_GOOD' | 'DROP_GREAT'
-  | 'FORCE_SLEEP' | 'FORCE_DEPTH' | 'GENERATOR' | 'GROUP';
+  | 'FORCE_SLEEP' | 'FORCE_DEPTH' | 'GENERATOR' | 'GROUP'
+  // families used by summons and pits, and the two quest monsters
+  | 'HOUND' | 'SPIDER' | 'HYDRA' | 'ANGEL' | 'WRAITH' | 'QUESTOR'
+  | 'IM_NETHER' | 'RES_NEXUS' | 'RES_DISEN' | 'RES_PLASMA' | 'RES_TELE' | 'NO_FEAR_NEVER';
 
 export type MonsterSpell =
   | 'SHRIEK' | 'ARROW' | 'BOLT_ACID' | 'BOLT_ELEC' | 'BOLT_FIRE' | 'BOLT_COLD' | 'BOLT_POIS' | 'BOLT_NETHER' | 'BOLT_MANA' | 'MISSILE'
   | 'BALL_ACID' | 'BALL_ELEC' | 'BALL_FIRE' | 'BALL_COLD' | 'BALL_POIS' | 'BALL_NETHER' | 'BALL_DARK'
+  | 'BOLT_WATER' | 'BOLT_PLASMA' | 'BOLT_ICE' | 'BALL_MANA' | 'BALL_CHAOS' | 'BALL_WATER'
   | 'BR_ACID' | 'BR_ELEC' | 'BR_FIRE' | 'BR_COLD' | 'BR_POIS' | 'BR_NETHER' | 'BR_DARK' | 'BR_LITE' | 'BR_SOUND' | 'BR_CHAOS' | 'BR_CONF'
-  | 'CAUSE_1' | 'CAUSE_2' | 'CAUSE_3' | 'MIND_BLAST' | 'BRAIN_SMASH' | 'DRAIN_MANA'
-  | 'SCARE' | 'CONF' | 'BLIND' | 'SLOW' | 'HOLD' | 'HASTE' | 'HEAL' | 'BLINK' | 'TPORT' | 'TELE_TO' | 'TELE_AWAY' | 'DARKNESS' | 'TRAPS' | 'FORGET'
-  | 'S_MONSTER' | 'S_MONSTERS' | 'S_KIN' | 'S_UNDEAD' | 'S_DRAGON' | 'S_DEMON' | 'S_ANIMAL';
+  | 'BR_NEXUS' | 'BR_TIME' | 'BR_INERTIA' | 'BR_GRAVITY' | 'BR_SHARDS' | 'BR_PLASMA' | 'BR_FORCE' | 'BR_DISEN' | 'BR_DISINT' | 'BR_MANA'
+  | 'CAUSE_1' | 'CAUSE_2' | 'CAUSE_3' | 'CAUSE_4' | 'MIND_BLAST' | 'BRAIN_SMASH' | 'DRAIN_MANA'
+  | 'SCARE' | 'CONF' | 'BLIND' | 'SLOW' | 'HOLD' | 'HASTE' | 'HEAL' | 'BLINK' | 'TPORT' | 'TELE_TO' | 'TELE_AWAY' | 'TELE_LEVEL' | 'DARKNESS' | 'TRAPS' | 'FORGET'
+  | 'S_MONSTER' | 'S_MONSTERS' | 'S_KIN' | 'S_UNDEAD' | 'S_DRAGON' | 'S_DEMON' | 'S_ANIMAL'
+  | 'S_HYDRA' | 'S_ANGEL' | 'S_SPIDER' | 'S_HOUND' | 'S_HI_UNDEAD' | 'S_HI_DRAGON' | 'S_HI_DEMON' | 'S_WRAITH' | 'S_UNIQUE';
 
 export interface MonsterRace {
   id: string;
@@ -173,13 +180,14 @@ export interface Monster extends Pos {
 
 export type TVal = 'sword' | 'hafted' | 'polearm' | 'digger' | 'bow' | 'shot' | 'arrow' | 'bolt' |
   'soft_armor' | 'hard_armor' | 'dragon_armor' | 'shield' | 'helm' | 'crown' | 'cloak' | 'gloves' | 'boots' |
-  'ring' | 'amulet' | 'light' | 'potion' | 'scroll' | 'wand' | 'staff' | 'rod' | 'food' | 'flask' | 'magic_book' | 'prayer_book' |
+  'ring' | 'amulet' | 'light' | 'potion' | 'scroll' | 'wand' | 'staff' | 'rod' | 'food' | 'flask' | 'magic_book' | 'prayer_book' | 'nature_book' | 'necro_book' |
   'spike' | 'chest' | 'gold' | 'key' | 'junk';
 
 export type Stat = 'STR' | 'INT' | 'WIS' | 'DEX' | 'CON' | 'CHR';
 export const STATS: Stat[] = ['STR', 'INT', 'WIS', 'DEX', 'CON', 'CHR'];
 
-export type Element = 'acid' | 'elec' | 'fire' | 'cold' | 'pois' | 'lite' | 'dark' | 'nether' | 'sound' | 'chaos' | 'conf' | 'mana' | 'missile' | 'holy' | 'water' | 'nexus' | 'disen';
+export type Element = 'acid' | 'elec' | 'fire' | 'cold' | 'pois' | 'lite' | 'dark' | 'nether' | 'sound' | 'chaos' | 'conf' | 'mana' | 'missile' | 'holy' | 'water' | 'nexus' | 'disen' |
+  'shards' | 'time' | 'inertia' | 'gravity' | 'plasma' | 'force' | 'ice' | 'disint';
 
 export type ObjectFlag =
   // pval-driven bonuses
@@ -194,15 +202,15 @@ export type ObjectFlag =
   // abilities
   | 'FREE_ACT' | 'HOLD_LIFE' | 'SEE_INVIS' | 'TELEPATHY' | 'SLOW_DIGEST' | 'REGEN' | 'FEATHER' | 'LITE' | 'BLESSED'
   // curses / quirks
-  | 'CURSED' | 'HEAVY_CURSE' | 'AGGRAVATE' | 'TELEPORT' | 'DRAIN_EXP'
+  | 'CURSED' | 'HEAVY_CURSE' | 'PERMA_CURSE' | 'AGGRAVATE' | 'TELEPORT' | 'DRAIN_EXP' | 'DRAIN_HP' | 'DRAIN_MANA' | 'NO_TELEPORT'
   | 'IGNORE_ACID' | 'IGNORE_ELEC' | 'IGNORE_FIRE' | 'IGNORE_COLD' | 'NO_FUEL' | 'EASY_KNOW' | 'SHOW_MODS' | 'ACTIVATE' | 'THROWING';
 
 /** Timed player effects (Angband's TMD_*). */
 export type Timed = 'fast' | 'slow' | 'blind' | 'paralyzed' | 'confused' | 'afraid' | 'image' | 'poisoned' | 'cut' | 'stun' |
   'protevil' | 'invuln' | 'hero' | 'shero' | 'shield' | 'blessed' | 'sinvis' | 'sinfra' | 'oppose_acid' | 'oppose_elec' | 'oppose_fire' | 'oppose_cold' | 'oppose_pois' |
-  'telepathy' | 'recall' | 'deep_descent';
+  'telepathy' | 'recall' | 'deep_descent' | 'stoneskin' | 'regen' | 'bold' | 'terror' | 'bloodlust' | 'oppose_conf';
 
-export type DetectWhat = 'monsters' | 'invisible' | 'evil' | 'objects' | 'gold' | 'traps' | 'doors' | 'stairs' | 'all';
+export type DetectWhat = 'monsters' | 'invisible' | 'evil' | 'objects' | 'gold' | 'traps' | 'doors' | 'stairs' | 'all' | 'enchanted' | 'living';
 
 /** What a consumable, a device, a spell or an activation does. Executed by effects.ts. */
 export type Effect =
@@ -242,6 +250,10 @@ export type Effect =
   | { kind: 'sleep_monster' } | { kind: 'slow_monster' } | { kind: 'confuse_monster' } | { kind: 'scare_monster' }
   | { kind: 'haste_monster' } | { kind: 'heal_monster' } | { kind: 'clone_monster' } | { kind: 'polymorph' } | { kind: 'teleport_other' }
   | { kind: 'drain_life'; dam: number }
+  | { kind: 'vampiric'; dam: number }      // drain life from one monster and heal the caster
+  | { kind: 'crush'; mult: number }        // kill a monster whose hp is below player level * mult
+  | { kind: 'dispel_curse' }
+  | { kind: 'unbar' }                      // destroy doors in a beam
   | { kind: 'dispel'; what: 'evil' | 'undead' | 'all'; dam: number }
   | { kind: 'turn_undead' }
   | { kind: 'banish' }         // genocide one race
@@ -405,7 +417,15 @@ export interface RaceDef {
   infra: number;
   flags: ObjectFlag[];
   desc: string;
+  /** Rig scale for the hero sprite (1 = human). */
+  size?: number;
+  /** Short history fragments used to write the birth history. */
+  history?: string[];
 }
+
+export type Realm = 'magic' | 'prayer' | 'nature' | 'necro';
+export const REALM_BOOK: Record<Realm, TVal> = { magic: 'magic_book', prayer: 'prayer_book', nature: 'nature_book', necro: 'necro_book' };
+export const REALM_WORD: Record<Realm, [spell: string, cast: string, book: string]> = { magic: ['spell', 'cast', 'magic book'], prayer: ['prayer', 'recite', 'prayer book'], nature: ['spell', 'call', 'nature book'], necro: ['ritual', 'perform', 'necromantic tome'] };
 
 export interface ClassDef {
   id: string;
@@ -421,8 +441,10 @@ export interface ClassDef {
   maxAttacks: number;
   minWeight: number;
   attackMultiplier: number;
-  realm: 'magic' | 'prayer' | null;
+  realm: Realm | null;
   spellStat: 'INT' | 'WIS';
+  /** Blackguards and rogues get their spells late and few. */
+  maxSpellLevel?: number;
   firstSpellLevel: number;
   /** [kind id, count] granted at birth. */
   startItems: [string, number][];
@@ -435,7 +457,7 @@ export interface ClassDef {
 export interface SpellDef {
   id: string;
   name: string;
-  realm: 'magic' | 'prayer';
+  realm: Realm;
   /** Book kind id. */
   book: string;
   level: number;
@@ -443,6 +465,8 @@ export interface SpellDef {
   fail: number;
   /** First-cast experience. */
   exp: number;
+  /** Per-class overrides of [level, mana, fail, exp] (Angband's magic_info tables); a level > 50 means the class never learns it. */
+  classes?: Record<string, [number, number, number, number]>;
   effect: Effect;
   /** Needs a direction. */
   aimed?: boolean;
@@ -484,6 +508,8 @@ export interface Player extends Pos {
   kills: number;
   /** Word of recall target depth. */
   recallDepth: number;
+  /** Birth history text. */
+  history?: string;
   /** Render-only interpolation. */
   vx?: number;
   vy?: number;
@@ -509,6 +535,8 @@ export interface PlayerBonuses {
   /** Encumbrance from the weapon being too heavy. */
   heavyWeapon: boolean;
   heavyBow: boolean;
+  /** Infravision from gear and potions (the race's own is added by the caller). */
+  infra: number;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -530,6 +558,8 @@ export interface Level {
   feeling: number;
   /** Turns spent on this level. */
   age: number;
+  /** The town only: was it generated in daylight? */
+  daytime?: boolean;
 }
 
 export type StoreType = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;

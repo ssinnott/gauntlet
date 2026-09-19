@@ -29,10 +29,14 @@ export const TOWN_H = 33;
 
 /** Max dungeon depth (levels); 50 ft per level as in Angband. */
 export const MAX_DEPTH = 100;
+/** Game turns of daylight (and then of night) in the town. */
+export const TOWN_DAWN = 10000;
 
 /** Inventory capacity and equipment slots. */
 export const INVEN_MAX = 23;
 export const QUIVER_MAX = 40;
+/** Stacks the quiver can hold. */
+export const QUIVER_SLOTS = 8;
 
 /** Turns of the game clock per player turn at normal speed (Angband: 10 game turns = 1 player turn at +0). */
 export const TURNS_PER_NORMAL_MOVE = 10;

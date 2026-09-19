@@ -16,15 +16,27 @@ import { disturb, dropNear } from './world.ts';
 import { randint0, randint1, oneIn, damroll, distance } from './util.ts';
 import { project, targetFromDir } from './projection.ts';
 import { maintainStore } from './stores.ts';
-import { INVEN_MAX, FOOD_MAX } from '../constants.ts';
+import { INVEN_MAX, FOOD_MAX, QUIVER_SLOTS } from '../constants.ts';
+import { deepestAllowed } from './game.ts';
+import { REALM_BOOK, REALM_WORD, type Realm } from './types.ts';
+import { noteItemKnown } from './effects.ts';
 
 // ---------------------------------------------------------------------------------------------
 // Movement
 
+/** The player cannot act while paralysed or knocked out: time passes instead. Returns true if a turn was spent. */
+export function cannotAct(g: Game): boolean {
+  const p = g.player;
+  if (p.dead) return true;
+  if (p.timed.paralyzed || p.timed.stun > 100) { endTurn(g); return true; }
+  return false;
+}
+/** Do nothing for a turn (hold, or the `,` on an empty grid). */
+export function passTurn(g: Game): void { endTurn(g); }
+
 export function moveDir(g: Game, dir: number, opts: { running?: boolean; travel?: boolean } = {}): void {
   const p = g.player, lv = g.level;
-  if (p.dead) return;
-  if (p.timed.paralyzed) return;
+  if (cannotAct(g)) return;
   if (p.timed.confused && randint0(100) < 40) dir = randomDir();
   const nx = p.x + DIR_DX[dir], ny = p.y + DIR_DY[dir];
   if (DIR_DX[dir]) p.facing = DIR_DX[dir] > 0 ? 1 : -1;
@@ -44,7 +56,7 @@ export function moveDir(g: Game, dir: number, opts: { running?: boolean; travel?
     endTurn(g);
     return;
   }
-  if (t === T.DOOR_CLOSED) { openDoor(g, nx, ny); return; }
+  if (t === T.DOOR_CLOSED) { if (auxAt(lv, nx, ny) >= 100) { if (!opts.running && !opts.travel) g.msg.add('The door appears to be stuck. (B bashes it)'); disturb(g); return; } openDoor(g, nx, ny); return; }
   if (t === T.RUBBLE || isVein(t) || t === T.GRANITE || t === T.SECRET_DOOR) {
     if (opts.running || opts.travel) { disturb(g); return; }
     if (t === T.SECRET_DOOR || t === T.GRANITE) {
@@ -73,8 +85,8 @@ export function moveDir(g: Game, dir: number, opts: { running?: boolean; travel?
     hitTrap(g, nx, ny);
     if (g.levelChange || p.dead) return;
   }
-  // Pick up what is here (Gauntlet-style automatic pickup).
-  pickupHere(g, true);
+  // Pick up what is here (Gauntlet-style automatic pickup); gold and keys always.
+  pickupHere(g, true, !g.options.autoPickup);
   if (t === T.STAIRS_DOWN && !opts.running) g.msg.add(lv.depth === 0 ? 'The dungeon entrance yawns below you. Press > to descend.' : 'There is a down staircase here. Press > to descend.', '#a0a0ff');
   if (t === T.STAIRS_UP && !opts.running) g.msg.add('There is an up staircase here. Press < to ascend.', '#a0a0ff');
   endTurn(g);
@@ -83,6 +95,7 @@ export function moveDir(g: Game, dir: number, opts: { running?: boolean; travel?
 export function openDoor(g: Game, x: number, y: number): void {
   const p = g.player, lv = g.level;
   const lock = auxAt(lv, x, y);
+  if (lock >= 100) { g.msg.add('The door appears to be stuck.'); return; }
   if (lock === 0) { setTile(lv, x, y, T.DOOR_OPEN); g.flowDirty = true; endTurn(g); return; }
   // Locked: a Gauntlet key opens it instantly; otherwise pick it.
   if (p.keys > 0) { p.keys--; setAux(lv, x, y, 0); setTile(lv, x, y, T.DOOR_OPEN); g.msg.add('You unlock the door with a key.', '#ffd040'); g.flowDirty = true; endTurn(g); return; }
@@ -105,8 +118,52 @@ export function closeDoor(g: Game, dir: number): void {
   if (monsterAt(lv, x, y)) { g.msg.add('There is a monster in the way!'); return; }
   setTile(lv, x, y, T.DOOR_CLOSED); g.flowDirty = true; endTurn(g);
 }
+/** Bash a door open (Angband's do_cmd_bash): strength against the lock, with a chance to stumble. */
+export function bashDoor(g: Game, dir: number): void {
+  const p = g.player, lv = g.level, b = g.bonuses;
+  if (cannotAct(g)) return;
+  const x = p.x + DIR_DX[dir], y = p.y + DIR_DY[dir];
+  const t = tileAt(lv, x, y);
+  if (t !== T.DOOR_CLOSED) { g.msg.add('You see nothing there to bash.'); return; }
+  const lock = auxAt(lv, x, y);
+  const power = lock >= 100 ? (lock - 100) * 10 + 20 : lock * 10;
+  const bash = adj.strBlow(b.stat.STR) * 10 / 3 + b.weight / 10 / 5 + p.lev;
+  const chance = Math.max(1, Math.floor(bash - power));
+  g.msg.add('You smash into the door!');
+  if (randint0(100) < chance) {
+    g.msg.add('The door crashes open!', '#a0ffa0');
+    setAux(lv, x, y, 0);
+    setTile(lv, x, y, oneIn(2) ? T.DOOR_BROKEN : T.DOOR_OPEN);
+    g.flowDirty = true;
+  } else if (randint0(100) < adj.dexTa(b.stat.DEX) * 5 + p.lev + 20) {
+    g.msg.add('The door holds firm.');
+    g.repeating = { cmd: 'bash', dir, left: 20 };
+  } else {
+    g.msg.add('You are off-balance.', '#ffd040');
+    setTimed(g, 'paralyzed', 1 + randint0(2));
+  }
+  endTurn(g);
+}
+/** Jam a door shut with a spike (Angband's do_cmd_spike). Jammed doors carry aux = 100 + strength. */
+export function jamDoor(g: Game, dir: number): void {
+  const p = g.player, lv = g.level;
+  if (cannotAct(g)) return;
+  const x = p.x + DIR_DX[dir], y = p.y + DIR_DY[dir];
+  const t = tileAt(lv, x, y);
+  if (t !== T.DOOR_CLOSED) { g.msg.add('You see nothing there to spike.'); return; }
+  if (monsterAt(lv, x, y)) { g.msg.add('There is a monster in the way!'); return; }
+  const spike = p.inven.find(i => kindOf(i).tval === 'spike');
+  if (!spike) { g.msg.add('You have no spikes!'); return; }
+  const lock = auxAt(lv, x, y);
+  setAux(lv, x, y, Math.min(107, lock >= 100 ? lock + 1 : 100));
+  spike.number--; if (spike.number <= 0) removeFromInventory(g, spike);
+  g.msg.add('You jam the door with a spike.');
+  endTurn(g);
+}
+
 export function tunnelInto(g: Game, x: number, y: number): void {
   const p = g.player, lv = g.level;
+  if (cannotAct(g)) return;
   const t = tileAt(lv, x, y);
   const skill = g.bonuses.skills.digging;
   const has = (need: number, name: string) => {
@@ -185,6 +242,7 @@ export function travelTo(g: Game, x: number, y: number): boolean {
 export function goDown(g: Game): void {
   const p = g.player;
   if (tileAt(g.level, p.x, p.y) !== T.STAIRS_DOWN) { g.msg.add('I see no down staircase here.'); return; }
+  if (g.level.depth + 1 > deepestAllowed(g)) { g.msg.add('A dread power bars the way below. Sauron must fall first.', '#ff8080'); return; }
   g.msg.add(g.level.depth === 0 ? 'You enter the dungeon.' : 'You enter a maze of down staircases.');
   g.levelChange = { depth: g.level.depth + 1, by: 'down' };
   endTurn(g);
@@ -192,6 +250,7 @@ export function goDown(g: Game): void {
 export function goUp(g: Game): void {
   const p = g.player;
   if (tileAt(g.level, p.x, p.y) !== T.STAIRS_UP) { g.msg.add('I see no up staircase here.'); return; }
+  if (g.options.ironman) { g.msg.add('Nothing happens: there is no way back up for you.'); return; }
   g.msg.add('You enter a maze of up staircases.');
   g.levelChange = { depth: g.level.depth - 1, by: 'up' };
   endTurn(g);
@@ -226,9 +285,12 @@ export function searchAround(g: Game, takeTurn = true): void {
 }
 export function disarm(g: Game, dir: number): void {
   const p = g.player, lv = g.level;
+  if (cannotAct(g)) return;
   const x = p.x + DIR_DX[dir], y = p.y + DIR_DY[dir];
   const t = tileAt(lv, x, y);
-  if (t === T.DOOR_CLOSED && auxAt(lv, x, y) > 0) { openDoor(g, x, y); return; }
+  const chest = itemsAt(lv, x, y).find(fi => kindOf(fi.item).tval === 'chest') || (dir === 5 ? itemsAt(lv, p.x, p.y).find(fi => kindOf(fi.item).tval === 'chest') : undefined);
+  if (chest) { disarmChest(g, chest); return; }
+  if (t === T.DOOR_CLOSED && auxAt(lv, x, y) > 0 && auxAt(lv, x, y) < 100) { openDoor(g, x, y); return; }
   if (t !== T.TRAP) { g.msg.add('You see nothing there to disarm.'); return; }
   const kind = auxAt(lv, x, y);
   let j = g.bonuses.skills.disarm - 5 - kind * 2;
@@ -257,6 +319,9 @@ export function hitTrap(g: Game, x: number, y: number): void {
     case 11: { g.msg.add('You are enveloped in a cloud of smoke!', '#ff8080'); setTile(lv, x, y, T.FLOOR); for (let i = 0; i < 2 + randint1(3); i++) { const pos = nearFloor(lv, x, y, 3); const r = pickRace(g, lv.depth + 2); if (pos && r) createMonster(g, r.id, pos.x, pos.y, false); } break; }
     case 12: g.msg.add('An alarm sounds! Every monster on the level is awake.', '#ff8080'); for (const m of lv.monsters) m.sleep = 0; break;
     case 13: g.msg.add('A puff of confusing gas surrounds you!'); if (!b.flags.has('RES_CONF')) setTimed(g, 'confused', p.timed.confused + randint1(10) + 5); break;
+    case 14: if (b.flags.has('FEATHER')) g.msg.add('You float gently to the bottom of the pit.'); else { g.msg.add('You fall into a spiked pit!', '#ff8080'); takeHit(g, damroll(2, 6), 'a poison pit'); if (oneIn(2)) { g.msg.add('You are impaled on poisonous spikes!', '#ff8080'); takeHit(g, damroll(2, 6), 'a poison pit'); setTimed(g, 'cut', p.timed.cut + randint1(10)); if (!b.flags.has('RES_POIS') && !p.timed.oppose_pois) setTimed(g, 'poisoned', p.timed.poisoned + randint1(20) + 10); } } break;
+    case 15: if (testHit(125, b.ac + b.toAc, true)) { g.msg.add('A small dart hits you!', '#ff8080'); takeHit(g, damroll(1, 4), 'a dart trap'); if (!b.flags.has('FREE_ACT')) setTimed(g, 'slow', p.timed.slow + randint0(20) + 20); } else g.msg.add('A small dart barely misses you.'); break;
+    case 16: g.msg.add('A black gas surrounds you!'); if (!b.flags.has('RES_BLIND')) setTimed(g, 'blind', p.timed.blind + randint0(50) + 25); break;
     default: g.msg.add('You set off a trap.'); break;
   }
 }
@@ -264,13 +329,14 @@ export function hitTrap(g: Game, x: number, y: number): void {
 // ---------------------------------------------------------------------------------------------
 // Items: pickup, drop, wear
 
-export function pickupHere(g: Game, auto: boolean): boolean {
+export function pickupHere(g: Game, auto: boolean, goldOnly = false): boolean {
   const p = g.player, lv = g.level;
   const here = itemsAt(lv, p.x, p.y);
   if (!here.length) { if (!auto) g.msg.add('There is nothing here to pick up.'); return false; }
   let took = false;
   for (const fi of here) {
     const k = kindOf(fi.item);
+    if (goldOnly && k.tval !== 'gold' && k.tval !== 'key') { if (auto && !fi.item.known && !isAware(g.flavors, fi.item.kind)) { /* still see it */ } g.msg.add(`You see ${itemName(fi.item, g.flavors)}.`); continue; }
     if (k.tval === 'gold') {
       p.gold += fi.item.pval; g.stats.goldFound += fi.item.pval;
       g.msg.add(`You have found ${fi.item.pval} gold pieces worth of ${k.name}.`, '#ffd040');
@@ -290,7 +356,7 @@ export function addToInventory(g: Game, it: Item): boolean {
   const p = g.player, k = kindOf(it);
   if (isAmmo(k)) {
     for (const q of p.quiver) if (canStack(q, it, g.flavors)) { absorb(q, it); return true; }
-    if (p.quiver.length < 8) { p.quiver.push(it); return true; }
+    if (p.quiver.length < QUIVER_SLOTS) { p.quiver.push(it); return true; }
     return false;
   }
   for (const o of p.inven) if (canStack(o, it, g.flavors)) { absorb(o, it); return true; }
@@ -332,6 +398,8 @@ export function wield(g: Game, it: Item): void {
   one.sense = undefined;
   if (k.flavored) { makeAware(g.flavors, one.kind); }
   if (itemFlags(one).has('EASY_KNOW') || k.tval === 'light' || k.tval === 'bow') one.known = true;
+  if (one.artifact && g.artifactsSeen.includes(one.artifact)) one.known = true;
+  if (one.known) noteItemKnown(g, one);
   const verb = slot === 'weapon' ? 'You are wielding' : slot === 'bow' ? 'You are shooting with' : slot === 'light' ? 'Your light source is' : 'You are wearing';
   g.msg.add(`${verb} ${itemName(one, g.flavors)}.`);
   if (one.cursed) { g.msg.add('Oops! It feels deathly cold!', '#ff8080'); one.known = true; }
@@ -362,12 +430,13 @@ function useConsumable(g: Game, it: Item, ctx: EffectCtx, verb: string, consume:
   const wasAware = isAware(g.flavors, it.kind);
   if (!wasAware) g.msg.add(`You ${verb} ${itemName(it, g.flavors, { count: false })}.`);
   const noticed = k.effect ? runEffect(g, k.effect, { ...ctx, item: it }) : false;
-  if (noticed) { makeAware(g.flavors, it.kind); if (!wasAware) { it.known = true; g.msg.add(`It was ${itemName({ ...it, number: 1 }, g.flavors)}.`, '#c0c0ff'); gainExp(g, Math.max(1, Math.floor((k.level + (p.lev >> 1)) / p.lev))); } }
+  if (noticed) { makeAware(g.flavors, it.kind); noteItemKnown(g, it); if (!wasAware) { it.known = true; g.msg.add(`It was ${itemName({ ...it, number: 1 }, g.flavors)}.`, '#c0c0ff'); gainExp(g, Math.max(1, Math.floor((k.level + (p.lev >> 1)) / p.lev))); } }
   else markTried(g.flavors, it.kind);
   if (consume) { it.number--; if (it.number <= 0) removeFromInventory(g, it); }
 }
 export function quaff(g: Game, it: Item): void {
   const p = g.player;
+  if (cannotAct(g)) return;
   useConsumable(g, it, {}, 'quaff', true);
   const k = kindOf(it);
   p.food = Math.min(FOOD_MAX - 1, p.food + (k.pval || 0) + 20);
@@ -375,6 +444,7 @@ export function quaff(g: Game, it: Item): void {
 }
 export function eat(g: Game, it: Item): void {
   const p = g.player, k = kindOf(it);
+  if (cannotAct(g)) return;
   if (k.tval !== 'food') { g.msg.add('You cannot eat that!'); return; }
   const before = foodState(p.food);
   g.msg.add(`You eat ${itemName(it, g.flavors, { count: false })}.`);
@@ -387,6 +457,7 @@ export function eat(g: Game, it: Item): void {
 }
 export function read(g: Game, it: Item, ctx: EffectCtx = {}): void {
   const p = g.player;
+  if (cannotAct(g)) return;
   if (p.timed.blind) { g.msg.add('You can\'t see anything.'); return; }
   if (g.bonuses.lightRadius === 0 && !hasFlag(g.level, p.x, p.y, F.GLOW)) { g.msg.add('You have no light to read by.'); return; }
   if (p.timed.confused) { g.msg.add('You are too confused!'); return; }
@@ -405,6 +476,7 @@ function deviceOk(g: Game, it: Item): boolean {
 }
 export function aim(g: Game, it: Item, dir: number, target?: Pos | null): void {
   const k = kindOf(it);
+  if (cannotAct(g)) return;
   if (!deviceOk(g, it)) { endTurn(g); return; }
   if (it.charges <= 0) { g.msg.add('The wand has no charges left.'); markTried(g.flavors, it.kind); endTurn(g); return; }
   it.charges--;
@@ -412,6 +484,7 @@ export function aim(g: Game, it: Item, dir: number, target?: Pos | null): void {
   endTurn(g);
 }
 export function useStaff(g: Game, it: Item, ctx: EffectCtx = {}): void {
+  if (cannotAct(g)) return;
   if (!deviceOk(g, it)) { endTurn(g); return; }
   if (it.charges <= 0) { g.msg.add('The staff has no charges left.'); markTried(g.flavors, it.kind); endTurn(g); return; }
   it.charges--;
@@ -420,6 +493,7 @@ export function useStaff(g: Game, it: Item, ctx: EffectCtx = {}): void {
 }
 export function zap(g: Game, it: Item, dir: number, target?: Pos | null, ctx: EffectCtx = {}): void {
   const k = kindOf(it);
+  if (cannotAct(g)) return;
   if (it.timeout > 0) { g.msg.add('The rod is still charging.'); return; }
   if (!deviceOk(g, it)) { endTurn(g); return; }
   it.timeout = k.recharge || 20;
@@ -460,6 +534,7 @@ export function refuel(g: Game, it: Item): void {
 
 export function throwItem(g: Game, it: Item, dir: number, target?: Pos | null): void {
   const p = g.player, b = g.bonuses, lv = g.level, k = kindOf(it);
+  if (cannotAct(g)) return;
   const one = removeFromInventory(g, it, 1);
   const tgt = targetFromDir(g, dir, target);
   const range = Math.max(1, Math.min(10, Math.floor(adj.strBlow(b.stat.STR) * 10 / Math.max(10, k.weight))));
@@ -492,6 +567,7 @@ export function throwItem(g: Game, it: Item, dir: number, target?: Pos | null): 
 }
 export function fire(g: Game, ammo: Item, dir: number, target?: Pos | null): void {
   const p = g.player, b = g.bonuses, lv = g.level;
+  if (cannotAct(g)) return;
   const bow = p.equip.bow;
   if (!bow) { g.msg.add('You have nothing to fire with.'); return; }
   const bk = kindOf(bow), ak = kindOf(ammo);
@@ -543,24 +619,33 @@ function criticalShot(weight: number, plus: number, dam: number, lev: number): [
 // ---------------------------------------------------------------------------------------------
 // Spells
 
+const PRIMARY_CASTERS = ['mage', 'priest', 'druid', 'necromancer'];
 export function classSpells(g: Game): SpellDef[] {
   const c = CLASS_BY_ID[g.player.cls];
   if (!c.realm) return [];
-  return SPELLS.filter(s => s.realm === c.realm);
+  return SPELLS.filter(s => s.realm === c.realm && spellLevel(g, s) <= 50);
 }
-/** Level and mana adjusted for non-primary casters (rogues, rangers, paladins learn late). */
+/** The realm's words: [spell, cast, book]. */
+export function realmWords(g: Game): [string, string, string] { const c = CLASS_BY_ID[g.player.cls]; return REALM_WORD[(c.realm || 'magic') as Realm]; }
+/** Level and mana adjusted for non-primary casters (rogues, rangers, paladins learn late), or the class's own table when the spell has one. */
 export function spellLevel(g: Game, s: SpellDef): number {
   const cls = g.player.cls;
-  const mult = cls === 'mage' || cls === 'priest' ? 1 : cls === 'paladin' ? 1.6 : 1.4;
-  return Math.min(50, Math.max(1, Math.round(s.level * mult)));
+  const t = s.classes?.[cls];
+  if (t) return Math.max(1, t[0]);
+  const mult = PRIMARY_CASTERS.includes(cls) ? 1 : cls === 'paladin' || cls === 'blackguard' ? 1.6 : 1.4;
+  return Math.min(51, Math.max(1, Math.round(s.level * mult)));
 }
 export function spellMana(g: Game, s: SpellDef): number {
   const cls = g.player.cls;
-  return cls === 'mage' || cls === 'priest' ? s.mana : Math.ceil(s.mana * 1.3);
+  const t = s.classes?.[cls];
+  if (t) return t[1];
+  return PRIMARY_CASTERS.includes(cls) ? s.mana : Math.ceil(s.mana * 1.3);
 }
+export function spellExp(g: Game, s: SpellDef): number { const t = s.classes?.[g.player.cls]; return t ? t[3] : s.exp; }
 export function spellFail(g: Game, s: SpellDef): number {
   const p = g.player, c = CLASS_BY_ID[p.cls];
-  let chance = s.fail;
+  const t = s.classes?.[p.cls];
+  let chance = t ? t[2] : s.fail;
   chance -= 3 * (p.lev - spellLevel(g, s));
   chance -= 3 * (adj.magStudy(g.bonuses.stat[c.spellStat]) - 1);
   const mana = spellMana(g, s);
@@ -568,12 +653,13 @@ export function spellFail(g: Game, s: SpellDef): number {
   const min = adj.magFail(g.bonuses.stat[c.spellStat]);
   if (chance < min) chance = min;
   if (p.timed.stun > 50) chance += 20; else if (p.timed.stun) chance += 10;
-  if (c.realm === 'magic' && p.equip.gloves && !itemFlags(p.equip.gloves).has('FREE_ACT')) chance += 10;
+  if ((c.realm === 'magic' || c.realm === 'necro') && p.equip.gloves && !itemFlags(p.equip.gloves).has('FREE_ACT')) chance += 10;
   return Math.max(0, Math.min(95, chance));
 }
 export function knownBooks(g: Game): Item[] {
   const c = CLASS_BY_ID[g.player.cls];
-  return g.player.inven.filter(i => kindOf(i).tval === (c.realm === 'magic' ? 'magic_book' : 'prayer_book'));
+  if (!c.realm) return [];
+  return g.player.inven.filter(i => kindOf(i).tval === REALM_BOOK[c.realm as Realm]);
 }
 export function spellsAvailable(g: Game): SpellDef[] {
   const books = knownBooks(g);
@@ -592,49 +678,83 @@ export function study(g: Game, spellId?: string): boolean {
   const p = g.player, c = CLASS_BY_ID[p.cls];
   if (newSpellCount(g) <= 0) { g.msg.add('You cannot learn any new spells right now.'); return false; }
   const cands = spellsAvailable(g).filter(s => !p.learned.includes(s.id) && spellLevel(g, s) <= p.lev);
-  if (!cands.length) { g.msg.add(`You cannot learn any ${c.realm === 'magic' ? 'spells' : 'prayers'} from the books you carry.`); return false; }
+  if (!cands.length) { g.msg.add(`You cannot learn any ${realmWords(g)[0]}s from the books you carry.`); return false; }
   const s = spellId ? cands.find(x => x.id === spellId) : c.realm === 'prayer' ? cands[randint0(cands.length)] : cands[0];
   if (!s) return false;
   p.learned.push(s.id);
-  g.msg.add(`You have learned the ${c.realm === 'magic' ? 'spell' : 'prayer'} of ${s.name}.`, '#a0ffa0');
+  g.msg.add(`You have learned the ${realmWords(g)[0]} of ${s.name}.`, '#a0ffa0');
   endTurn(g);
   return true;
 }
 export function cast(g: Game, s: SpellDef, ctx: EffectCtx = {}): void {
   const p = g.player, c = CLASS_BY_ID[p.cls];
-  if (p.timed.blind && c.realm === 'magic') { g.msg.add('You cannot see!'); return; }
+  if (cannotAct(g)) return;
+  const [word, verb] = realmWords(g);
+  if (p.timed.blind && c.realm !== 'prayer') { g.msg.add('You cannot see!'); return; }
   if (p.timed.confused) { g.msg.add('You are too confused!'); return; }
-  if (!p.learned.includes(s.id)) { g.msg.add('You do not know that spell.'); return; }
+  if (!p.learned.includes(s.id)) { g.msg.add(`You do not know that ${word}.`); return; }
   const mana = spellMana(g, s);
-  if (mana > p.csp) { g.msg.add(`You do not have enough mana to ${c.realm === 'magic' ? 'cast' : 'recite'} this ${c.realm === 'magic' ? 'spell' : 'prayer'}.`); return; }
+  if (mana > p.csp) { g.msg.add(`You do not have enough mana to ${verb} this ${word}.`); return; }
   const fail = spellFail(g, s);
   p.csp -= mana;
-  if (randint0(100) < fail) { g.msg.add(`You failed to ${c.realm === 'magic' ? 'get the spell off' : 'concentrate hard enough'}!`, '#ff8080'); endTurn(g); return; }
-  g.msg.add(`You ${c.realm === 'magic' ? 'cast' : 'recite'} ${s.name}.`, '#c0c0ff');
-  const power = s.id === 'magic_missile' ? Math.floor((p.lev - 1) / 5) : 0;
+  if (randint0(100) < fail) { g.msg.add(c.realm === 'prayer' ? 'You failed to concentrate hard enough!' : `You failed to get the ${word} off!`, '#ff8080'); endTurn(g); return; }
+  g.msg.add(`You ${verb} ${s.name}.`, '#c0c0ff');
+  const power = s.id === 'magic_missile' || s.id === 'nether_bolt' ? Math.floor((p.lev - 1) / 5) : 0;
   runEffect(g, s.effect, { ...ctx, power });
-  if (!p.cast.includes(s.id)) { p.cast.push(s.id); gainExp(g, s.exp * spellLevel(g, s)); g.msg.add('You have learned something new.', '#a0ffa0'); }
+  if (!p.cast.includes(s.id)) { p.cast.push(s.id); gainExp(g, spellExp(g, s) * spellLevel(g, s)); g.msg.add('You have learned something new.', '#a0ffa0'); }
   endTurn(g);
 }
 
 // ---------------------------------------------------------------------------------------------
 // Chests
 
+/** Chest traps (Angband's CHEST_* flags). A chest's trap kind lives in item.toDam; its lock in item.toHit (0 = unlocked). */
+export const CHEST_TRAPS = ['', 'a poison needle', 'a needle that drains strength', 'a needle that drains constitution', 'a paralysing needle', 'poison gas', 'a summoning rune', 'an explosive charge', 'a paralysing needle and poison gas'];
+export function chestTrapName(it: Item): string { return CHEST_TRAPS[it.toDam] || ''; }
 export function openChest(g: Game, fi: { item: Item; x: number; y: number }): void {
-  const p = g.player, lv = g.level, it = fi.item;
+  const p = g.player, lv = g.level, it = fi.item, b = g.bonuses;
+  if (cannotAct(g)) return;
   const lvl = it.pval;
-  if (lvl > 0 && oneIn(3)) {
-    // Trapped: a simple assortment.
-    const r = randint0(4);
-    if (r === 0) { g.msg.add('A puff of green gas surrounds you!', '#a0ffa0'); if (!g.bonuses.flags.has('RES_POIS')) setTimed(g, 'poisoned', p.timed.poisoned + 10 + randint1(20)); }
-    else if (r === 1) { g.msg.add('A small needle has pricked you!', '#ff8080'); takeHit(g, damroll(1, 4), 'a poison needle'); }
-    else if (r === 2) { g.msg.add('There is a sudden explosion!', '#ff8080'); takeHit(g, damroll(5, 8), 'an exploding chest'); lv.items.splice(lv.items.indexOf(fi), 1); endTurn(g); return; }
-    else { g.msg.add('You are enveloped in a cloud of smoke!'); for (let i = 0; i < 2; i++) { const pos = nearFloor(lv, fi.x, fi.y, 2); const race = pickRace(g, lv.depth + 1); if (pos && race) createMonster(g, race.id, pos.x, pos.y, false); } }
+  if (it.toHit > 0) {
+    // Locked: pick it with the disarm skill, as Angband's do_cmd_open does for chests.
+    let j = b.skills.disarm;
+    if (p.timed.blind) j = Math.floor(j / 10); if (p.timed.confused || p.timed.image) j = Math.floor(j / 10);
+    j -= lvl;
+    if (j < 2) j = 2;
+    if (randint0(100) < j) { g.msg.add('You have picked the lock.', '#a0ffa0'); it.toHit = 0; gainExp(g, 1); }
+    else { g.msg.add('You failed to pick the lock.'); endTurn(g); return; }
+  }
+  if (it.toDam > 0) {
+    const trap = it.toDam;
+    if (trap === 1 || trap === 4 || trap === 8) { g.msg.add('A small needle has pricked you!', '#ff8080'); takeHit(g, damroll(1, 4), 'a poison needle'); }
+    if (trap === 1) { if (!b.flags.has('RES_POIS') && !p.timed.oppose_pois) setTimed(g, 'poisoned', p.timed.poisoned + 10 + randint1(20)); }
+    if (trap === 2) { g.msg.add('A small needle has pricked you!', '#ff8080'); takeHit(g, damroll(1, 4), 'a poison needle'); if (!b.flags.has('SUST_STR') && drainStat(p, 'STR')) { g.msg.add('You feel weaker.', '#ff8080'); refreshBonuses(g); } }
+    if (trap === 3) { g.msg.add('A small needle has pricked you!', '#ff8080'); takeHit(g, damroll(1, 4), 'a poison needle'); if (!b.flags.has('SUST_CON') && drainStat(p, 'CON')) { g.msg.add('You feel sicklier.', '#ff8080'); refreshBonuses(g); } }
+    if (trap === 4 || trap === 8) { if (!b.flags.has('FREE_ACT')) setTimed(g, 'paralyzed', p.timed.paralyzed + 10 + randint1(20)); }
+    if (trap === 5 || trap === 8) { g.msg.add('A puff of green gas surrounds you!', '#a0ffa0'); if (!b.flags.has('RES_POIS') && !p.timed.oppose_pois) setTimed(g, 'poisoned', p.timed.poisoned + 10 + randint1(20)); }
+    if (trap === 6) { g.msg.add('You are enveloped in a cloud of smoke!'); for (let i = 0; i < 3; i++) { const pos = nearFloor(lv, fi.x, fi.y, 2, p); const race = pickRace(g, lv.depth + 1); if (pos && race) createMonster(g, race.id, pos.x, pos.y, false); } }
+    if (trap === 7) { g.msg.add('There is a sudden explosion!', '#ff8080'); g.msg.add('Everything inside the chest is destroyed!'); takeHit(g, damroll(5, 8), 'an exploding chest'); lv.items.splice(lv.items.indexOf(fi), 1); endTurn(g); return; }
+    it.toDam = 0;
+    if (p.dead) return;
   }
   const n = kindOf(it).id.includes('large') ? 3 + randint1(3) : 1 + randint1(2);
   for (let i = 0; i < n; i++) g.hooks.placeObjectAt(fi.x, fi.y, Math.max(1, lvl));
   g.msg.add('You have opened the chest.', '#ffd040');
   lv.items.splice(lv.items.indexOf(fi), 1);
+  endTurn(g);
+}
+/** Disarm a chest's trap (Angband's do_cmd_disarm_chest). */
+export function disarmChest(g: Game, fi: { item: Item; x: number; y: number }): void {
+  const p = g.player, it = fi.item, b = g.bonuses;
+  if (!it.known) { g.msg.add('You cannot tell whether the chest is trapped.'); return; }
+  if (it.toDam <= 0) { g.msg.add('The chest is not trapped.'); return; }
+  let j = b.skills.disarm;
+  if (p.timed.blind) j = Math.floor(j / 10); if (p.timed.confused || p.timed.image) j = Math.floor(j / 10);
+  j -= it.pval;
+  if (j < 2) j = 2;
+  if (randint0(100) < j) { g.msg.add('You have disarmed the chest.', '#a0ffa0'); gainExp(g, it.pval); it.toDam = 0; }
+  else if (randint0(100) < j + 20) { g.msg.add('You failed to disarm the chest.'); }
+  else { g.msg.add('You set off a trap!', '#ff8080'); openChest(g, fi); return; }
   endTurn(g);
 }
 
@@ -651,6 +771,7 @@ export function describeGrid(g: Game, x: number, y: number): string {
     t === T.DOOR_CLOSED ? (auxAt(lv, x, y) ? 'locked door' : 'closed door') : t === T.DOOR_OPEN ? 'open door' : t === T.DOOR_BROKEN ? 'broken door' : t === T.RUBBLE ? 'pile of rubble' : t === T.STAIRS_UP ? 'up staircase' : t === T.STAIRS_DOWN ? 'down staircase' :
     t === T.TRAP ? TRAP_KINDS[auxAt(lv, x, y)] : t === T.GRASS ? 'grass' : t === T.ROAD ? 'road' : t === T.TREE ? 'tree' : isShop(t) ? ['General Store', 'Armoury', 'Weaponsmith', 'Temple', 'Alchemy Shop', 'Magic Shop', 'Black Market', 'Home'][t - T.SHOP_0] : 'something';
   parts.push(tn);
+  if (hasFlag(lv, x, y, F.GLYPH)) parts.push('a glyph of warding');
   return parts.join('; ');
 }
 

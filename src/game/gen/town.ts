@@ -9,12 +9,12 @@ export interface TownHooks {
   placeTownMonster(lv: Level, x: number, y: number): void;
 }
 
-export function generateTown(hooks: TownHooks, arrivedBy: 'up' | 'none'): { level: Level; start: Pos } {
+export function generateTown(hooks: TownHooks, arrivedBy: 'up' | 'none', daytime = true): { level: Level; start: Pos } {
   const lv = createLevel(TOWN_W, TOWN_H, 0);
   for (let y = 0; y < lv.h; y++) for (let x = 0; x < lv.w; x++) {
     const edge = x === 0 || y === 0 || x === lv.w - 1 || y === lv.h - 1;
     setTile(lv, x, y, edge ? T.PERM : T.GRASS);
-    addFlag(lv, x, y, F.GLOW | F.MARK);
+    if (daytime) addFlag(lv, x, y, F.GLOW | F.MARK);
   }
   // A cobbled cross of roads.
   const midY = Math.floor(lv.h / 2);
@@ -35,6 +35,7 @@ export function generateTown(hooks: TownHooks, arrivedBy: 'up' | 'none'): { leve
     const doorX = x1 + 2 + randint0(bw - 4);
     const doorY = row === 0 ? y2 : y1;
     setTile(lv, doorX, doorY, T.SHOP_0 + store);
+    addFlag(lv, doorX, doorY, F.GLOW | F.MARK); // shop entrances are lit all night
     // A path from the door to the road.
     const step = row === 0 ? 1 : -1;
     for (let y = doorY + step; y !== midY - step * 2; y += step) if (tileAt(lv, doorX, y) === T.GRASS) setTile(lv, doorX, y, T.ROAD);
@@ -51,8 +52,8 @@ export function generateTown(hooks: TownHooks, arrivedBy: 'up' | 'none'): { leve
   // The dungeon entrance sits on the central crossroads.
   const sx = Math.floor(lv.w / 2), sy = midY;
   setTile(lv, sx, sy, T.STAIRS_DOWN);
-  // Townsfolk.
-  const n = 4 + randint0(4);
+  // Townsfolk: more of them prowl at night.
+  const n = (daytime ? 4 : 8) + randint0(4);
   for (let i = 0; i < n; i++) {
     for (let t = 0; t < 50; t++) {
       const x = 1 + randint0(lv.w - 2), y = 1 + randint0(lv.h - 2);

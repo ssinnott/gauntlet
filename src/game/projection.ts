@@ -2,6 +2,7 @@
 // reaches. Both the player's spells/devices and the monsters' attacks come through here.
 import { type Element, type Monster, type Pos, T, DIR_DX, DIR_DY } from './types.ts';
 import { projectPath, tileAt, setTile, monsterAt, los, inBounds, playerCanSee, hasFlag, addFlag } from './level.ts';
+import { isWall } from './types.ts';
 import { F } from './types.ts';
 import { raceOf, hasMFlag, monsterName, monsterNameVisible } from './monster.ts';
 import { monsterTakeHit, elementDamage } from './combat.ts';
@@ -12,6 +13,7 @@ import type { Game } from './state.ts';
 export const ELEMENT_COLOR: Record<Element, string> = {
   acid: '#8fd85a', elec: '#7ac8ff', fire: '#ff7a30', cold: '#c8f0ff', pois: '#70d060', lite: '#fff8c0', dark: '#5a3a8a', nether: '#8060c0',
   sound: '#f0e060', chaos: '#ff60d0', conf: '#e0a0ff', mana: '#ff80ff', missile: '#e8e8f0', holy: '#fff0a0', water: '#4090ff', nexus: '#ff9040', disen: '#c0a0e0',
+  shards: '#d0c0a0', time: '#a0f0e0', inertia: '#808090', gravity: '#604080', plasma: '#ff4080', force: '#e0e0a0', ice: '#e0f8ff', disint: '#a08060',
 };
 
 export interface ProjectOpts {
@@ -101,7 +103,8 @@ export function project(g: Game, x0: number, y0: number, x1: number, y1: number,
 /** A breath is a cone-ish ball: bigger radius, damage falls off from the centre. */
 export function breathe(g: Game, m: Monster, elem: Element, dam: number): void {
   const p = g.player;
-  project(g, m.x, m.y, p.x, p.y, elem, { dam, radius: 2, source: m, name: 'breath' });
+  const radius = hasMFlag(raceOf(m), 'POWERFUL') ? 3 : 2;
+  project(g, m.x, m.y, p.x, p.y, elem, { dam, radius, source: m, name: 'breath' });
 }
 
 function affectGrid(g: Game, x: number, y: number, elem: Element, dam: number, o: ProjectOpts): boolean {
@@ -109,7 +112,7 @@ function affectGrid(g: Game, x: number, y: number, elem: Element, dam: number, o
   let hit = false;
   const t = tileAt(lv, x, y);
   // Terrain.
-  if (o.kind === 'stone_to_mud' || o.kind === 'kill_wall') {
+  if (o.kind === 'stone_to_mud' || o.kind === 'kill_wall' || (elem === 'disint' && t !== T.PERM && isWall(t))) {
     if (t === T.GRANITE || t === T.MAGMA || t === T.QUARTZ || t === T.MAGMA_K || t === T.QUARTZ_K || t === T.RUBBLE || t === T.SECRET_DOOR) {
       const treasure = t === T.MAGMA_K || t === T.QUARTZ_K;
       setTile(lv, x, y, T.FLOOR);
@@ -171,7 +174,17 @@ function affectMonster(g: Game, m: Monster, elem: Element, dam: number, o: Proje
     case 'holy': if (hasMFlag(r, 'EVIL')) { dam *= 2; note = ' is hit hard'; } else dam = Math.floor(dam / 4); break;
     case 'sound': if (!hasMFlag(r, 'NO_STUN')) m.stunned = 5 + randint1(10); break;
     case 'conf': if (!hasMFlag(r, 'NO_CONF')) m.confused = 5 + randint1(10); break;
-    case 'chaos': if (!hasMFlag(r, 'NO_CONF')) m.confused = 5 + randint1(5); break;
+    case 'chaos': if (!hasMFlag(r, 'NO_CONF')) m.confused = 5 + randint1(5); if (hasMFlag(r, 'DEMON')) { dam = Math.floor(dam / 2); note = ' resists'; } break;
+    case 'nexus': if (hasMFlag(r, 'RES_NEXUS')) { dam = Math.floor(dam / 3); note = ' resists'; } else if (oneIn(3)) { teleportMonster(g, m, 10); } break;
+    case 'disen': if (hasMFlag(r, 'RES_DISEN')) { dam = Math.floor(dam / 3); note = ' resists'; } break;
+    case 'plasma': if (hasMFlag(r, 'RES_PLASMA')) { dam = Math.floor(dam / 3); note = ' resists'; } else if (!hasMFlag(r, 'NO_STUN')) m.stunned = 3 + randint1(6); break;
+    case 'force': if (!hasMFlag(r, 'NO_STUN')) m.stunned = 3 + randint1(6); break;
+    case 'inertia': if (!hasMFlag(r, 'UNIQUE') || oneIn(2)) m.slowed = 10 + randint1(10); break;
+    case 'gravity': if (!hasMFlag(r, 'UNIQUE')) { teleportMonster(g, m, 5); m.slowed = 5 + randint1(5); } break;
+    case 'ice': if (hasMFlag(r, 'IM_COLD')) { dam = Math.floor(dam / 9); note = ' resists a lot'; } else if (hasMFlag(r, 'HURT_COLD')) { dam *= 2; note = ' is hit hard'; } break;
+    case 'disint': if (hasMFlag(r, 'HURT_ROCK')) { dam *= 2; note = ' loses some skin'; } break;
+    case 'time': if (!hasMFlag(r, 'UNIQUE') && oneIn(3)) { m.maxhp = Math.max(1, m.maxhp - Math.floor(m.maxhp / 10)); } break;
+    case 'water': if (r.sprite === 'elemental' && /water/i.test(r.name)) { dam = 0; note = ' is immune'; } else if (!hasMFlag(r, 'NO_STUN')) m.stunned = 2 + randint1(4); break;
     default: break;
   }
   if (dam <= 0) { if (seen && note) g.msg.add(`${name}${note}.`); return true; }
