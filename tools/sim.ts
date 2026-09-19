@@ -12,7 +12,7 @@ import { isConnected } from '../src/game/gen/dungeon.ts';
 import { generateLevel } from '../src/game/gen/level.ts';
 import { generateCavern } from '../src/game/gen/cavern.ts';
 import { generateLabyrinth } from '../src/game/gen/labyrinth.ts';
-import { tileAt, monsterAt, passable } from '../src/game/level.ts';
+import { tileAt, monsterAt, passable, createLevel } from '../src/game/level.ts';
 import { T, isPassable } from '../src/game/types.ts';
 import { CLASSES } from '../src/game/data/classes.ts';
 import { RACES } from '../src/game/data/races.ts';
@@ -24,6 +24,7 @@ import type { Item } from '../src/game/types.ts';
 import { characterDump } from '../src/game/dump.ts';
 import { describeRace } from '../src/game/recall.ts';
 import { bashDoor, jamDoor, disarm, passTurn } from '../src/game/commands.ts';
+import { createMonster } from '../src/game/monster.ts';
 
 const SEEDS = Number(process.argv[2] || 6);
 const TURNS = Number(process.argv[3] || 3000);
@@ -234,7 +235,55 @@ void dummy;
   console.log(`determinism: ${STEPS} scripted turns reproduce byte for byte, across a save at turn ${SPLIT}`);
 }
 
-// 3. Play.
+// 3. Monster senses. The play loop below never catches a monster that fails to close, because its
+// bot moves every turn and so keeps re-triggering the approach. A hero who STANDS STILL is the case
+// that matters, and it is how a pack that circles forever hides: review found exactly that, with
+// wolves holding station at six paces round a resting hero and never landing a blow.
+{
+  const noErratic = (r: typeof MONSTERS[number]): boolean => !r.flags.includes('RAND_25') && !r.flags.includes('RAND_50') && !r.flags.includes('NEVER_MOVE') && r.blows.length > 0;
+  const room = (g: Game, w: number, h: number, floorTo: number): void => {
+    const lv = createLevel(w, h, 8);
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x <= floorTo; x++) { lv.tiles[y * w + x] = T.FLOOR; lv.flags[y * w + x] |= 1 | 2; }
+    g.level = lv;
+    g.flow = null; g.noise = null; g.scent = null; g.scentStamp = 0; g.flowDirty = true;
+    g.player.chp = g.player.mhp = 9999;
+  };
+  // A pack must close on a motionless hero.
+  const packs = MONSTERS.filter(r => r.flags.includes('FRIENDS') && noErratic(r) && r.depth <= 12).slice(0, 3);
+  for (const race of packs) {
+    const g = createGame('Pack', 'human', 'warrior', 'male', 606);
+    room(g, 41, 41, 39);
+    g.player.x = 20; g.player.y = 20;
+    for (let i = 0; i < 5; i++) createMonster(g, race.id, 28 + (i % 2), 16 + i * 2, false, g.level);
+    for (const m of g.level.monsters) m.sleep = 0;
+    let adjacent = false;
+    for (let t = 0; t < 300 && !adjacent; t++) {
+      passTurn(g);
+      adjacent = g.level.monsters.some(m => Math.max(Math.abs(m.x - g.player.x), Math.abs(m.y - g.player.y)) <= 1);
+    }
+    ok(adjacent, `a pack of ${race.id} never reached a standing hero in 300 turns`);
+  }
+  // And a wall-passer stranded in rock must still come through it: no field reaches such a grid.
+  const ghost = MONSTERS.find(r => r.flags.includes('PASS_WALL') && noErratic(r));
+  if (ghost) {
+    const g = createGame('Rock', 'human', 'warrior', 'male', 707);
+    room(g, 61, 41, 20);
+    g.player.x = 15; g.player.y = 20;
+    const m = createMonster(g, ghost.id, 5, 20, false, g.level);
+    if (m) {
+      m.x = 34; m.y = 20; m.sleep = 0;
+      let reached = false;
+      for (let t = 0; t < 300 && !reached; t++) {
+        passTurn(g);
+        reached = Math.max(Math.abs(m.x - g.player.x), Math.abs(m.y - g.player.y)) <= 1;
+      }
+      ok(reached, `a ${ghost.id} stranded in rock never reached the hero in 300 turns`);
+    }
+  }
+  console.log(`senses: ${packs.length} pack races close on a standing hero; a wall-passer comes through rock`);
+}
+
+// 4. Play.
 let deaths = 0, maxDepth = 0, totalKills = 0;
 for (let seed = 1; seed <= SEEDS; seed++) {
   const cls = CLASSES[(seed - 1) % CLASSES.length], race = RACES[(seed * 3) % RACES.length];

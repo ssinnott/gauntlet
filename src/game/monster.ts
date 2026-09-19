@@ -324,12 +324,20 @@ export function monsterTurn(g: Game, m: Monster): void {
     if (!track && canHearPlayer(g, m)) track = bestNoiseStep(g, m);
     if (!track && canSmellPlayer(g, r)) track = bestScentStep(g, m);
     if (!track) {
-      // It has lost you: wander a little or stay put.
-      if (!oneIn(3)) return;
-      const d = randint1(9); dx = DIR_DX[d]; dy = DIR_DY[d];
+      // No field reaches this grid. That happens to a wall-passer standing inside rock: flow and
+      // noise only spread through passable grids and scent is only laid on them, so it has no
+      // sense at all and would grind about in the stone forever. If it can see the hero, or it is
+      // stranded in a wall within range of them, it walks straight at them instead; tryMove works
+      // out what it can actually move through.
+      const stranded = !passable(lv, m.x, m.y);
+      if (obvious || (stranded && dist <= r.vision + 10)) { dx = Math.sign(p.x - m.x); dy = Math.sign(p.y - m.y); }
+      else {
+        // It has lost you: wander a little or stay put.
+        if (!oneIn(3)) return;
+        const d = randint1(9); dx = DIR_DX[d]; dy = DIR_DY[d];
+      }
     } else {
       dx = track.x - m.x; dy = track.y - m.y;
-      if (obvious && dx === 0 && dy === 0) { dx = Math.sign(p.x - m.x); dy = Math.sign(p.y - m.y); }
       // Pack hunters circle instead of queueing up in the corridor behind the leader.
       if (hasMFlag(r, 'FRIENDS') && dist >= 2 && dist <= 6) {
         const flank = packStep(g, m, dist);
@@ -419,7 +427,8 @@ function packStep(g: Game, m: Monster, dist: number): Pos | null {
     if (distance(o.x, o.y, p.x, p.y) <= 2) engaged++;
     if (distance(o.x, o.y, m.x, m.y) <= 6) allies.push(o);
   }
-  if (engaged >= 2) return null; // the trap is sprung: close in the normal way
+  // Two of the pack are already on the hero, or there is no pack here to co-ordinate with.
+  if (engaged >= 2 || !allies.length) return null;
   let best: Pos | null = null, bestScore = -Infinity;
   const start = randint0(8);
   for (let i = 0; i < 8; i++) {
@@ -429,9 +438,13 @@ function packStep(g: Game, m: Monster, dist: number): Pos | null {
     if (monsterAt(lv, nx, ny) || (nx === p.x && ny === p.y)) continue;
     if (hasFlag(lv, nx, ny, F.GLYPH)) continue;
     const nd = distance(nx, ny, p.x, p.y);
-    if (nd < 2 || nd > dist) continue; // hold the ring: never close, never drift off
-    let score = -Math.abs(nd - dist) * 4;
-    for (const o of allies) { const od = distance(nx, ny, o.x, o.y); if (od < 4) score -= 4 - od; }
+    if (nd > dist) continue; // never drift away from the hero
+    // Closing is the point; spreading only ever breaks a tie between equally close grids. Scoring
+    // them the other way round is a deadlock -- holding station always beat closing, so a pack
+    // would circle a standing hero forever and never land a blow.
+    let spread = 0;
+    for (const o of allies) { const od = distance(nx, ny, o.x, o.y); if (od < 3) spread -= 3 - od; }
+    const score = (dist - nd) * 100 + spread;
     if (score > bestScore) { bestScore = score; best = { x: nx, y: ny }; }
   }
   return best;

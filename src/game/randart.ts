@@ -179,7 +179,9 @@ function rollArtifact(r: RngInstance, base: ArtifactKind): ArtifactKind {
   // Now buy abilities until the budget runs out.
   const pool: Buy[] = [...GENERIC];
   if (weapon) pool.push(...WEAPON_ONLY);
-  if (budget >= 60 && r.chance(0.2)) pool.push(...IMMUNITIES);
+  // Immunities are endgame perks. Budget alone is not enough of a gate: a cursed relic gets its
+  // budget multiplied, which was letting a level 10 artifact buy immunity to fire.
+  if (level >= 40 && budget >= 60 && r.chance(0.2)) pool.push(...IMMUNITIES);
   let guard = 0;
   while (budget > 1 && guard++ < 40) {
     const affordable = pool.filter(b => b.cost <= budget && !flags.includes(b.flag));
