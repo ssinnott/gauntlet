@@ -37,6 +37,10 @@ Ten classes, drawn as the Gauntlet heroes: Warrior, Mage (Wizard), Priest (Cleri
 Ranger (Elf), Paladin (Valkyrie), Druid (Falconess, nature magic), Necromancer (Sorceress, the
 necromantic realm), Blackguard (Knight, a brawler with a few dark rituals) and Archer. Seventeen
 races: the eleven Angband ones plus Dark-Elf, Half-Giant, Barbarian, Ent, Beorning and Druadan.
+Every race and class combination has its own sprite: the race is the body (skin, hair, ears, beard,
+build -- a hobbit's bare feet, a kobold's snout and tail, an Ent's bark and leaves) and the class is
+the kit worn over it (the Gauntlet hero's colours, hat, robe, cloak, shield or pauldrons); women get
+long hair and no beard. `npm run sheet` draws them all on one contact sheet in `dist/heroes.png`.
 
 The rest of the keyset: `~` the knowledge browser (monster memory, known objects, artifacts, egos,
 uniques, kills), `/` recall the nearest monster, `=` options, `O` the ignore settings, `ctrl+O`
@@ -54,21 +58,22 @@ On a phone, touch anywhere: a thumb pad and three pages of command buttons appea
 get a navigation bar. The `touchControls` option forces them on with a mouse.
 
 `ctrl+A` (or the **Autoplay** game option under `=`) hands the hero to a bot: it shops for rations,
-Cure Light Wounds and Phase Door, walks into the dungeon, explores what it has not seen, throws oil
-and fires arrows at what comes, rests when it is safe, drinks when it is not, and takes the stairs
-down once it knows where they are. It weighs up a fight before it picks one -- what the thing hits
-for, what it hits back for, and so what killing it would cost -- and walks round, shoots at or
-leaves behind anything dearer than its hit points can spare: a corridor to meet a pack in, the
-stairs when something faster than it is hunting, and never a rest with that something still loose.
-It plays with the same commands you have and knows only what you know -- no revealed map, no free
-healing -- so it dies like anyone else, just not on the first floor every time. Any key takes
-control back.
+Cure Light Wounds and Phase Door, walks into the dungeon, explores what it has not seen, digs through
+rubble in its way and veins that show treasure, throws oil and fires arrows at what comes, rests when
+it is safe, drinks when it is not, and takes the stairs down once it knows where they are. It weighs
+up a fight before it picks one -- what the thing hits for, what it hits back for, and so what killing
+it would cost -- and walks round, shoots at or leaves behind anything dearer than its hit points can
+spare: a corridor to meet a pack in, the stairs when something faster than it is hunting. It plays
+with the same commands you have and knows only what you know -- no revealed map, no free healing --
+so it dies like anyone else, just not on the first floor every time. Any key takes control back.
 
 Birth offers rolled or point-bought stats (`X` on the point-buy screen lets chance spend the
 points), a short history, and the birth options: connected
 stairs, ironman, no selling, smart monsters, persistent levels and random artifacts. Persistent
 levels do not sit still while you are away -- things wander, things arrive, and the generators keep
 generating. Random artifacts roll a fresh set of 121 from the game seed instead of the famous ones.
+RANDOM HERO on the title screen (or `*` anywhere on the birth screen) skips the questions: chance
+picks the race, class, sex, stats, name and history and the game begins.
 Smart monsters no longer read your equipment: they learn what you resist by watching their attacks
 fail, and forget it when you die. Monster memory (what each race does, what it resists, how many
 you have killed) carries over between heroes; several heroes can be saved at once and are listed on
@@ -114,12 +119,13 @@ src/ui/                  everything that draws, and everything that touches the 
   touch.ts               the on-screen thumb pad and command buttons
   storage.ts             saved heroes in IndexedDB, with a localStorage fallback
   sprites.ts             procedural cel-shaded monster sprites (43 families) and item icons
-  hero.ts                the player as the engine's paper-doll rig, per class
+  hero.ts                the player as the engine's paper-doll rig: the race's body wearing the class's kit
+  heroRaces.ts           the race half of that: ears, hair, beards, tusks, snouts, war paint, tails, bare feet
   hud.ts                 side panel, message bar, shouted banners
   screens.ts             menus, prompts, inventory, stores, spells, character sheet, map, help
   screens2.ts            knowledge browser, recall, options, high scores, locate, the birth screen
 src/lib/                 the vendored engine (do not edit here; fix upstream and subtree pull)
-tools/                   dev server, bundler, headless simulator (fuzz + autoplay), browser smoke test
+tools/                   dev server, bundler, headless simulator (fuzz + autoplay), browser smoke test, hero contact sheet
 ```
 
 ## Checks
@@ -134,7 +140,8 @@ tools/                   dev server, bundler, headless simulator (fuzz + autopla
   one.
 - `smoke` — `tools/smoke.ts` loads the page in headless Chromium through the dev server, creates a
   character, walks into the dungeon, opens the inventory, saves to IndexedDB and loads it back,
-  exercises the touch controls, and asserts the canvas has real content and the page raised no
+  exercises the touch controls, draws the hero contact sheet and asserts that no two race/class
+  combinations render identically, and asserts the canvas has real content and the page raised no
   errors. It leaves screenshots in `dist/`.
 
 The determinism check is the strict one: the simulator plays a fixed script from a fixed seed

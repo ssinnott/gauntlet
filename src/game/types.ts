@@ -416,6 +416,35 @@ export interface SkillSet {
   digging: number;
 }
 
+/** How a race wears its hair (drawn by ui/heroRaces.ts; 'short' is the engine's default cap). */
+export type HairStyle = 'short' | 'long' | 'mane' | 'curls' | 'topknot' | 'crest' | 'wisps' | 'leaves' | 'bald';
+/** The shape of the ears: 'round' is the skull's own bump. */
+export type EarShape = 'round' | 'pointed' | 'long' | 'bear' | 'kobold';
+/** The beard, if any; a beard hides the mouth. */
+export type BeardStyle = 'none' | 'full' | 'braided' | 'goatee' | 'shaggy' | 'moss' | 'short';
+/** Extra marks a race carries on top of the paper doll. */
+export type RaceFeature = 'tusks' | 'bigNose' | 'snout' | 'brow' | 'woad' | 'clay' | 'warts' | 'bark' | 'tail' | 'bareFeet';
+/** Proportion overrides for the hero rig, in the engine's `Proportions` names (src/lib/art/rig.ts). */
+export interface RaceBuild {
+  headR?: number; neck?: number; neckR?: number; torsoW?: number; torsoH?: number; hip?: number;
+  upperArm?: number; lowerArm?: number; handR?: number; upperLeg?: number; lowerLeg?: number;
+  footL?: number; footH?: number; armR?: number; legR?: number; shoulderX?: number; hipX?: number; bulge?: number;
+}
+/** What a race looks like: the body the class kit is drawn on. */
+export interface RaceLook {
+  skin: string;
+  hair: string;
+  /** Pupil colour; the engine's near-black when absent. */
+  eyes?: string;
+  hairStyle: HairStyle;
+  ears?: EarShape;
+  beard?: BeardStyle;
+  /** Jaw width as a fraction of the head radius (the engine's default is 0.35). */
+  jaw?: number;
+  build?: RaceBuild;
+  features?: RaceFeature[];
+}
+
 export interface RaceDef {
   id: string;
   name: string;
@@ -429,6 +458,8 @@ export interface RaceDef {
   desc: string;
   /** Rig scale for the hero sprite (1 = human). */
   size?: number;
+  /** The body the hero sprite is built on. */
+  look: RaceLook;
   /** Short history fragments used to write the birth history. */
   history?: string[];
 }
@@ -459,8 +490,8 @@ export interface ClassDef {
   /** [kind id, count] granted at birth. */
   startItems: [string, number][];
   titles: string[];
-  /** Rig palette for the hero. */
-  palette: { skin: string; hair: string; primary: string; secondary: string; accent: string; metal: string; dark: string; glow: string };
+  /** Rig palette for the hero's kit: garments, trim and metal. Skin and hair come from the race. */
+  palette: { primary: string; secondary: string; accent: string; metal: string; dark: string; glow: string };
   desc: string;
 }
 

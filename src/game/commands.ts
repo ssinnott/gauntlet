@@ -168,6 +168,8 @@ export function tunnelInto(g: Game, x: number, y: number): void {
   if (cannotAct(g)) return;
   const t = tileAt(lv, x, y);
   const skill = g.bonuses.skills.digging;
+  // Swinging at a grid tells you what it is made of, as bumping a wall does.
+  if (t !== T.FLOOR) addFlag(lv, x, y, F.MARK);
   const has = (need: number, name: string) => {
     if (skill > randint0(need)) { setTile(lv, x, y, T.FLOOR); g.msg.add(`You have removed the ${name}.`); g.flowDirty = true; return true; }
     g.msg.add(`You ${name === 'rubble' ? 'dig in' : 'tunnel into'} the ${name}.`);
@@ -335,7 +337,7 @@ export function hitTrap(g: Game, x: number, y: number): void {
 // ---------------------------------------------------------------------------------------------
 // Items: pickup, drop, wear
 
-export function pickupHere(g: Game, auto: boolean, goldOnly = false): boolean {
+export function pickupHere(g: Game, auto: boolean, goldOnly = false, skip?: (it: Item) => boolean): boolean {
   const p = g.player, lv = g.level;
   const here = itemsAt(lv, p.x, p.y);
   if (!here.length) { if (!auto) g.msg.add('There is nothing here to pick up.'); return false; }
@@ -343,6 +345,10 @@ export function pickupHere(g: Game, auto: boolean, goldOnly = false): boolean {
   let skipped = 0;
   for (const fi of here) {
     const k = kindOf(fi.item);
+    // What the caller wants left where it lies: the autoplay bot passes what it has just thrown
+    // away, so it does not pick the same rag straight back up. Not the hero's ignore settings, so
+    // it earns no remark about them.
+    if (skip && skip(fi.item)) continue;
     // Junk the hero has decided not to care about is not picked up and not remarked on.
     if (isIgnored(g, fi.item)) { skipped++; continue; }
     if (goldOnly && k.tval !== 'gold' && k.tval !== 'key') { if (auto && !fi.item.known && !isAware(g.flavors, fi.item.kind)) { /* still see it */ } g.msg.add(`You see ${itemName(fi.item, g.flavors)}.`); continue; }

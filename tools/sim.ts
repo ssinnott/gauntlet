@@ -15,19 +15,19 @@ import { generateCavern } from '../src/game/gen/cavern.ts';
 import { generateLabyrinth } from '../src/game/gen/labyrinth.ts';
 import { tileAt, monsterAt, passable, createLevel } from '../src/game/level.ts';
 import { T, isPassable, STATS } from '../src/game/types.ts';
-import { randomBuy, statCost, POINT_BUDGET } from '../src/game/player.ts';
+import { randomBuy, randomHero, statCost, POINT_BUDGET, boughtStats } from '../src/game/player.ts';
 import { CLASSES } from '../src/game/data/classes.ts';
 import { RACES } from '../src/game/data/races.ts';
 import { MONSTERS, MONSTER_BY_ID } from '../src/game/data/monsters.ts';
 import { OBJECTS } from '../src/game/data/objects.ts';
-import { rng } from '../src/lib/engine/rng.ts';
+import { rng, makeRng } from '../src/lib/engine/rng.ts';
 import type { Options } from '../src/game/options.ts';
 import { type Game, FX_QUEUE_MAX, SOUND_QUEUE_MAX } from '../src/game/state.ts';
 import type { Item } from '../src/game/types.ts';
 import { characterDump } from '../src/game/dump.ts';
 import { describeRace } from '../src/game/recall.ts';
 import { bashDoor, jamDoor, disarm, passTurn } from '../src/game/commands.ts';
-import { autoplayStep } from '../src/game/autoplay.ts';
+import { autoplayStep, resetAutoplay } from '../src/game/autoplay.ts';
 import { createMonster } from '../src/game/monster.ts';
 
 const SEEDS = Number(process.argv[2] || 6);
@@ -168,6 +168,20 @@ console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RAC
   seed = 3; const again = randomBuy(dice());
   ok(STATS.every(s => again[s] === buys[0][s]), 'random buy is deterministic given the dice');
   ok(buys.some(b => STATS.some(s => b[s] !== buys[0][s])), 'different dice give a different buy');
+}
+
+// A fully random hero is a real race, class, sex and name with stats that match its own point buy
+// or a roll, a history, and is a pure function of the dice; different dice give different heroes.
+{
+  // (The engine's own generator: the LCG above loses its low bits, so d2s from it always fell the same way.)
+  const dice = (seed: number) => { const r = makeRng(seed); return (a: number, b: number) => r.int(a, b); };
+  const heroes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(s => randomHero(dice(s)));
+  ok(heroes.every(h => RACES.some(r => r.id === h.race) && CLASSES.some(c => c.id === h.cls) && (h.sex === 'male' || h.sex === 'female') && h.name.length > 0 && h.history.length > 0), 'random hero picks a real race, class, sex, name and history');
+  ok(heroes.every(h => h.pointBuy ? h.base !== null && STATS.every(s => h.stats[s] === boughtStats(h.base!, h.race, h.cls)[s]) : h.base === null && STATS.every(s => h.stats[s] >= 3 && h.stats[s] <= 20)), 'random hero stats follow its point buy or its roll');
+  ok(heroes.some(h => h.pointBuy) && heroes.some(h => !h.pointBuy), 'random heroes are sometimes bought and sometimes rolled');
+  const again = randomHero(dice(1));
+  ok(JSON.stringify(again) === JSON.stringify(heroes[0]), 'random hero is deterministic given the dice');
+  ok(heroes.some(h => h.race !== heroes[0].race || h.cls !== heroes[0].cls), 'different dice give a different hero');
 }
 
 // 1. Level generation at many depths: connected and populated.
@@ -430,6 +444,33 @@ void dummy;
   console.log(`senses: ${packs.length} pack races close on a standing hero; a wall-passer comes through rock`);
 }
 
+// 3b. Breeders. A worm mass that has never noticed the hero must not breed: before this check every
+// breeder on the level bred from the moment it woke, at six times Angband's rate, and the far end
+// of a level was carpeted before you got there. One that can see the hero must still breed.
+{
+  const breeder = MONSTERS.find(r => r.flags.includes('MULTIPLY') && r.flags.includes('ANIMAL') && r.depth <= 3)!;
+  const g = createGame('Worm', 'human', 'warrior', 'male', 808);
+  // A hero's room on the left, and a sealed pocket of floor on the right: no line of sight, no path
+  // for noise, no scent. The worm wanders inside its pocket and never learns anyone is here.
+  const lv = createLevel(61, 21, 8);
+  for (let y = 1; y < 20; y++) for (let x = 1; x <= 20; x++) { lv.tiles[y * 61 + x] = T.FLOOR; lv.flags[y * 61 + x] |= 1 | 2; }
+  for (let y = 8; y <= 12; y++) for (let x = 40; x <= 44; x++) { lv.tiles[y * 61 + x] = T.FLOOR; lv.flags[y * 61 + x] |= 1 | 2; }
+  g.level = lv;
+  g.flow = null; g.noise = null; g.scent = null; g.scentStamp = 0; g.flowDirty = true;
+  g.player.chp = g.player.mhp = 9999;
+  g.player.x = 10; g.player.y = 10;
+  const m = createMonster(g, breeder.id, 42, 10, false, g.level)!;
+  m.sleep = 0;
+  for (let t = 0; t < 600; t++) passTurn(g);
+  ok(g.level.monsters.length === 1, `a ${breeder.id} sealed away from the hero bred ${g.level.monsters.length - 1} times in 600 turns`);
+  // Now in plain sight. At one in fifty per action the odds of 600 turns with no child are ~5e-6.
+  m.x = 15; m.y = 10;
+  for (let t = 0; t < 600; t++) passTurn(g);
+  ok(g.level.monsters.length > 1, `a ${breeder.id} in plain sight of the hero never bred in 600 turns`);
+  ok(g.level.monsters.length < 60, `a ${breeder.id} in sight of the hero bred to ${g.level.monsters.length} in 600 turns, which is the old runaway rate`);
+  console.log(`breeders: a sealed-away ${breeder.id} never breeds; one in sight grew to ${g.level.monsters.length}`);
+}
+
 // 4. Play.
 let deaths = 0, maxDepth = 0, totalKills = 0;
 for (let seed = 1; seed <= SEEDS; seed++) {
@@ -468,22 +509,94 @@ for (let seed = 1; seed <= SEEDS; seed++) {
 console.log(`play: ${SEEDS} runs, ${deaths} deaths, deepest ${maxDepth}, ${totalKills} kills`);
 ok(totalKills > 0, 'nobody killed anything');
 ok(maxDepth > 0, 'nobody entered the dungeon');
+// 2e. The bot's aim. It used to shoot in the keypad direction nearest the monster, which only
+// lines up with a monster on the hero's row, column or diagonal: anything else was shot past,
+// arrow after arrow, until the quiver was empty. An Archer's arrows and a Mage's bolts must land
+// on a monster at every offset, and the bot must not fire at one it cannot reach.
+{
+  const arena = (g: Game): void => {
+    const w = 41, h = 31, lv = createLevel(w, h, 8);
+    lv.depth = 3;
+    // Floor throughout, with a strip of unremembered rock on the right so the level still has
+    // ground to explore and the bot stays to fight rather than heading for the stairs.
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { lv.tiles[y * w + x] = T.FLOOR; if (x < w - 4) lv.flags[y * w + x] |= 1 | 2; }
+    g.level = lv;
+    g.flow = null; g.noise = null; g.scent = null; g.scentStamp = 0; g.flowDirty = true;
+    g.player.chp = g.player.mhp = 9999;
+    g.player.x = 20; g.player.y = 15;
+  };
+  // Where each shot went, from the fx the renderer would draw. The mold never moves, so a shot
+  // that landed is one whose path crosses its grid: an arrow or bolt stops there (the killing
+  // shot included) and a Magic Missile that rolled a beam carries on through.
+  const shots = (g: Game, kind: 'missile' | 'bolt', at: { x: number; y: number }): { fired: number; landed: number } => {
+    let fired = 0, landed = 0;
+    for (const f of g.fx) {
+      if (f.type !== kind) continue;
+      fired++;
+      if (f.path.some(q => q.x === at.x && q.y === at.y)) landed++;
+    }
+    return { fired, landed };
+  };
+  const offsets: [number, number][] = [[5, 0], [5, 2], [6, 3], [2, 5], [-4, 3], [-3, -6]];
+  for (const [cls, kind, mana] of [['archer', 'missile', false], ['mage', 'bolt', true]] as const) {
+    for (const [dx, dy] of offsets) {
+      const g = createGame('Aim', 'human', cls, 'male', 1234);
+      resetAutoplay();
+      arena(g);
+      if (mana) { g.player.msp = g.player.csp = 99; study(g); }
+      const at = { x: 20 + dx, y: 15 + dy };
+      const m = createMonster(g, 'grey_mold', at.x, at.y, false, g.level)!;
+      m.sleep = 0;
+      passTurn(g); // a turn passes, so the mold is seen
+      let fired = 0, landed = 0;
+      for (let step = 0; step < 12 && g.level.monsters.includes(m); step++) {
+        g.fx.length = 0;
+        autoplayStep(g, step);
+        const r = shots(g, kind, at); fired += r.fired; landed += r.landed;
+      }
+      ok(fired > 0, `autoplay ${cls} never shot at a grey mold at offset ${dx},${dy}`);
+      ok(landed === fired, `autoplay ${cls} at offset ${dx},${dy}: ${fired - landed} of ${fired} shots flew past the mold`);
+    }
+  }
+  // Behind a wall the mold is out of reach, and a bot that shoots anyway is wasting arrows.
+  {
+    const g = createGame('Aim', 'human', 'archer', 'male', 1234);
+    resetAutoplay();
+    arena(g);
+    const m = createMonster(g, 'grey_mold', 26, 17, false, g.level)!;
+    m.sleep = 0; m.visible = true; m.detected = true;
+    for (let y = 14; y <= 18; y++) g.level.tiles[y * g.level.w + 24] = T.GRANITE;
+    const before = g.player.quiver.reduce((n, q) => n + q.number, 0);
+    for (let step = 0; step < 6; step++) autoplayStep(g, step);
+    ok(g.player.quiver.reduce((n, q) => n + q.number, 0) === before, 'autoplay shot at a mold it could not reach through a wall');
+  }
+  console.log(`aim: an archer and a mage hit a mold at ${offsets.length} offsets, and hold fire through a wall`);
+}
+
 // 3. Autoplay: the bot the `=` menu (and ctrl+A) turns on, playing honestly with no cheats.
 {
   let botDeaths = 0, botDepth = 0, botKills = 0, botGold = 0;
   const runs = Math.max(2, Math.min(SEEDS, 4));
-  for (let seed = 1; seed <= runs; seed++) {
+  // Every third seed: the same four heroes each run, spread wider than the first four.
+  for (let run = 1; run <= runs; run++) {
+    const seed = run * 3;
     const cls = CLASSES[(seed * 5) % CLASSES.length], race = RACES[(seed * 2) % RACES.length];
     let g: Game;
     try { g = createGame('Bot' + seed, race.id, cls.id, seed % 2 ? 'female' : 'male', seed * 104729); }
     catch (e) { failures++; console.log(`  FAIL: autoplay createGame seed ${seed}: ${(e as Error).stack}`); continue; }
-    let step = 0;
+    let step = 0, idle = 0, worstIdle = 0;
     try {
       for (step = 0; step < TURNS && !g.player.dead; step++) {
+        const turn = g.turn, x = g.player.x, y = g.player.y, depth = g.level.depth;
         autoplayStep(g, step);
         if (g.levelChange) enterLevel(g, g.levelChange.depth, g.levelChange.by);
+        // A bot that neither moves nor spends a turn is bumping a wall; a few in a row is a probe,
+        // dozens is a hero stuck for good (fear that never fades, a corner it cannot leave).
+        idle = g.turn === turn && g.player.x === x && g.player.y === y && g.level.depth === depth ? idle + 1 : 0;
+        worstIdle = Math.max(worstIdle, idle);
         if (step % 25 === 0) check(g, `autoplay seed ${seed} step ${step}`);
       }
+      ok(worstIdle < 20, `autoplay seed ${seed}: the bot spent ${worstIdle} steps in a row on one grid without a turn passing; last: ${g.msg.list.slice(-4).map(m => m.text).join(' | ')}`);
     } catch (e) {
       failures++;
       console.log(`  FAIL: autoplay seed ${seed} (${cls.id}) crashed at step ${step} depth ${g.level.depth}: ${(e as Error).stack}`);

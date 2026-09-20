@@ -58,11 +58,12 @@ export interface Game {
    */
   noise: Uint16Array | null;
   /**
-   * Scent: the game turn the player last stood on each grid (0 = never). Trackers follow the path
-   * you actually walked rather than the straight line to you. Never saved.
+   * Scent: the stamp of the turn the player last stood on each grid (0 = never). Trackers follow
+   * the path you actually walked rather than the straight line to you. Saved with the game: unlike
+   * flow and noise it is history, and cannot be rebuilt from where the hero stands now.
    */
   scent: Uint16Array | null;
-  /** The turn counter scent grids are stamped with (see layScent). Never saved. */
+  /** The turn counter scent grids are stamped with (see layScent). */
   scentStamp: number;
   fx: Fx[];
   /** Sounds the UI has not played yet (see SoundId). */

@@ -36,6 +36,11 @@ export function serialize(g: Game): string {
     v: 3, seed: g.seed, turn: g.turn, player: { ...g.player, vx: undefined, vy: undefined }, level: packLevel(g.level), stores: g.stores, flavors: g.flavors, msg: g.msg.toJSON(),
     nextMonsterId: g.nextMonsterId, uniquesDead: g.uniquesDead, totalWinner: g.totalWinner, stats: g.stats, nextItemId: getNextItemId(), artifacts: artifactsMadeList(), rng: rng.state,
     options: g.options, lore: g.lore, monsterKnows: g.monsterKnows, artifactsSeen: g.artifactsSeen, egosKnown: g.egosKnown, savedLevels, ignore: g.ignore,
+    // The scent trail is history the level does not otherwise record. Flow and noise are rebuilt
+    // from the hero's position, but a trail can only be remembered, and a tracker that finds a cold
+    // floor after a restore where the live game had a trail takes a different step. That broke the
+    // promise that a save changes nothing, so the trail rides along.
+    scent: g.scent && g.scent.length === g.level.w * g.level.h ? b64(new Uint8Array(g.scent.buffer, g.scent.byteOffset, g.scent.byteLength)) : null, scentStamp: g.scentStamp,
   };
   return JSON.stringify(data);
 }
@@ -71,6 +76,11 @@ export function deserialize(json: string): Game {
   g.totalWinner = !!d.totalWinner;
   g.stats = d.stats;
   g.flow = null; g.flowDirty = true; g.noise = null; g.scent = null; g.scentStamp = 0; g.fx.length = 0; g.sounds.length = 0; g.levelChange = null; g.inStore = -1;
+  // Older saves carry no trail; ensureScent starts a fresh one on the first turn.
+  if (typeof d.scent === 'string') {
+    const u8 = unb64(d.scent);
+    if (u8.byteLength === g.level.w * g.level.h * 2) { g.scent = new Uint16Array(u8.buffer, u8.byteOffset, g.level.w * g.level.h); g.scentStamp = d.scentStamp | 0; }
+  }
   setNextItemId(d.nextItemId);
   setArtifactsMade(d.artifacts || []);
   rng.seed(d.rng);

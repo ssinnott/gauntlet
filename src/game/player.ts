@@ -3,8 +3,8 @@
 // (18/10 = 19, 18/50 = 23, 18/100 = 28, up to 18/220 = 40).
 import { rng } from '../lib/engine/rng.ts';
 import { type Player, type PlayerBonuses, type Stat, type Item, type SkillSet, type ObjectFlag, type Timed, STATS, SLOTS, type SlotName } from './types.ts';
-import { RACE_BY_ID } from './data/races.ts';
-import { CLASS_BY_ID } from './data/classes.ts';
+import { RACES, RACE_BY_ID } from './data/races.ts';
+import { CLASSES, CLASS_BY_ID } from './data/classes.ts';
 import { kindOf, itemFlags, isWeapon, artifactOf } from './items.ts';
 import { FOOD_MAX } from '../constants.ts';
 import { clamp } from './util.ts';
@@ -95,6 +95,28 @@ export function makeHistory(race: string, sex: 'male' | 'female', rnd: (n: numbe
   const look = pick(['You have dark brown eyes, straight black hair and an average complexion.', 'You have blue eyes, wavy blond hair and a fair complexion.', 'You have green eyes, curly red hair and a ruddy complexion.', 'You have grey eyes, straight brown hair and a dark complexion.', 'You have hazel eyes, wild auburn hair and a pale complexion.']);
   const rep = pick(['You are a credit to the family.', 'You are the black sheep of the family.', 'You are a well liked child.', 'You are a shunned child.', 'You are of average fame.']);
   return `${origin} ${rep} ${look}`.replace(/\bYou are (a|the) (well liked|shunned) child/, sex === 'female' ? 'You are $1 $2 daughter' : 'You are $1 $2 son');
+}
+
+/** Names for a hero whose player could not think of one (Gauntlet's four and some company). */
+export const HERO_NAMES = ['Thor', 'Merlin', 'Thyra', 'Questor', 'Grim', 'Elenna', 'Bram', 'Sable', 'Vala', 'Orin', 'Tamsin', 'Dagny', 'Sumner', 'Falcon', 'Jester', 'Tygra'];
+export function randomName(rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b)): string { return HERO_NAMES[rnd(0, HERO_NAMES.length - 1)]; }
+
+/** Everything the birth screen asks for, answered by chance. */
+export interface RandomHero {
+  race: string; cls: string; sex: 'male' | 'female'; name: string; history: string;
+  /** Whether the stats came from a random point buy (base is the bought stats before modifiers) or a roll. */
+  pointBuy: boolean; base: Record<Stat, number> | null; stats: Record<Stat, number>;
+}
+/** A whole hero left to chance: a race, a class, a sex, stats (a coin decides between a roll and a
+ *  point buy that chance spends), a name and a history. Birth options are the player's preferences,
+ *  not the hero's, so they are left alone. Pure in the dice, like rollStats and randomBuy. */
+export function randomHero(rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b)): RandomHero {
+  const race = RACES[rnd(0, RACES.length - 1)].id, cls = CLASSES[rnd(0, CLASSES.length - 1)].id;
+  const sex = rnd(0, 1) ? 'female' : 'male';
+  const pointBuy = rnd(0, 1) === 1;
+  const base = pointBuy ? randomBuy(rnd) : null;
+  const stats = base ? boughtStats(base, race, cls) : rollStats(race, cls, rnd);
+  return { race, cls, sex, name: randomName(rnd), history: makeHistory(race, sex, n => rnd(0, n - 1)), pointBuy, base, stats };
 }
 
 export function createPlayer(name: string, race: string, cls: string, sex: 'male' | 'female', chosenStats?: Record<Stat, number>): Player {

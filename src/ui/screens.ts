@@ -662,6 +662,9 @@ export class LookMode implements Overlay {
 // ---------------------------------------------------------------------------------------------
 // Title, birth and death
 
+/** How many lines the title menu has (NEW GAME, RANDOM HERO, CONTINUE, HALL OF HEROES, IMPORT SAVE, HELP). */
+const TITLE_ITEMS = 6;
+
 export class TitleScreen implements Overlay {
   opaque = true;
   sel = 0;
@@ -676,33 +679,35 @@ export class TitleScreen implements Overlay {
     drawTextOutlined(ctx, 'GAUNTLET', VIEW_W / 2, 70, { size: 7, color: '#ffd040', align: 'center', outline: '#3a1c00', thickness: 3 });
     drawTextOutlined(ctx, 'OF ANGBAND', VIEW_W / 2, 140, { size: 4, color: '#e04040', align: 'center', outline: '#2a0a10', thickness: 2 });
     drawText(ctx, 'A PROCEDURAL DUNGEON OF PITS, WYRMS AND GENERATORS', VIEW_W / 2, 190, { size: 1, color: '#8a869a', align: 'center' });
-    const items = [['NEW GAME', true], ['CONTINUE', ui.hasSave()], ['HALL OF HEROES', true], ['IMPORT SAVE', true], ['HELP', true]] as [string, boolean][];
+    const items = [['NEW GAME', true], ['RANDOM HERO', true], ['CONTINUE', ui.hasSave()], ['HALL OF HEROES', true], ['IMPORT SAVE', true], ['HELP', true]] as [string, boolean][];
     for (let i = 0; i < items.length; i++) {
       const [t, ok] = items[i];
       drawText(ctx, (this.sel === i ? '> ' : '  ') + t, VIEW_W / 2, 232 + i * 22, { size: 2, color: !ok ? '#4a4656' : this.sel === i ? HI : TEXT, align: 'center' });
     }
-    drawText(ctx, 'ARROWS + ENTER      WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, 350, { size: 1, color: '#5a5666', align: 'center' });
+    drawText(ctx, 'ARROWS + ENTER      WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, 232 + items.length * 22 + 8, { size: 1, color: '#5a5666', align: 'center' });
   }
   key(e: KeyEvent, ui: Ui): boolean {
-    if (e.key === 'ArrowDown' || e.key === 'j') this.sel = (this.sel + 1) % 5;
-    else if (e.key === 'ArrowUp' || e.key === 'k') this.sel = (this.sel + 4) % 5;
+    if (e.key === 'ArrowDown' || e.key === 'j') this.sel = (this.sel + 1) % TITLE_ITEMS;
+    else if (e.key === 'ArrowUp' || e.key === 'k') this.sel = (this.sel + TITLE_ITEMS - 1) % TITLE_ITEMS;
     else if (e.key === 'Enter' || e.key === ' ') this.choose(ui);
     else if (e.key === 'n' || e.key === 'N') { this.sel = 0; this.choose(ui); }
-    else if (e.key === 'c' || e.key === 'C') { this.sel = 1; this.choose(ui); }
-    else if (e.key === 'h' || e.key === 'H') { this.sel = 2; this.choose(ui); }
+    else if (e.key === 'r' || e.key === 'R' || e.key === '*') { this.sel = 1; this.choose(ui); }
+    else if (e.key === 'c' || e.key === 'C') { this.sel = 2; this.choose(ui); }
+    else if (e.key === 'h' || e.key === 'H') { this.sel = 3; this.choose(ui); }
     else if (e.key === '?') ui.push(new HelpOverlay());
     return true;
   }
   choose(ui: Ui): void {
     if (this.sel === 0) ui.push(new BirthScreen2());
-    else if (this.sel === 1) ui.push(new SaveSlotsOverlay());
-    else if (this.sel === 2) ui.push(new HighScoresOverlay());
-    else if (this.sel === 3) (ui as Ui2).importSave();
+    else if (this.sel === 1) { const b = new BirthScreen2(); ui.push(b); b.randomStart(ui); } // chance picks everything and the game begins
+    else if (this.sel === 2) ui.push(new SaveSlotsOverlay());
+    else if (this.sel === 3) ui.push(new HighScoresOverlay());
+    else if (this.sel === 4) (ui as Ui2).importSave();
     else ui.push(new HelpOverlay());
   }
   click(x: number, y: number, ui: Ui): boolean {
     const i = Math.floor((y - 226) / 22);
-    if (i >= 0 && i < 5 && Math.abs(x - VIEW_W / 2) < 140) { this.sel = i; this.choose(ui); }
+    if (i >= 0 && i < TITLE_ITEMS && Math.abs(x - VIEW_W / 2) < 140) { this.sel = i; this.choose(ui); }
     return true;
   }
 }
@@ -750,14 +755,15 @@ export class BirthScreen implements Overlay {
     }
   }
   private previewFor: HeroSprite | null = null;
-  private previewCls = '';
+  private previewKey = '';
   private preview(ctx: CanvasRenderingContext2D, cls: string, ui: Ui): void {
-    if (!this.previewFor || this.previewCls !== cls) {
+    const key = cls + '/' + RACES[this.race].id + '/' + this.sex;
+    if (!this.previewFor || this.previewKey !== key) {
       const p = createPlayer('Preview', RACES[this.race].id, cls, this.sex);
       const w = CLASS_BY_ID[cls].startItems.find(([k]) => isWeapon(kindOf({ kind: k } as Item)));
       if (w) p.equip.weapon = makeItem(w[0], 1);
       this.previewFor = buildHero(p);
-      this.previewCls = cls;
+      this.previewKey = key;
     }
     ctx.save();
     ctx.translate(VIEW_W - 150, 330);

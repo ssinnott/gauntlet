@@ -241,6 +241,25 @@ export function updateMonsterVisibility(g: Game): void {
   }
 }
 
+/** Angband's repro_monster_rate: a lone breeder breeds on one action in this many. */
+const BREED_RATE = 50;
+/** Angband's repro_monster_max: no breeding once this many breeders share the level. */
+const BREEDERS_MAX = 100;
+
+/**
+ * Angband's monster_check_active: does this monster know the hero is about? It does if it can see
+ * them, hear them, or has been hurt. Anything else is passive and does nothing that would be
+ * noticed from far away, which today means breeding. Angband also counts a scent trail underfoot;
+ * that is left out on purpose, since a worm mass crawling over footprints you left eighty turns ago
+ * on the far side of the level has not met you in any sense a player would recognise.
+ */
+export function monsterIsActive(g: Game, m: Monster, dist: number): boolean {
+  const p = g.player, lv = g.level;
+  if (m.hp < m.maxhp) return true;
+  if (dist <= 20 && los(lv, m.x, m.y, p.x, p.y)) return true;
+  return canHearPlayer(g, m);
+}
+
 /** One monster's action when it has enough energy. */
 export function monsterTurn(g: Game, m: Monster): void {
   const r = raceOf(m);
@@ -286,13 +305,22 @@ export function monsterTurn(g: Game, m: Monster): void {
     m.spawnTimer = generatorInterval(r, tier);
     return;
   }
-  // Breeders.
-  if (hasMFlag(r, 'MULTIPLY') && lv.monsters.length < 200) {
-    let k = 0;
-    for (let d = 1; d <= 9; d++) if (d !== 5 && monsterAt(lv, m.x + DIR_DX[d], m.y + DIR_DY[d])) k++;
-    if (k < 4 && oneIn(8 + k * 8)) {
-      const pos = nearFloor(lv, m.x, m.y, 1);
-      if (pos) { const s = createMonster(g, r.id, pos.x, pos.y, false); if (s) { s.energy = 0; if (m.visible) g.msg.add(`${monsterName(m)} breeds explosively!`); } }
+  // Breeders. Angband's process_monster_multiply, and its monster_check_active before it: a worm
+  // mass that has no idea you are on the level does nothing, breeding included. Without that gate
+  // every breeder on the level bred from the moment it woke, and the old 1-in-8 roll (Angband's is
+  // 1 in 50 for a breeder with no neighbours) meant the far end of a level was a carpet of worms
+  // long before you ever walked into it.
+  if (hasMFlag(r, 'MULTIPLY') && lv.monsters.length < 200 && monsterIsActive(g, m, dist)) {
+    let breeders = 0;
+    for (const o of lv.monsters) if (hasMFlag(raceOf(o), 'MULTIPLY') && ++breeders >= BREEDERS_MAX) break;
+    if (breeders < BREEDERS_MAX) {
+      // Adjacent monsters slow it down; Angband counts the breeder itself among them, hence k + 1.
+      let k = 0;
+      for (let d = 1; d <= 9; d++) if (d !== 5 && monsterAt(lv, m.x + DIR_DX[d], m.y + DIR_DY[d])) k++;
+      if (k < 4 && oneIn(BREED_RATE * (k + 1))) {
+        const pos = nearFloor(lv, m.x, m.y, 1);
+        if (pos) { const s = createMonster(g, r.id, pos.x, pos.y, false); if (s) { s.energy = 0; if (m.visible) g.msg.add(`${monsterName(m)} breeds explosively!`); } }
+      }
     }
   }
   // Fear and low hp: flee.
@@ -492,18 +520,20 @@ function tryMove(g: Game, m: Monster, dx: number, dy: number): void {
     if (r.depth > 0 && randint0(550) < r.depth) { lv.flags[ny * lv.w + nx] &= ~F.GLYPH; if (playerCanSee(lv, nx, ny)) g.msg.add('The rune of protection is broken!', '#ff8080'); }
     else return;
   }
+  // Every tile a monster changes here dirties the flow and noise maps: the hero has not moved, so
+  // nothing else would rebuild them, and a stale map is state a save does not carry.
   if (isWall(t) && t !== T.SECRET_DOOR) {
     if (hasMFlag(r, 'PASS_WALL')) { /* passes */ }
-    else if (hasMFlag(r, 'KILL_WALL')) { setTile(lv, nx, ny, T.FLOOR); if (playerCanSee(lv, nx, ny)) g.msg.add('You hear grinding.'); }
+    else if (hasMFlag(r, 'KILL_WALL')) { setTile(lv, nx, ny, T.FLOOR); g.flowDirty = true; if (playerCanSee(lv, nx, ny)) g.msg.add('You hear grinding.'); }
     else return;
   } else if (t === T.DOOR_CLOSED || t === T.SECRET_DOOR) {
     if (hasMFlag(r, 'PASS_WALL')) { /* passes */ }
-    else if (hasMFlag(r, 'OPEN_DOOR') && auxAt(lv, nx, ny) === 0) { setTile(lv, nx, ny, T.DOOR_OPEN); if (playerCanSee(lv, nx, ny)) { g.msg.add('You hear a door open.'); disturb(g); } return; }
-    else if (hasMFlag(r, 'OPEN_DOOR') && auxAt(lv, nx, ny) < 100 && randint0(auxAt(lv, nx, ny) * 2 + 2) === 0) { setAux(lv, nx, ny, 0); setTile(lv, nx, ny, T.DOOR_OPEN); return; }
-    else if (hasMFlag(r, 'BASH_DOOR') && randint0(m.maxhp / 10 + 2) > 5 + doorPower(auxAt(lv, nx, ny)) * 3) { setTile(lv, nx, ny, T.DOOR_BROKEN); setAux(lv, nx, ny, 0); g.msg.add('You hear a door burst open!'); disturb(g); }
+    else if (hasMFlag(r, 'OPEN_DOOR') && auxAt(lv, nx, ny) === 0) { setTile(lv, nx, ny, T.DOOR_OPEN); g.flowDirty = true; if (playerCanSee(lv, nx, ny)) { g.msg.add('You hear a door open.'); disturb(g); } return; }
+    else if (hasMFlag(r, 'OPEN_DOOR') && auxAt(lv, nx, ny) < 100 && randint0(auxAt(lv, nx, ny) * 2 + 2) === 0) { setAux(lv, nx, ny, 0); setTile(lv, nx, ny, T.DOOR_OPEN); g.flowDirty = true; return; }
+    else if (hasMFlag(r, 'BASH_DOOR') && randint0(m.maxhp / 10 + 2) > 5 + doorPower(auxAt(lv, nx, ny)) * 3) { setTile(lv, nx, ny, T.DOOR_BROKEN); setAux(lv, nx, ny, 0); g.flowDirty = true; g.msg.add('You hear a door burst open!'); disturb(g); }
     else return;
   } else if (t === T.RUBBLE) {
-    if (hasMFlag(r, 'KILL_WALL') || hasMFlag(r, 'PASS_WALL')) { if (hasMFlag(r, 'KILL_WALL')) setTile(lv, nx, ny, T.FLOOR); }
+    if (hasMFlag(r, 'KILL_WALL') || hasMFlag(r, 'PASS_WALL')) { if (hasMFlag(r, 'KILL_WALL')) { setTile(lv, nx, ny, T.FLOOR); g.flowDirty = true; } }
     else return;
   } else if (!isPassable(t) && t !== T.TREE) return;
   else if (t === T.TREE && !hasMFlag(r, 'PASS_WALL')) return;

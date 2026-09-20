@@ -1,19 +1,25 @@
-// The player's sprite: the engine's paper-doll rig, built once per class with that class's palette,
-// a weapon drawn to match what is wielded, and three little animations (idle, walk, attack).
-import { buildRig, drawRig, type Rig, type RigBuild, type RigWeapon } from '../lib/art/rig.ts';
+// The player's sprite: the engine's paper-doll rig, built once per race, class and sex. The race is the
+// body (skin, hair, ears, beard, build; see heroRaces.ts), the class is the kit drawn on it (garments,
+// hat, pauldrons, cloak, robe) and the palette its garments use, the wielded weapon is drawn to match,
+// and three little animations (idle, walk, attack) play on top.
+import { buildRig, drawRig, type Rig, type RigBuild, type RigWeapon, type RigParts, type RigAccessory, type Proportions } from '../lib/art/rig.ts';
 import { P, makePose } from '../lib/art/poses.ts';
 import { AnimPlayer, type AnimSet } from '../lib/art/animation.ts';
 import type { Palette } from '../lib/art/palettes.ts';
 import { shade } from '../lib/art/palettes.ts';
+import { celBall, celPoly } from '../lib/art/shading.ts';
+import { drawTorsoShape } from '../lib/art/rigParts.ts';
 import { CLASS_BY_ID } from '../game/data/classes.ts';
 import type { Player } from '../game/types.ts';
 import { kindOf } from '../game/items.ts';
 import { RACE_BY_ID } from '../game/data/races.ts';
+import { raceRig } from './heroRaces.ts';
 
 const INK = '#120c14';
 /** Rig scale: a 72 px reference rig drawn at this scale stands ~26 px, a little over a 24 px tile. */
 export const HERO_SCALE = 0.4;
-
+/** The human build; a race's `look.build` overrides any of these. */
+const BASE_PROPORTIONS: Partial<Proportions> = { headR: 10, torsoW: 24, torsoH: 24, upperLeg: 13, lowerLeg: 13, upperArm: 12, lowerArm: 11 };
 const ANIMS: AnimSet = {
   idle: { loop: true, frames: [
     { dur: 40, pose: P({ armR: [12, 10], armL: [-14, 8], torso: 1, head: -1, root: [0, 0] }) },
@@ -81,18 +87,53 @@ export interface HeroSprite {
 }
 
 export function buildHero(p: Player): HeroSprite {
-  const c = CLASS_BY_ID[p.cls];
-  const pal: Palette = { ...c.palette };
-  const size = RACE_BY_ID[p.race]?.size || 1;
+  const c = CLASS_BY_ID[p.cls], r = RACE_BY_ID[p.race];
+  const pal: Palette = { skin: r.look.skin, hair: r.look.hair, ...c.palette };
+  const race = raceRig(r.look, p.sex, pal);
+  const kit = classKit(p.cls, pal);
   const build: RigBuild = {
-    basePalette: pal, outline: INK, scale: HERO_SCALE * size, proportions: { headR: 10, torsoW: 24, torsoH: 24, upperLeg: 13, lowerLeg: 13, upperArm: 12, lowerArm: 11 },
-    thinR: 4, hiMin: 6, flatR: 2.5, tones: 2, weapon: weaponFor(p), hairStyle: p.cls === 'mage' || p.cls === 'necromancer' ? 'bald' : 'short',
-    accessories: accessoriesFor(p.cls, pal),
+    basePalette: pal, outline: INK, scale: HERO_SCALE * (r.size || 1), proportions: { ...BASE_PROPORTIONS, ...(r.look.build || {}) },
+    thinR: 4, hiMin: 6, flatR: 2.5, tones: 2, weapon: weaponFor(p),
+    hairStyle: race.hairStyle, jaw: r.look.jaw, noNose: race.noNose, face: race.face,
+    parts: { ...race.parts, ...kit.parts }, accessories: [...race.accessories, ...kit.accessories],
   };
   const rig = buildRig(build);
   const player = new AnimPlayer(ANIMS);
   player.play('idle');
-  return { rig, player, weaponKey: p.equip.weapon ? p.equip.weapon.kind : '', cls: p.cls + '/' + p.race };
+  return { rig, player, weaponKey: p.equip.weapon ? p.equip.weapon.kind : '', cls: heroKey(p) };
+}
+function heroKey(p: Player): string { return p.cls + '/' + p.race + '/' + p.sex; }
+
+/** The class kit: what a class wears over the race's body, besides the palette its garments use. */
+function classKit(cls: string, pal: Palette): { parts: RigParts; accessories: RigAccessory[] } {
+  const parts: RigParts = {};
+  const acc = accessoriesFor(cls, pal);
+  // Pauldrons on the armoured classes: a metal plate on each shoulder corner of the torso silhouette (the
+  // rig's shoulder joints themselves sit near the torso's centre line, so a cap at the joint covers the chest).
+  if (cls === 'warrior' || cls === 'paladin' || cls === 'blackguard') parts.torso = (ctx, rig, _pose, info) => {
+    const W = info.w || rig.p.torsoW, H = info.h || rig.p.torsoH, hw = Math.round(W / 2);
+    drawTorsoShape(ctx, rig, W, H, rig.p.hip, info.color);
+    for (const x of [-hw + 1, hw - 1]) {
+      celBall(ctx, rig, x, -H + 3, 4.5, pal.metal, false);
+      if (cls === 'blackguard') celPoly(ctx, rig, [x - 2, -H + 1, x + (x < 0 ? -3 : 3), -H - 6, x + 2, -H + 1], pal.accent, 0, 0);
+    }
+  };
+  // The casters wear a robe: a skirt hung from the belt over the thighs (hip space, front layer).
+  if (cls === 'mage' || cls === 'priest' || cls === 'druid' || cls === 'necromancer') acc.push({ attach: 'hip', draw: (ctx, rig) => {
+    const hw = Math.round(rig.p.hip / 2);
+    celPoly(ctx, rig, [-hw - 1, 0, hw + 1, 0, hw + 5, 15, -hw - 5, 15], pal.primary, 0.36, 0);
+    if (!rig.override) { ctx.fillStyle = rig.col(pal.accent); ctx.fillRect(-hw - 5, 13, hw * 2 + 10, 2); }
+  } });
+  // A cloak down the ranger's back and a round shield slung on the paladin's (torso space, back layer).
+  if (cls === 'ranger') acc.push({ attach: 'torso', layer: 'back', draw: (ctx, rig) => {
+    const H = rig.p.torsoH;
+    celPoly(ctx, rig, [-12, -H + 2, 10, -H + 2, 14, -H + 14, 6, 12, -18, 12, -15, -H + 14], pal.secondary, 0.36, 0);
+  } });
+  if (cls === 'paladin') acc.push({ attach: 'torso', layer: 'back', draw: (ctx, rig) => {
+    celBall(ctx, rig, -8, -12, 11, pal.metal, false);
+    celBall(ctx, rig, -8, -12, 3.5, pal.accent, false);
+  } });
+  return { parts, accessories: acc };
 }
 
 function accessoriesFor(cls: string, pal: Palette) {
@@ -163,10 +204,10 @@ function accessoriesFor(cls: string, pal: Palette) {
   return acc;
 }
 
-/** Rebuild the rig when the wielded weapon changes. */
+/** Rebuild the rig when the wielded weapon (or, on a loaded save, the hero) changes. */
 export function syncHero(h: HeroSprite, p: Player): HeroSprite {
   const key = p.equip.weapon ? p.equip.weapon.kind : '';
-  if (key === h.weaponKey && h.cls === p.cls + '/' + p.race) return h;
+  if (key === h.weaponKey && h.cls === heroKey(p)) return h;
   const n = buildHero(p);
   n.player.play(h.player.name || 'idle');
   return n;
