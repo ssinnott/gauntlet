@@ -9,9 +9,11 @@ import { playerAttack, takeHit, elementDamage, monsterTakeHit, testHit, critical
 import { raceOf, hasMFlag, monsterName, monsterNameVisible, updateMonsterVisibility, createMonster, pickRace, nearFloor, monsterTurn } from './monster.ts';
 import { kindOf, itemName, itemFlags, isAmmo, isWeapon, isArmor, wieldSlot, canStack, absorb, splitStack, makeAware, markTried, isAware, identify, isKnown, itemDice, makeItem } from './items.ts';
 import { runEffect, needsDir, needsItem, type EffectCtx } from './effects.ts';
-import { setTimed, refreshBonuses, teleportPlayer, movePlayerTo, randomDir } from './effectsCore.ts';
+import { setTimed, refreshBonuses, teleportPlayer, movePlayerTo, randomDir, startSong, stopSong, stopAllSongs } from './effectsCore.ts';
 import { adj, weaponPenalty, bowSkill, drainStat, meleeSkill } from './player.ts';
 import { SPELL_BY_ID, SPELLS, spellsInBook } from './data/spells.ts';
+import { isSong } from './data/songs.ts';
+import { quirkShotDamage, quirkThrowMultiplier, quirkAmmoSurvives, quirkSpellCost, quirkGold, castsFromHealth, castingPool, payForSpell, noteMoved } from './quirks.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
 import { disturb, dropNear } from './world.ts';
 import { randint0, randint1, oneIn, damroll, distance } from './util.ts';
@@ -19,7 +21,7 @@ import { project, targetFromDir } from './projection.ts';
 import { maintainStore } from './stores.ts';
 import { INVEN_MAX, FOOD_MAX, QUIVER_SLOTS } from '../constants.ts';
 import { deepestAllowed } from './game.ts';
-import { REALM_BOOK, REALM_WORD, type Realm } from './types.ts';
+import { REALM_BOOK, REALM_WORD, BOOK_TVALS, type Realm } from './types.ts';
 import { noteItemKnown } from './effects.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -75,6 +77,7 @@ export function moveDir(g: Game, dir: number, opts: { running?: boolean; travel?
   // Move.
   p.vx = p.x; p.vy = p.y;
   p.x = nx; p.y = ny;
+  noteMoved(p);
   g.flowDirty = true;
   updateView(lv, p.x, p.y, g.bonuses.lightRadius, p.timed.blind > 0);
   // Searching as you go.
@@ -353,7 +356,8 @@ export function pickupHere(g: Game, auto: boolean, goldOnly = false, skip?: (it:
     if (isIgnored(g, fi.item)) { skipped++; continue; }
     if (goldOnly && k.tval !== 'gold' && k.tval !== 'key') { if (auto && !fi.item.known && !isAware(g.flavors, fi.item.kind)) { /* still see it */ } g.msg.add(`You see ${itemName(fi.item, g.flavors)}.`); continue; }
     if (k.tval === 'gold') {
-      p.gold += fi.item.pval; g.stats.goldFound += fi.item.pval; playSound(g, 'gold');
+      const coin = quirkGold(p, fi.item.pval);
+      p.gold += coin; g.stats.goldFound += coin; playSound(g, 'gold');
       g.msg.add(`You have found ${fi.item.pval} gold pieces worth of ${k.name}.`, '#ffd040');
       g.fx.push({ type: 'hit', x: p.x, y: p.y, text: `+${fi.item.pval}`, color: '#ffd040' });
       lv.items.splice(lv.items.indexOf(fi), 1); took = true; continue;
@@ -383,7 +387,9 @@ export function addToInventory(g: Game, it: Item): boolean {
   return true;
 }
 export function sortInventory(g: Game): void {
-  const order = ['magic_book', 'prayer_book', 'food', 'potion', 'scroll', 'wand', 'staff', 'rod', 'ring', 'amulet', 'light', 'flask', 'spike', 'key', 'sword', 'hafted', 'polearm', 'digger', 'bow', 'shot', 'arrow', 'bolt', 'soft_armor', 'hard_armor', 'dragon_armor', 'shield', 'helm', 'crown', 'cloak', 'gloves', 'boots', 'chest', 'junk', 'gold'];
+  // Every book tval, then the rest. The list used to name only two of the books, so a druid's and
+  // a necromancer's sorted to index -1 and floated above everything else.
+  const order = [...BOOK_TVALS, 'food', 'potion', 'scroll', 'wand', 'staff', 'rod', 'ring', 'amulet', 'light', 'flask', 'spike', 'key', 'sword', 'hafted', 'polearm', 'digger', 'bow', 'shot', 'arrow', 'bolt', 'soft_armor', 'hard_armor', 'dragon_armor', 'shield', 'helm', 'crown', 'cloak', 'gloves', 'boots', 'chest', 'junk', 'gold'];
   g.player.inven.sort((a, b) => order.indexOf(kindOf(a).tval) - order.indexOf(kindOf(b).tval) || kindOf(a).level - kindOf(b).level || kindOf(a).cost - kindOf(b).cost);
 }
 export function removeFromInventory(g: Game, it: Item, n = it.number): Item {
@@ -576,9 +582,10 @@ export function throwItem(g: Game, it: Item, dir: number, target?: Pos | null): 
       if (testHit(chance, raceOf(m).ac, m.visible)) {
         const [dn, ds] = itemDice(one);
         let dam = damroll(dn || 1, ds || 2) + one.toDam;
-        if (k.tval === 'flask') { dam = damroll(2, 6); g.msg.add(`The ${itemName(one, g.flavors, { article: false, plainKind: true })} shatters and burns ${monsterNameVisible(g, m, false)}!`); project(g, q.x, q.y, q.x, q.y, 'fire', { dam, radius: 1, source: 'player', range: 1 }); broke = true; break; }
+        const throwMult = quirkThrowMultiplier(p);
+        if (k.tval === 'flask') { dam = damroll(2 * throwMult, 6); g.msg.add(`The ${itemName(one, g.flavors, { article: false, plainKind: true })} shatters and burns ${monsterNameVisible(g, m, false)}!`); project(g, q.x, q.y, q.x, q.y, 'fire', { dam, radius: 1, source: 'player', range: 1 }); broke = true; break; }
         dam *= slayMultiplier(itemFlags(one), m);
-        if (itemFlags(one).has('THROWING')) dam *= 2;
+        if (itemFlags(one).has('THROWING')) dam *= 2 * throwMult;
         g.msg.add(`The ${itemName(one, g.flavors, { article: false, plainKind: true })} hits ${monsterNameVisible(g, m, false)}.`);
         monsterTakeHit(g, m, Math.max(0, dam), '');
       } else g.msg.add(`The ${itemName(one, g.flavors, { article: false, plainKind: true })} misses.`);
@@ -612,12 +619,13 @@ export function fire(g: Game, ammo: Item, dir: number, target?: Pos | null): voi
     const m = monsterAt(lv, q.x, q.y);
     if (m) {
       const d = distance(p.x, p.y, q.x, q.y);
+      const wasAsleep = m.sleep > 0;
       if (testHit(chance - d, raceOf(m).ac, m.visible)) {
         const [dn, ds] = itemDice(one);
         let dam = (damroll(dn, ds) + one.toDam + bow.toDam) * b.might;
         dam *= slayMultiplier(new Set([...itemFlags(one), ...itemFlags(bow)]), m);
         const [cd, cm] = criticalShot(ak.weight, one.toHit + bow.toHit + b.toHit, dam, p.lev);
-        dam = cd;
+        dam = quirkShotDamage(p, cd, d, wasAsleep);
         g.msg.add(`The ${itemName(one, g.flavors, { article: false, plainKind: true })} hits ${monsterNameVisible(g, m, false)}.`);
         if (cm) g.msg.add(cm, '#ffd040');
         monsterTakeHit(g, m, Math.max(0, dam), '');
@@ -626,9 +634,10 @@ export function fire(g: Game, ammo: Item, dir: number, target?: Pos | null): voi
       break;
     }
   }
-  // Ammo breaks sometimes (more often on a hit).
-  if (randint0(100) >= (hit ? 35 : 20)) dropNear(g, one, landed.x, landed.y);
+  // Ammo breaks sometimes (more often on a hit), unless the hero made it and knows better.
+  if (quirkAmmoSurvives(p) || randint0(100) >= (hit ? 35 : 20)) dropNear(g, one, landed.x, landed.y);
   refreshBonuses(g);
+  noteMoved(p);
   endTurn(g, Math.floor(100 / Math.max(1, b.shots)));
 }
 function criticalShot(weight: number, plus: number, dam: number, lev: number): [number, string] {
@@ -645,7 +654,7 @@ function criticalShot(weight: number, plus: number, dam: number, lev: number): [
 // ---------------------------------------------------------------------------------------------
 // Spells
 
-const PRIMARY_CASTERS = ['mage', 'priest', 'druid', 'necromancer'];
+const PRIMARY_CASTERS = ['mage', 'priest', 'druid', 'necromancer', 'bard'];
 export function classSpells(g: Game): SpellDef[] {
   const c = CLASS_BY_ID[g.player.cls];
   if (!c.realm) return [];
@@ -653,6 +662,12 @@ export function classSpells(g: Game): SpellDef[] {
 }
 /** The realm's words: [spell, cast, book]. */
 export function realmWords(g: Game): [string, string, string] { const c = CLASS_BY_ID[g.player.cls]; return REALM_WORD[(c.realm || 'magic') as Realm]; }
+/** Stop every song, for the `S` key and for anything that silences the singer. */
+export function stopSinging(g: Game): void {
+  if (!(g.player.songs || []).length) { g.msg.add('You are not singing.'); return; }
+  stopAllSongs(g);
+  endTurn(g);
+}
 /** Level and mana adjusted for non-primary casters (rogues, rangers, paladins learn late), or the class's own table when the spell has one. */
 export function spellLevel(g: Game, s: SpellDef): number {
   const cls = g.player.cls;
@@ -664,8 +679,9 @@ export function spellLevel(g: Game, s: SpellDef): number {
 export function spellMana(g: Game, s: SpellDef): number {
   const cls = g.player.cls;
   const t = s.classes?.[cls];
-  if (t) return t[1];
-  return PRIMARY_CASTERS.includes(cls) ? s.mana : Math.ceil(s.mana * 1.3);
+  const base = t ? t[1] : PRIMARY_CASTERS.includes(cls) ? s.mana : Math.ceil(s.mana * 1.3);
+  const shape = s.effect.kind === 'bolt' ? 'bolt' : s.effect.kind === 'ball' ? 'ball' : 'other';
+  return quirkSpellCost(g.player, base, shape);
 }
 export function spellExp(g: Game, s: SpellDef): number { const t = s.classes?.[g.player.cls]; return t ? t[3] : s.exp; }
 export function spellFail(g: Game, s: SpellDef): number {
@@ -675,7 +691,8 @@ export function spellFail(g: Game, s: SpellDef): number {
   chance -= 3 * (p.lev - spellLevel(g, s));
   chance -= 3 * (adj.magStudy(g.bonuses.stat[c.spellStat]) - 1);
   const mana = spellMana(g, s);
-  if (mana > p.csp) chance += 5 * (mana - p.csp);
+  const pool = castingPool(p);
+  if (mana > pool) chance += 5 * (mana - pool);
   const min = adj.magFail(g.bonuses.stat[c.spellStat]);
   if (chance < min) chance = min;
   if (p.timed.stun > 50) chance += 20; else if (p.timed.stun) chance += 10;
@@ -721,10 +738,22 @@ export function cast(g: Game, s: SpellDef, ctx: EffectCtx = {}): void {
   if (p.timed.confused) { g.msg.add('You are too confused!'); return; }
   if (!p.learned.includes(s.id)) { g.msg.add(`You do not know that ${word}.`); return; }
   const mana = spellMana(g, s);
-  if (mana > p.csp) { g.msg.add(`You do not have enough mana to ${verb} this ${word}.`); return; }
+  // A blood mage holds no mana and pays in blood, so the same question is asked of a different pool.
+  if (mana > castingPool(p)) { g.msg.add(castsFromHealth(p) ? `You lack the blood to ${verb} this ${word}.` : `You do not have enough mana to ${verb} this ${word}.`); return; }
   const fail = spellFail(g, s);
-  p.csp -= mana;
+  payForSpell(g, mana);
   if (randint0(100) < fail) { g.msg.add(c.realm === 'prayer' ? 'You failed to concentrate hard enough!' : `You failed to get the ${word} off!`, '#ff8080'); playSound(g, 'fail'); endTurn(g); return; }
+  // A song is struck up rather than cast: the mana above bought the first breath, and the upkeep
+  // in processWorld buys every one after it. Singing the song you are already singing stops it.
+  if (isSong(s.id)) {
+    if ((p.songs || []).includes(s.id)) { stopSong(g, s.id); endTurn(g); return; }
+    g.msg.add(`You begin to sing ${s.name}.`, '#c0c0ff');
+    playSound(g, 'cast');
+    startSong(g, s.id);
+    if (!p.cast.includes(s.id)) { p.cast.push(s.id); gainExp(g, spellExp(g, s) * spellLevel(g, s)); g.msg.add('You have learned something new.', '#a0ffa0'); }
+    endTurn(g);
+    return;
+  }
   g.msg.add(`You ${verb} ${s.name}.`, '#c0c0ff');
   playSound(g, 'cast');
   const power = s.id === 'magic_missile' || s.id === 'nether_bolt' ? Math.floor((p.lev - 1) / 5) : 0;

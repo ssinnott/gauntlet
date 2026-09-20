@@ -14,6 +14,7 @@ import { tileAt, flagAt, monsterAt, itemsAt, inBounds, projectPath } from './lev
 import { kindOf, isKnown, isAmmo, isWearable, wieldSlot, itemName, itemDice, canStack, getNextItemId, setNextItemId } from './items.ts';
 import { isIgnored, itemQuality, alwaysPickUp } from './ignore.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
+import { isSong } from './data/songs.ts';
 import { maintainStore, storeBuy, storeSell, storeWants, buyPrice, sellPrice } from './stores.ts';
 import { refreshBonuses } from './effectsCore.ts';
 import { raceOf, hasMFlag, energyGain, monsterSpeed } from './monster.ts';
@@ -248,6 +249,17 @@ function attack(g: Game, m: Monster): boolean {
   if (melee > 0 && (!shot || melee >= m.hp || melee * 1.4 >= shot.dam)) return swing();
   if (shot) { shot.go(); return true; }
   return melee > 0 ? swing() : false;
+}
+/**
+ * A song worth striking up. The bot sings only with mana to spare, because a song spends mana for
+ * as long as it runs: starting one on an empty pool buys a single turn of it and nothing more.
+ */
+function songToSing(g: Game): SpellDef | null {
+  const p = g.player;
+  if ((p.songs || []).length) return null;
+  if (p.csp < p.msp * 0.5) return null;
+  const usable = C.spellsAvailable(g).filter(s => p.learned.includes(s.id) && isSong(s.id) && C.spellMana(g, s) <= p.csp && C.spellFail(g, s) < 40);
+  return usable.length ? usable[usable.length - 1] : null;
 }
 /** A healing spell the hero would trust its life to: known, affordable, and not a coin toss. */
 function healSpell(g: Game): SpellDef | null {
@@ -858,6 +870,11 @@ function decide(g: Game, step: number): void {
     else if (dig.turns >= DIG_PATIENCE * 3) { hopeless.add(dig.y * lv.w + dig.x); dig = null; }
     else if (!close.length && !hurt) { dig.turns++; C.tunnelInto(g, dig.x, dig.y); g.repeating = null; return; }
   }
+
+  // A song, struck up once the hero has seen what is coming but before it is in trouble. Singing
+  // costs a turn, so it goes after staying alive and before closing: a bard one blow from death
+  // should be drinking, not starting a verse.
+  if (close.length && !hurt) { const song = songToSing(g); if (song) { C.cast(g, song, {}); return; } }
 
   // 2. Whatever is in arm's reach. A thing it cannot afford to trade blows with is backed away
   //    from while backing away works; cornered, it reads its way out or fights after all.

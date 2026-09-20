@@ -1,23 +1,25 @@
 // A character dump: the plain-text sheet Angband writes with the `C` then `f` command. Pure text;
 // the UI decides how to hand it to the player (download in the browser).
 import type { Game } from './state.ts';
-import { statText, title, expToLevel, totalAc, meleeSkill, bowSkill } from './player.ts';
+import { statText, title, expToLevel, totalAc, meleeSkill, bowSkill, subraceOf, subclassOf, activeFeatures } from './player.ts';
 import { RACE_BY_ID } from './data/races.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
 import { MONSTER_BY_ID } from './data/monsters.ts';
 import { kindOf, itemName } from './items.ts';
-import { SLOTS, SLOT_LABEL, STATS } from './types.ts';
+import { SLOTS, SLOT_LABEL, STATS, REALM_WORD } from './types.ts';
 import { score, foodState } from './game.ts';
 import { SPELL_BY_ID } from './data/spells.ts';
 import { BIRTH_OPTIONS, OPTION_TEXT } from './options.ts';
+import { capitalize } from './util.ts';
 
 export function characterDump(g: Game): string {
   const p = g.player, b = g.bonuses, r = RACE_BY_ID[p.race], c = CLASS_BY_ID[p.cls];
+  const sr = subraceOf(p), sc = subclassOf(p);
   const L: string[] = [];
   const pad = (s: string, n: number) => s.padEnd(n);
   L.push(`  [Gauntlet of Angband character dump]`, '');
   L.push(` Name   ${pad(p.name, 14)} Age    ${pad(String(Math.floor(p.turns / 1000)) + ' days', 10)} Self   RB  CB  EB   Best`);
-  for (const s of STATS) L.push(` ${s === STATS[0] ? pad('Sex ' + p.sex, 21) : s === STATS[1] ? pad('Race ' + r.name, 21) : s === STATS[2] ? pad('Class ' + c.name, 21) : s === STATS[3] ? pad('Title ' + title(p), 21) : s === STATS[4] ? pad('HP ' + p.chp + '/' + p.mhp, 21) : pad('SP ' + p.csp + '/' + p.msp, 21)} ${pad(statText(p.statBase[s]), 7)}${s}  ${String(r.stats[s]).padStart(3)} ${String(c.stats[s]).padStart(3)} ${String(b.stat[s] - p.statCur[s]).padStart(3)}  ${statText(b.stat[s])}${p.statCur[s] < p.statBase[s] ? ' (drained ' + statText(p.statCur[s]) + ')' : ''}`);
+  for (const s of STATS) L.push(` ${s === STATS[0] ? pad('Sex ' + p.sex, 21) : s === STATS[1] ? pad('Race ' + (sr ? sr.name + ' ' : '') + r.name, 21) : s === STATS[2] ? pad('Class ' + (sc ? sc.name : c.name), 21) : s === STATS[3] ? pad('Title ' + title(p), 21) : s === STATS[4] ? pad('HP ' + p.chp + '/' + p.mhp, 21) : pad('SP ' + p.csp + '/' + p.msp, 21)} ${pad(statText(p.statBase[s]), 7)}${s}  ${String(r.stats[s]).padStart(3)} ${String(c.stats[s]).padStart(3)} ${String(b.stat[s] - p.statCur[s]).padStart(3)}  ${statText(b.stat[s])}${p.statCur[s] < p.statBase[s] ? ' (drained ' + statText(p.statCur[s]) + ')' : ''}`);
   L.push('');
   L.push(` Level ${pad(String(p.lev), 10)} Exp ${pad(String(p.exp), 12)} Max Exp ${pad(String(p.maxExp), 10)} Next ${p.lev < 50 ? expToLevel(p, p.lev + 1) : 'MAX'}`);
   L.push(` Gold ${pad(String(p.gold), 11)} Turns ${pad(String(Math.floor(g.turn / 10)), 10)} Max Depth ${pad(p.maxDepth ? p.maxDepth * 50 + ' ft (L' + p.maxDepth + ')' : 'Town', 16)} Cur Depth ${p.depth ? p.depth * 50 + ' ft' : 'Town'}`);
@@ -25,6 +27,10 @@ export function characterDump(g: Game): string {
   L.push(` Fighting ${meleeSkill(p, b)}  Shooting ${bowSkill(p, b)}  Saving ${b.skills.save}  Stealth ${b.skills.stealth}  Perception ${b.skills.perception}  Searching ${b.skills.search}  Disarming ${b.skills.disarm}  Devices ${b.skills.device}  Infravision ${(r.infra + b.infra) * 10} ft  Food ${foodState(p.food)}`);
   L.push(` Kills ${p.kills}  Score ${score(g)}${g.totalWinner ? '  *** WINNER ***' : ''}${p.dead ? '  Killed by ' + p.deathCause : ''}`);
   L.push('');
+  // What the bloodline and the path have actually granted so far, which the flag list below cannot
+  // show on its own: a feature may be a stat, a skill or a rule rather than a resistance.
+  const feats = activeFeatures(p);
+  if (feats.length) { L.push('  [Bloodline and Path]', ''); for (const f of feats) L.push(` ${pad('Level ' + f.at, 10)} ${pad(f.name, 22)} ${f.desc}`); L.push(''); }
   if (p.history) L.push(' ' + p.history, '');
   L.push('  [Character Equipment]', '');
   for (const s of SLOTS) { const it = p.equip[s]; if (it) L.push(` ${pad(SLOT_LABEL[s], 16)} ${itemName(it, g.flavors, { full: it.known })}`); }
@@ -33,7 +39,7 @@ export function characterDump(g: Game): string {
   for (const it of p.quiver) L.push(` (quiver) ${itemName(it, g.flavors)}`);
   const home = g.stores[7];
   if (home && home.stock.length) { L.push('', '  [Home Inventory]', ''); for (const it of home.stock) L.push(` ${itemName(it, g.flavors)}`); }
-  if (p.learned.length) { L.push('', `  [${c.realm === 'prayer' ? 'Prayers' : 'Spells'} Learned]`, ''); for (const id of p.learned) { const s = SPELL_BY_ID[id]; if (s) L.push(` ${pad(s.name, 26)} ${kindOf({ kind: s.book } as never).name}`); } }
+  if (p.learned.length) { L.push('', `  [${c.realm ? capitalize(REALM_WORD[c.realm][0]) + 's' : 'Spells'} Learned]`, ''); for (const id of p.learned) { const s = SPELL_BY_ID[id]; if (s) L.push(` ${pad(s.name, 26)} ${kindOf({ kind: s.book } as never).name}`); } }
   const flags = [...b.flags].filter(f => !f.startsWith('IGNORE_')).map(f => f.replace(/_/g, ' ').toLowerCase());
   if (flags.length) L.push('', '  [Abilities and Resistances]', '', ' ' + flags.join(', '));
   const uniques = g.uniquesDead.map(id => MONSTER_BY_ID[id]?.name || id);

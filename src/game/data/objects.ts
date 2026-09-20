@@ -497,6 +497,13 @@ export const OBJECTS: ObjectKind[] = [
   kind('necro_book_3', '[Necronomicon]', 'necro_book', '#8040c0', 25, 2, 800, 30, { stackable: true }),
   kind('necro_book_4', '[Unholy Communion]', 'necro_book', '#8040c0', 40, 5, 5000, 30, { stackable: true }),
   kind('necro_book_5', '[Dark Ascension]', 'necro_book', '#8040c0', 55, 7, 60000, 30, { stackable: true }),
+
+  // The bard's songs. Five lays, and the last of them is the Music that made the world.
+  kind('song_book_1', '[Lays of Beleriand]', 'song_book', '#e070b0', 5, 1, 25, 30, { stackable: true }),
+  kind('song_book_2', '[The Lay of Leithian]', 'song_book', '#e070b0', 10, 1, 100, 30, { stackable: true }),
+  kind('song_book_3', '[The Children of Hurin]', 'song_book', '#e070b0', 25, 2, 800, 30, { stackable: true }),
+  kind('song_book_4', '[The Fall of the Noldor]', 'song_book', '#e070b0', 40, 5, 5000, 30, { stackable: true }),
+  kind('song_book_5', '[The Music of the Ainur]', 'song_book', '#e070b0', 55, 7, 60000, 30, { stackable: true }),
   // --- Chests (pval = chest level)
   kind('chest_small_wooden', 'Small wooden chest', 'chest', WOOD, 5, 1, 20, 250, { pval: 5 }),
   kind('chest_large_wooden', 'Large wooden chest', 'chest', WOOD, 15, 1, 60, 500, { pval: 15 }),

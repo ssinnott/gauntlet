@@ -4,7 +4,7 @@ import { rng, freshSeed } from '../lib/engine/rng.ts';
 import { type Player, type Level, type Item, type Pos, T, F, SLOTS, DIR_DX, DIR_DY, isPassable } from './types.ts';
 import type { Game } from './state.ts';
 import { MessageLog } from './messages.ts';
-import { createPlayer, computeBonuses, recomputeHp, recomputeMana, adj, makeHistory } from './player.ts';
+import { createPlayer, computeBonuses, recomputeHp, recomputeMana, adj, makeHistory, subraceOf, subclassOf, hasQuirk } from './player.ts';
 import { assignFlavors, makeItem, makeAware, kindOf, itemFlags, senseItem, makeGold, makeObject, itemName, wieldSlot, isWeapon, isArmor, isWearable, getNextItemId, setNextItemId, setArtifactsMade, artifactsMadeList } from './items.ts';
 import { createStores, maintainStore } from './stores.ts';
 import { type GenHooks } from './gen/dungeon.ts';
@@ -12,7 +12,7 @@ import { generateLevel } from './gen/level.ts';
 import { generateTown } from './gen/town.ts';
 import { placeMonster, placeGenerator, themedFilter, monsterTurn, energyGain, monsterSpeed, updateMonsterVisibility, ensureFlow, ensureScent, raceOf, hasMFlag, createMonster, pickRace, nearFloor, removeMonster, generatorTier, generatorTierFor, generatorInterval, pickGeneratorSpawn } from './monster.ts';
 import { updateView, tileAt, setTile, addFlag, isCleanFloor, inBounds, randomEmptyFloor, auxAt } from './level.ts';
-import { setTimed, refreshBonuses, teleportPlayer } from './effectsCore.ts';
+import { setTimed, refreshBonuses, teleportPlayer, songUpkeep } from './effectsCore.ts';
 import { takeHit } from './combat.ts';
 import { dropNear, disturb } from './world.ts';
 import { randint0, randint1, oneIn, distance } from './util.ts';
@@ -34,6 +34,9 @@ export interface BirthExtra {
   /** Stats chosen at birth (point-buy or an accepted roll); rolled if absent. */
   stats?: Record<Stat, number>;
   history?: string;
+  /** The bloodline and the path chosen at birth, both optional. */
+  subrace?: string;
+  subclass?: string;
   /** Monster memory carried over from earlier heroes. */
   lore?: LoreBook;
 }
@@ -47,8 +50,8 @@ export function createGame(name: string, race: string, cls: string, sex: 'male' 
   // rebuilds the game through this same function -- gets the identical set back.
   const options = normalizeOptions(extra.options);
   setArtifactSet(options.randarts ? buildRandartSet(seed) : null);
-  const player = createPlayer(name || 'Hero', race, cls, sex, extra.stats);
-  player.history = extra.history || makeHistory(race, sex);
+  const player = createPlayer(name || 'Hero', race, cls, sex, extra.stats, extra.subrace, extra.subclass);
+  player.history = extra.history || makeHistory(race, sex, undefined, player.subrace);
   const g: Game = {
     seed, turn: 1, player, bonuses: computeBonuses(player), level: null as unknown as Level, stores: createStores(), flavors: assignFlavors(), msg: new MessageLog(),
     nextMonsterId: 1, uniquesDead: [], flow: null, flowDirty: true, noise: null, scent: null, scentStamp: 0, fx: [], sounds: [], levelChange: null, inStore: -1, totalWinner: false, repeating: null, running: null, travel: null, resting: 0,
@@ -77,7 +80,8 @@ export function createGame(name: string, race: string, cls: string, sex: 'male' 
   if (!player.equip.light) { const t = player.inven.find(i => i.kind === 'torch'); if (t) { t.number--; const one = makeItem('torch', 1); one.known = true; player.equip.light = one; if (t.number <= 0) player.inven.splice(player.inven.indexOf(t), 1); } }
   refreshBonuses(g);
   player.chp = player.mhp; player.csp = player.msp;
-  g.msg.add(`Welcome, ${player.name} the ${RACE_BY_ID[race].name} ${c.name}. The town lies before you.`, '#ffd040');
+  const sr = subraceOf(player), sc = subclassOf(player);
+  g.msg.add(`Welcome, ${player.name} the ${sr ? sr.name + ' ' : ''}${RACE_BY_ID[race].name} ${sc ? sc.name : c.name}. The town lies before you.`, '#ffd040');
   g.msg.shout(`${c.hero.toUpperCase()} ENTERS THE TOWN`, '#ffd040');
   enterLevel(g, 0, 'none');
   return g;
@@ -402,6 +406,8 @@ export function processWorld(g: Game): void {
     if (p.timed.fast) digest += 3;
     if (b.flags.has('SLOW_DIGEST')) digest = Math.max(1, digest - 1);
     if (b.flags.has('REGEN')) digest += 1;
+    if (hasQuirk(p, 'fast_metabolism')) digest *= 2;
+    if (hasQuirk(p, 'slow_metabolism')) digest = Math.max(1, Math.floor(digest / 2));
     const before = p.food;
     p.food = Math.max(0, p.food - digest);
     foodMessages(g, before, p.food);
@@ -435,6 +441,9 @@ export function processWorld(g: Game): void {
   // Cursed gear that bleeds you.
   if (b.flags.has('DRAIN_HP') && oneIn(10) && p.chp > 1) takeHit(g, 1, 'a cursed item');
   if (b.flags.has('DRAIN_MANA') && oneIn(10) && p.csp > 0) p.csp--;
+  // A bard's songs are paid for here, beside the cursed gear that drains mana, and for the same
+  // reason: this is the one place a cost is charged for the passage of time rather than for an act.
+  songUpkeep(g);
   // Day and night in the town.
   if (p.depth === 0 && g.level.daytime !== undefined && g.level.daytime !== isDaytime(g.turn)) { g.level.daytime = isDaytime(g.turn); relightTown(g); }
   if (t.recall) { setTimed(g, 'recall', t.recall - 1); if (t.recall === 0) { g.msg.add('You feel yourself yanked ' + (p.depth === 0 ? 'downwards!' : 'upwards!'), '#ffd040'); g.levelChange = { depth: p.recallDepth, by: 'recall' }; } }

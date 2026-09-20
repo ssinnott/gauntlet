@@ -292,7 +292,7 @@ ok(dumpLen > 200, `character dump has ${dumpLen} characters`);
 ok(autoState.turn > autoBefore.turn && (autoState.x !== autoBefore.x || autoState.y !== autoBefore.y || autoState.depth > 1), `autoplay played the hero (${autoState.turn - autoBefore.turn} game turns, depth ${autoState.depth})`);
 ok(autoState.on || autoState.dead, 'autoplay stayed on while the bot played');
 ok(autoStopped, 'a key press took control back from autoplay');
-ok(heroCombos === 170 && heroDupes.length === 0, `every race and class combination has distinct art (${heroCombos} combinations x 2 sexes${heroDupes.length ? '; same: ' + heroDupes.slice(0, 5).join(', ') + (heroDupes.length > 5 ? ` and ${heroDupes.length - 5} more` : '') : ''})`);
+ok(heroCombos === 187 && heroDupes.length === 0, `every race and class combination has distinct art (${heroCombos} combinations x 2 sexes${heroDupes.length ? '; same: ' + heroDupes.slice(0, 5).join(', ') + (heroDupes.length > 5 ? ` and ${heroDupes.length - 5} more` : '') : ''})`);
 ok(state3.cls === 'necromancer' && state3.ironman === true && state3.int >= 17 && state3.hp > 0, `birth with point-buy and birth options works (${JSON.stringify(state3)})`);
 console.log(bad ? '\nSMOKE FAILED' : '\nSMOKE OK: the game runs in a browser with no build step. Screenshots in dist/.');
 process.exit(bad ? 1 : 0);

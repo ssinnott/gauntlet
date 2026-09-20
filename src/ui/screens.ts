@@ -6,7 +6,7 @@ import { rrect } from '../lib/art/shapes.ts';
 import type { Game } from '../game/state.ts';
 import { type Item, type SlotName, type Pos, SLOTS, SLOT_LABEL, STATS, T, F, isWall, isShop, STORE_NAMES } from '../game/types.ts';
 import { kindOf, itemName, itemFlags, isKnown, isAware, itemIcon, isWearable, isWeapon, isArmor, isAmmo, tvalLabel, inscriptionTags, inscriptionConfirms } from '../game/items.ts';
-import { statText, title, expToLevel, totalAc, meleeSkill, bowSkill } from '../game/player.ts';
+import { statText, title, expToLevel, totalAc, meleeSkill, bowSkill, subraceOf, subclassOf } from '../game/player.ts';
 import { RACES, RACE_BY_ID } from '../game/data/races.ts';
 import { CLASSES, CLASS_BY_ID } from '../game/data/classes.ts';
 import { spellsAvailable, spellLevel, spellMana, spellFail, newSpellCount, describeGrid, classSpells, knownBooks } from '../game/commands.ts';
@@ -482,9 +482,11 @@ export class CharSheet implements Overlay {
     box(ctx, x, y, w, h, `${p.name.toUpperCase()} THE ${title(p).toUpperCase()}`);
     const L = (tx: number, ty: number, label: string, val: string, col = TEXT) => { drawText(ctx, label, tx, ty, { size: 1, color: DIM }); drawText(ctx, val, tx + 90, ty, { size: 1, color: col }); };
     let ly = y + 36;
+    const sr = subraceOf(p), sc = subclassOf(p);
     L(x + 16, ly, 'RACE', r.name); L(x + 240, ly, 'AGE', `${p.turns} TURNS`); L(x + 440, ly, 'LEVEL', String(p.lev)); ly += 12;
-    L(x + 16, ly, 'CLASS', c.name); L(x + 240, ly, 'HERO', c.hero); L(x + 440, ly, 'EXP', `${p.exp} (MAX ${p.maxExp})`); ly += 12;
-    L(x + 16, ly, 'SEX', p.sex); L(x + 240, ly, 'GOLD', String(p.gold), GOLD); L(x + 440, ly, 'NEXT', p.lev < 50 ? String(expToLevel(p, p.lev + 1)) : 'MAX'); ly += 18;
+    L(x + 16, ly, 'BLOODLINE', sr ? sr.name : '-', sr ? TEXT : DIM); L(x + 240, ly, 'HERO', c.hero); L(x + 440, ly, 'EXP', `${p.exp} (MAX ${p.maxExp})`); ly += 12;
+    L(x + 16, ly, 'CLASS', c.name); L(x + 240, ly, 'GOLD', String(p.gold), GOLD); L(x + 440, ly, 'NEXT', p.lev < 50 ? String(expToLevel(p, p.lev + 1)) : 'MAX'); ly += 12;
+    L(x + 16, ly, 'PATH', sc ? sc.name : '-', sc ? TEXT : DIM); L(x + 240, ly, 'SEX', p.sex); ly += 18;
     for (const s of STATS) {
       const drained = p.statCur[s] < p.statBase[s];
       L(x + 16, ly, s, statText(b.stat[s]), drained ? '#ffd040' : TEXT);
@@ -579,7 +581,7 @@ const HELP = [
   '<  >     take stairs      ,  g  pick up / hold    R  rest    s  search    o  open    c  close    ctrl+B  bash    ctrl+J  jam (spike)',
   'i  e     inventory / equipment    w  wield/wear    t  take off    d  drop    k  destroy    x  l  look (r recalls)    D  disarm',
   'q  quaff potion    r  read scroll    E  eat    a  aim wand    u  use staff    z  zap rod    A  activate    Enter  repeat last',
-  'f  fire missile    v  throw          F  refuel light          m  p  cast / pray     b  browse     G  study     T  tunnel',
+  'f  fire missile    v  throw          F  refuel light          m  p  cast / pray / sing     b  browse     G  study     T  tunnel     P  stop singing',
   'C  character (F dumps)   M  map   ctrl+L  locate   ~  knowledge   /  recall   =  options   O  ignore   V  hall of heroes   {  }  inscribe',
   'ctrl+P  messages   ctrl+S  save   ctrl+X  save and quit   ctrl+E  export save   ctrl+F  level feeling   ctrl+O  show ignored   Q  retire',
   'MOUSE   click the map to travel there; while aiming, click a monster to target it; * cycles targets',
@@ -587,6 +589,8 @@ const HELP = [
   'KEYS open locked doors instantly (or pick the lock).  GENERATORS spawn monsters until smashed.',
   'FOOD keeps you alive; your light burns out.  Gold, keys and items are picked up as you walk.',
   'Unknown potions and scrolls are learned by use.  Word of Recall hops between town and your deepest level.',
+  'SONGS keep going while you act and spend mana every turn; sing one again to stop it, or press P.',
+  'YOUR BLOODLINE and your PATH are chosen at birth: the first is a small twist, the second unlocks at levels 1, 10 and 25.',
   'INSCRIPTIONS: {@q1} answers 1 at the quaff prompt (@r @f @z ... likewise); {!q} asks before quaffing, {!*} before anything.',
   'IGNORE (O): set how choosy you are per kind of gear and stop picking up junk. Nothing unknown is ignored; {=g} always picks up.',
   'TOUCH: tap anywhere on a phone for a thumb pad and command buttons; menus get a navigation bar.',

@@ -4,6 +4,8 @@ import { type Monster, type Item, type Element, type Stat, type ObjectFlag, type
 import { raceOf, hasMFlag, monsterName, monsterNameVisible, removeMonster, monsterDrops, refreshGeneratorTier } from './monster.ts';
 import { kindOf, itemFlags, itemDice, itemName, isWeapon, makeGold, senseItem } from './items.ts';
 import { drainStat, checkLevel, adj, meleeSkill } from './player.ts';
+import { hasQuirk } from './player.ts';
+import { quirkMeleeBonus, quirkMeleeDamage, quirkMeleeHit, quirkOnKill, quirkDamageTaken, noteMoved } from './quirks.ts';
 import { damroll, randint0, randint1, oneIn, capitalize } from './util.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
 import { RACE_BY_ID } from './data/races.ts';
@@ -68,9 +70,14 @@ export function playerAttack(g: Game, m: Monster): void {
   if (p.timed.afraid) { g.msg.add(`You are too afraid to attack ${monsterNameVisible(g, m, false)}!`, '#ff8080'); return; }
   p.facing = m.x > p.x ? 1 : m.x < p.x ? -1 : p.facing;
   g.fx.push({ type: 'melee', x: p.x, y: p.y, dx: Math.sign(m.x - p.x), dy: Math.sign(m.y - p.y) });
+  // Read how unready the monster was BEFORE the attack wakes it: a cutthroat and a scout are both
+  // paid for catching something that had not seen them coming.
+  const wasAsleep = m.sleep > 0, wasUnaware = m.sleep > 0 || !m.visible;
   m.sleep = 0;
+  noteMoved(p);
   const weapon = p.equip.weapon;
-  const chance = meleeSkill(p, b);
+  const qb = quirkMeleeBonus(p);
+  const chance = meleeSkill(p, b) + qb.toHit * 3;
   const flags = weapon ? itemFlags(weapon) : new Set<ObjectFlag>();
   const name = monsterNameVisible(g, m, false);
   for (let blow = 0; blow < b.blows; blow++) {
@@ -89,17 +96,25 @@ export function playerAttack(g: Game, m: Monster): void {
       dam += weapon.toDam + b.toDam;
       if (vorpal) crit = vorpal >= 3 ? 'You cut ' + name + ' in half!' : vorpal === 2 ? 'You gouge ' + name + '!' : 'You cut ' + name + '!';
       if (flags.has('IMPACT') && dam > 50 && oneIn(2)) quake = true;
+    } else if (hasQuirk(p, 'bear_hands')) {
+      // Hands that count as a weapon, and crit like one at a light weapon's weight.
+      dam = damroll(1, 8) * slayMultiplier(flags, m);
+      [dam, crit] = criticalMelee(30, b.toHit, dam, p.lev);
+      dam += b.toDam;
     } else {
       dam = damroll(1, 1) + b.toDam;
     }
     if (p.timed.shero) dam += 2;
     if (p.timed.bloodlust) dam += Math.floor(p.lev / 5);
+    dam += qb.toDam;
+    dam = quirkMeleeDamage(p, dam, blow === 0 && wasAsleep, blow === 0 && wasUnaware);
     dam = Math.max(0, dam);
     const verb = weapon ? 'hit' : 'punch';
     g.msg.add(`You ${verb} ${name}.`);
     playSound(g, crit ? 'crit' : 'hit');
     if (crit) g.msg.add(crit, '#ffd040');
-    const died = monsterTakeHit(g, m, dam, '');
+    const died = monsterTakeHit(g, m, dam, '', true, 'melee');
+    quirkMeleeHit(g, m, dam, died);
     if (quake) { g.msg.add('The ground shakes!', '#ffd040'); g.fx.push({ type: 'shake', amount: 6 }); g.hooks.earthquake(m.x, m.y); }
     if (died) break;
   }
@@ -128,7 +143,7 @@ function senseWielded(g: Game, it: Item): void {
  * Damage a monster. Returns true if it died. `note` is appended to the death message for ranged
  * kills (e.g. "is destroyed"); exp goes to the player when `byPlayer`.
  */
-export function monsterTakeHit(g: Game, m: Monster, dam: number, note: string, byPlayer = true): boolean {
+export function monsterTakeHit(g: Game, m: Monster, dam: number, note: string, byPlayer = true, how: 'melee' | 'spell' | 'other' = 'other'): boolean {
   const r = raceOf(m), p = g.player;
   m.sleep = 0;
   m.hp -= dam;
@@ -142,6 +157,7 @@ export function monsterTakeHit(g: Game, m: Monster, dam: number, note: string, b
     else g.msg.add('You hear a scream of pain.', '#a0a0a0');
     playSound(g, hasMFlag(r, 'GENERATOR') ? 'generator_die' : hasMFlag(r, 'UNIQUE') ? 'kill_unique' : 'kill');
     if (byPlayer) {
+      quirkOnKill(g, m, how);
       const exp = Math.floor(r.exp * r.depth / Math.max(1, p.lev));
       const frac = (r.exp * r.depth) % Math.max(1, p.lev);
       gainExp(g, exp + (randint0(p.lev) < frac ? 1 : 0));
@@ -189,6 +205,7 @@ export function gainExp(g: Game, amount: number): void {
 /** Damage the player. Kills at 0 hp. */
 export function takeHit(g: Game, dam: number, cause: string): void {
   const p = g.player;
+  dam = quirkDamageTaken(g, dam);
   if (p.dead) return;
   if (p.timed.invuln && dam < 9000) return;
   disturb(g);

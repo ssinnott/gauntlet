@@ -10,6 +10,8 @@ import { refreshBonuses } from './effectsCore.ts';
 import { createGame } from './game.ts';
 import { normalizeOptions } from './options.ts';
 import { normalizeIgnore } from './ignore.ts';
+import { SUBRACE_BY_ID } from './data/subraces.ts';
+import { SUBCLASS_BY_ID } from './data/subclasses.ts';
 
 function b64(u8: Uint8Array): string {
   let s = '';
@@ -33,7 +35,7 @@ export function serialize(g: Game): string {
   const savedLevels: Record<string, unknown> = {};
   for (const [k, lv] of Object.entries(g.savedLevels)) savedLevels[k] = packLevel(lv);
   const data = {
-    v: 3, seed: g.seed, turn: g.turn, player: { ...g.player, vx: undefined, vy: undefined }, level: packLevel(g.level), stores: g.stores, flavors: g.flavors, msg: g.msg.toJSON(),
+    v: 4, seed: g.seed, turn: g.turn, player: { ...g.player, vx: undefined, vy: undefined }, level: packLevel(g.level), stores: g.stores, flavors: g.flavors, msg: g.msg.toJSON(),
     nextMonsterId: g.nextMonsterId, uniquesDead: g.uniquesDead, totalWinner: g.totalWinner, stats: g.stats, nextItemId: getNextItemId(), artifacts: artifactsMadeList(), rng: rng.state,
     options: g.options, lore: g.lore, monsterKnows: g.monsterKnows, artifactsSeen: g.artifactsSeen, egosKnown: g.egosKnown, savedLevels, ignore: g.ignore,
     // The scent trail is history the level does not otherwise record. Flow and noise are rebuilt
@@ -47,7 +49,7 @@ export function serialize(g: Game): string {
 
 export function deserialize(json: string): Game {
   const d = JSON.parse(json);
-  if (d.v !== 1 && d.v !== 2 && d.v !== 3) throw new Error('unsupported save version');
+  if (d.v !== 1 && d.v !== 2 && d.v !== 3 && d.v !== 4) throw new Error('unsupported save version');
   // Build a skeleton game through createGame so every runtime hook exists, then overwrite it.
   const g = createGame(d.player.name, d.player.race, d.player.cls, d.player.sex, d.seed, { options: d.options });
   g.turn = d.turn;
@@ -66,6 +68,12 @@ export function deserialize(json: string): Game {
   for (const [k, v] of Object.entries(d.savedLevels || {})) g.savedLevels[Number(k)] = unpackLevel(v as { tiles: string; flags: string; aux: string });
   // Older saves lack the newer timed effects.
   for (const t of ['stoneskin', 'regen', 'bold', 'terror', 'bloodlust', 'oppose_conf'] as const) if (g.player.timed[t] === undefined) g.player.timed[t] = 0;
+  // A hero rolled before sub-races and subclasses existed simply has neither, and keeps the plain
+  // race and class numbers. An id that no longer names anything is dropped rather than carried,
+  // so the character sheet and the bonus refresh never see a dangling name.
+  if (g.player.subrace && !SUBRACE_BY_ID[g.player.subrace]) g.player.subrace = undefined;
+  if (g.player.subclass && !SUBCLASS_BY_ID[g.player.subclass]) g.player.subclass = undefined;
+  if (g.player.songs && !Array.isArray(g.player.songs)) g.player.songs = [];
   g.stores = d.stores;
   g.flavors = d.flavors;
   g.msg = new MessageLog();
