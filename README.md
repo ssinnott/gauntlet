@@ -150,7 +150,9 @@ netcode sitting unused in `src/lib/net/`.
 
 `docs/angband-feature-gaps.md` records how this game maps onto Angband 3.0.x, what has been built
 and what is still missing. `docs/angband-variants.md` surveys the thirty-odd years of Angband
-variants, what each one changes, and which of their ideas would fit here.
+variants and what each one changes. `docs/expansion-candidates.md` picks from that survey: candidate
+races and classes, the personality and specialty systems that multiply them, and what a wilderness
+map with a home town per race would cost.
 
 ## Engine
 
