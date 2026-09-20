@@ -15,7 +15,7 @@ import { artifactList, artifactById } from '../game/artifacts.ts';
 import { drawMonsterSprite, drawItemIcon } from './sprites.ts';
 import type { KeyEvent } from './input.ts';
 import { dirOfKey } from './input.ts';
-import { createPlayer, statText, rollStats, statCost, POINT_BUDGET, boughtStats, randomBuy, makeHistory } from '../game/player.ts';
+import { createPlayer, statText, rollStats, statCost, POINT_BUDGET, boughtStats, randomBuy, makeHistory, randomName, randomHero } from '../game/player.ts';
 import { buildHero, drawHero, type HeroSprite } from './hero.ts';
 import { describeRace, wrapText } from '../game/recall.ts';
 import { loreOf } from '../game/lore.ts';
@@ -270,6 +270,26 @@ export class BirthScreen2 implements Overlay {
   private reroll(): void { this.rolled = rollStats(RACES[this.race].id, CLASSES[this.cls].id, (a, b) => a + Math.floor(Math.random() * (b - a + 1))); }
   /** Point buy, but let chance spend the budget. */
   private randomise(): void { this.base = randomBuy((a, b) => a + Math.floor(Math.random() * (b - a + 1))); }
+  /** The fully random hero: chance answers every question on this screen and the game begins. */
+  randomStart(ui: Ui): void {
+    const h = randomHero((a, b) => a + Math.floor(Math.random() * (b - a + 1)));
+    this.race = RACES.findIndex(r => r.id === h.race); this.cls = CLASSES.findIndex(c => c.id === h.cls);
+    this.sex = h.sex; this.name = h.name; this.history = h.history;
+    this.pointBuy = h.pointBuy;
+    if (h.base) this.base = h.base; else this.rolled = h.stats;
+    this.start(ui);
+  }
+  /** Leave the screen and begin the game with whatever has been chosen (a random name if none). */
+  private start(ui: Ui): void {
+    const u = ui as Ui2;
+    const name = this.name.trim() || randomName((a, b) => a + Math.floor(Math.random() * (b - a + 1)));
+    const stats = this.stats();
+    const extra = { stats, options: this.options, history: this.history };
+    ui.pop();
+    if (u.newGame2) u.newGame2(name, RACES[this.race].id, CLASSES[this.cls].id, this.sex, extra); else ui.newGame(name, RACES[this.race].id, CLASSES[this.cls].id, this.sex);
+    // Unspent points become gold.
+    if (this.pointBuy) ui.g.player.gold += (POINT_BUDGET - this.spent()) * 50;
+  }
 
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
     ctx.fillStyle = '#0b0a10'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -306,7 +326,7 @@ export class BirthScreen2 implements Overlay {
     const skills = d.skills;
     ly += 22;
     drawText(ctx, `MELEE ${skills.melee}  BOWS ${skills.bows}  STEALTH ${skills.stealth}  SEARCH ${skills.search}  DISARM ${skills.disarm}  DEVICE ${skills.device}  SAVE ${skills.save}`, x, ly, { size: 1, color: DIM });
-    drawText(ctx, 'ARROWS  ENTER CONFIRM  ESC BACK', VIEW_W / 2, VIEW_H - 24, { size: 1, color: DIM, align: 'center' });
+    drawText(ctx, 'ARROWS  ENTER CONFIRM  ESC BACK   *  A RANDOM HERO', VIEW_W / 2, VIEW_H - 24, { size: 1, color: DIM, align: 'center' });
   }
   private drawStats(ctx: CanvasRenderingContext2D, ui: Ui): void {
     const r = RACES[this.race], c = CLASSES[this.cls];
@@ -373,7 +393,8 @@ export class BirthScreen2 implements Overlay {
     ctx.restore();
   }
   key(e: KeyEvent, ui: Ui): boolean {
-    const u = ui as Ui2;
+    // * at any step hands the whole hero to chance (it is not a character a name may contain).
+    if (e.key === '*') { this.randomStart(ui); return true; }
     const next = () => { this.step = STEPS[Math.min(STEPS.length - 1, STEPS.indexOf(this.step) + 1)]; };
     const back = () => { if (this.step === 'race') ui.pop(); else this.step = STEPS[STEPS.indexOf(this.step) - 1]; };
     if (this.step === 'race' || this.step === 'class') {
@@ -414,16 +435,7 @@ export class BirthScreen2 implements Overlay {
     if (e.key === 'Escape') { back(); return true; }
     if (e.key === 'Tab') { this.sex = this.sex === 'male' ? 'female' : 'male'; this.history = ''; return true; }
     if (e.key === 'H' || (e.key === 'h' && !this.name)) { this.history = makeHistory(RACES[this.race].id, this.sex, n => Math.floor(Math.random() * n)); return true; }
-    if (e.key === 'Enter') {
-      const name = this.name.trim() || randomName();
-      const stats = this.stats();
-      const extra = { stats, options: this.options, history: this.history };
-      ui.pop();
-      if (u.newGame2) u.newGame2(name, RACES[this.race].id, CLASSES[this.cls].id, this.sex, extra); else ui.newGame(name, RACES[this.race].id, CLASSES[this.cls].id, this.sex);
-      // Unspent points become gold.
-      if (this.pointBuy) ui.g.player.gold += (POINT_BUDGET - this.spent()) * 50;
-      return true;
-    }
+    if (e.key === 'Enter') { this.start(ui); return true; }
     if (e.key === 'Backspace') { this.name = this.name.slice(0, -1); return true; }
     if (e.key.length === 1 && this.name.length < 14 && /[a-zA-Z0-9 '\-]/.test(e.key)) this.name += e.key;
     return true;
@@ -433,6 +445,7 @@ export class BirthScreen2 implements Overlay {
       const list = this.step === 'race' ? RACES : CLASSES;
       const i = Math.floor((y - 72) / 16);
       if (x < 320 && i >= 0 && i < list.length) { if ((this.step === 'race' ? this.race : this.cls) === i) this.key({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }, ui); else { if (this.step === 'race') this.race = i; else this.cls = i; this.rolled = null; } }
+      else if (y >= VIEW_H - 30) this.randomStart(ui); // the hint line: a tap takes a random hero
       else this.key({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }, ui);
       return true;
     }
@@ -447,10 +460,6 @@ export class BirthScreen2 implements Overlay {
     this.key({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }, ui);
     return true;
   }
-}
-function randomName(): string {
-  const a = ['Thor', 'Merlin', 'Thyra', 'Questor', 'Grim', 'Elenna', 'Bram', 'Sable', 'Vala', 'Orin', 'Tamsin', 'Dagny', 'Sumner', 'Falcon', 'Jester', 'Tygra'];
-  return a[Math.floor(Math.random() * a.length)];
 }
 export const _keep2 = [drawItemIcon, artifactById, baseName, rng];
 

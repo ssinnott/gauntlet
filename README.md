@@ -64,6 +64,8 @@ points), a short history, and the birth options: connected
 stairs, ironman, no selling, smart monsters, persistent levels and random artifacts. Persistent
 levels do not sit still while you are away -- things wander, things arrive, and the generators keep
 generating. Random artifacts roll a fresh set of 121 from the game seed instead of the famous ones.
+RANDOM HERO on the title screen (or `*` anywhere on the birth screen) skips the questions: chance
+picks the race, class, sex, stats, name and history and the game begins.
 Smart monsters no longer read your equipment: they learn what you resist by watching their attacks
 fail, and forget it when you die. Monster memory (what each race does, what it resists, how many
 you have killed) carries over between heroes; several heroes can be saved at once and are listed on

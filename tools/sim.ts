@@ -15,12 +15,12 @@ import { generateCavern } from '../src/game/gen/cavern.ts';
 import { generateLabyrinth } from '../src/game/gen/labyrinth.ts';
 import { tileAt, monsterAt, passable, createLevel } from '../src/game/level.ts';
 import { T, isPassable, STATS } from '../src/game/types.ts';
-import { randomBuy, statCost, POINT_BUDGET } from '../src/game/player.ts';
+import { randomBuy, randomHero, statCost, POINT_BUDGET, boughtStats } from '../src/game/player.ts';
 import { CLASSES } from '../src/game/data/classes.ts';
 import { RACES } from '../src/game/data/races.ts';
 import { MONSTERS, MONSTER_BY_ID } from '../src/game/data/monsters.ts';
 import { OBJECTS } from '../src/game/data/objects.ts';
-import { rng } from '../src/lib/engine/rng.ts';
+import { rng, makeRng } from '../src/lib/engine/rng.ts';
 import type { Options } from '../src/game/options.ts';
 import { type Game, FX_QUEUE_MAX, SOUND_QUEUE_MAX } from '../src/game/state.ts';
 import type { Item } from '../src/game/types.ts';
@@ -168,6 +168,20 @@ console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RAC
   seed = 3; const again = randomBuy(dice());
   ok(STATS.every(s => again[s] === buys[0][s]), 'random buy is deterministic given the dice');
   ok(buys.some(b => STATS.some(s => b[s] !== buys[0][s])), 'different dice give a different buy');
+}
+
+// A fully random hero is a real race, class, sex and name with stats that match its own point buy
+// or a roll, a history, and is a pure function of the dice; different dice give different heroes.
+{
+  // (The engine's own generator: the LCG above loses its low bits, so d2s from it always fell the same way.)
+  const dice = (seed: number) => { const r = makeRng(seed); return (a: number, b: number) => r.int(a, b); };
+  const heroes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(s => randomHero(dice(s)));
+  ok(heroes.every(h => RACES.some(r => r.id === h.race) && CLASSES.some(c => c.id === h.cls) && (h.sex === 'male' || h.sex === 'female') && h.name.length > 0 && h.history.length > 0), 'random hero picks a real race, class, sex, name and history');
+  ok(heroes.every(h => h.pointBuy ? h.base !== null && STATS.every(s => h.stats[s] === boughtStats(h.base!, h.race, h.cls)[s]) : h.base === null && STATS.every(s => h.stats[s] >= 3 && h.stats[s] <= 20)), 'random hero stats follow its point buy or its roll');
+  ok(heroes.some(h => h.pointBuy) && heroes.some(h => !h.pointBuy), 'random heroes are sometimes bought and sometimes rolled');
+  const again = randomHero(dice(1));
+  ok(JSON.stringify(again) === JSON.stringify(heroes[0]), 'random hero is deterministic given the dice');
+  ok(heroes.some(h => h.race !== heroes[0].race || h.cls !== heroes[0].cls), 'different dice give a different hero');
 }
 
 // 1. Level generation at many depths: connected and populated.
