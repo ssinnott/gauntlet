@@ -355,7 +355,7 @@ export class BirthScreen2 implements Overlay {
   }
   private preview(ctx: CanvasRenderingContext2D, ui: Ui): void {
     const cls = CLASSES[this.cls].id, race = RACES[this.race].id;
-    const key = cls + '/' + race;
+    const key = cls + '/' + race + '/' + this.sex;
     if (!this.previewFor || this.previewKey !== key) {
       const p = createPlayer('Preview', race, cls, this.sex);
       const w = CLASS_BY_ID[cls].startItems.find(([k]) => isWeapon(kindOf({ kind: k } as Item)));

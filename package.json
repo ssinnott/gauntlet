@@ -10,6 +10,7 @@
     "build": "node tools/build.ts",
     "sim": "node tools/sim.ts",
     "smoke": "node tools/smoke.ts",
+    "sheet": "node tools/sheet.ts",
     "check": "npm run typecheck && npm run sim && npm run smoke"
   },
   "license": "MIT",
