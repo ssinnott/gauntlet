@@ -5,7 +5,7 @@
 // drives the same brain headless so `npm run check` plays a few characters with it.
 import { FOOD_HUNGRY, INVEN_MAX, QUIVER_SLOTS } from '../constants.ts';
 import { T, F, DIR_DX, DIR_DY, dirOf, isPassable, isShop, type Item, type FloorItem, type Monster, type ObjectKind, type Pos, type SlotName, type Effect, type SpellDef } from './types.ts';
-import { tileAt, flagAt, monsterAt, itemsAt, inBounds, los } from './level.ts';
+import { tileAt, flagAt, monsterAt, itemsAt, inBounds, projectPath } from './level.ts';
 import { kindOf, isKnown, isAmmo, isWearable, wieldSlot, itemName, canStack, getNextItemId, setNextItemId } from './items.ts';
 import { isIgnored, itemQuality, alwaysPickUp } from './ignore.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
@@ -31,13 +31,24 @@ function visibleMonsters(g: Game, range = 10): Monster[] {
   const p = g.player;
   return g.level.monsters.filter(m => m.visible && distance(p.x, p.y, m.x, m.y) <= range);
 }
+/**
+ * Whether a shot, bolt or thrown flask from the hero's grid would reach the monster: the path a
+ * projectile takes ends on its grid. Line of sight is not enough -- a bolt travels a different
+ * line from the eye and stops at the first monster or wall in its way.
+ */
+function canReach(g: Game, m: Monster, range = 20): boolean {
+  const p = g.player;
+  const path = projectPath(g.level, p.x, p.y, m.x, m.y, range, true);
+  const end = path[path.length - 1];
+  return !!end && end.x === m.x && end.y === m.y;
+}
 /** The closest monster the bot can see and shoot at. */
 function nearestTarget(g: Game): Monster | null {
   const p = g.player;
   let best: Monster | null = null, bd = 1e9;
   for (const m of visibleMonsters(g)) {
     const d = distance(p.x, p.y, m.x, m.y);
-    if (d < bd && los(g.level, p.x, p.y, m.x, m.y)) { bd = d; best = m; }
+    if (d < bd && canReach(g, m)) { bd = d; best = m; }
   }
   return best;
 }
@@ -392,13 +403,19 @@ function healSpell(g: Game): SpellDef | null {
   const usable = C.spellsAvailable(g).filter(s => p.learned.includes(s.id) && C.spellMana(g, s) <= p.csp && hasEffect(s.effect, 'heal'));
   return usable.length ? usable[0] : null;
 }
-/** Shoot, throw or cast at a monster in view; true if the turn was spent. */
+/**
+ * Shoot, throw or cast at a monster in view; true if the turn was spent. The shot is aimed at the
+ * monster's grid (direction 5 plus a target, as the player's `t` does), never at a keypad
+ * direction: a direction only lines up with a monster on the hero's row, column or diagonal, and
+ * anything else was shot past, arrow after arrow, until the quiver ran dry.
+ */
 function rangedAttack(g: Game, m: Monster): boolean {
-  const p = g.player;
-  const dir = dirOf(m.x - p.x, m.y - p.y);
-  if (dir === 5) return false;
-  const target = { x: m.x, y: m.y };
-  if (p.equip.bow && p.quiver.length) {
+  const p = g.player, b = g.bonuses;
+  if ((m.x === p.x && m.y === p.y) || !canReach(g, m)) return false;
+  const dir = 5, target = { x: m.x, y: m.y };
+  const d = distance(p.x, p.y, m.x, m.y);
+  // A bow's reach, as fire() computes it; a spell or wand carries twenty grids.
+  if (p.equip.bow && p.quiver.length && d <= 6 + 2 * b.might) {
     const ammo = p.quiver.find(a => kindOf(a).tval === kindOf(p.equip.bow!).ammo);
     if (ammo) { C.fire(g, ammo, dir, target); return true; }
   }
@@ -407,7 +424,7 @@ function rangedAttack(g: Game, m: Monster): boolean {
   const wand = findItem(g, it => kindOf(it).tval === 'wand' && known(g, it) && it.charges > 0 && hasEffect(kindOf(it).effect, 'bolt'));
   if (wand) { C.aim(g, wand, dir, target); return true; }
   const oil = findItem(g, it => kindOf(it).tval === 'flask');
-  if (oil && distance(p.x, p.y, m.x, m.y) <= 8) { C.throwItem(g, oil, dir, target); return true; }
+  if (oil && d <= 8) { C.throwItem(g, oil, dir, target); return true; }
   return false;
 }
 
