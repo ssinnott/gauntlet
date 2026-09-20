@@ -146,6 +146,12 @@ and a restore to prove the round trip does not perturb what follows. That is wha
 about the seeded rng a fact rather than an intention, and it is the groundwork for the lockstep
 netcode sitting unused in `src/lib/net/`.
 
+## Notes
+
+`docs/angband-feature-gaps.md` records how this game maps onto Angband 3.0.x, what has been built
+and what is still missing. `docs/angband-variants.md` surveys the thirty-odd years of Angband
+variants, what each one changes, and which of their ideas would fit here.
+
 ## Engine
 
 `src/lib/` is `git subtree add --prefix=src/lib <game-engine> split --squash`, where `split` is
