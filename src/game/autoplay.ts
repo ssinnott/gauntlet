@@ -3,10 +3,11 @@
 // grids), and every action goes through commands.ts, so it takes its turn like anyone else.
 // `=` toggles it as the Autoplay game option, ctrl+A does the same from the map; tools/sim.ts
 // drives the same brain headless so `npm run check` plays a few characters with it.
-import { FOOD_HUNGRY } from '../constants.ts';
-import { T, F, DIR_DX, DIR_DY, dirOf, isPassable, isShop, type Item, type Monster, type Pos, type Effect, type SpellDef } from './types.ts';
+import { FOOD_HUNGRY, INVEN_MAX, QUIVER_SLOTS } from '../constants.ts';
+import { T, F, DIR_DX, DIR_DY, dirOf, isPassable, isShop, type Item, type FloorItem, type Monster, type Pos, type Effect, type SpellDef } from './types.ts';
 import { tileAt, flagAt, monsterAt, itemsAt, inBounds, los } from './level.ts';
-import { kindOf, isKnown, isAmmo, isWearable, wieldSlot, itemName, getNextItemId, setNextItemId } from './items.ts';
+import { kindOf, isKnown, isAmmo, isWearable, wieldSlot, itemName, canStack, getNextItemId, setNextItemId } from './items.ts';
+import { isIgnored } from './ignore.ts';
 import { maintainStore, storeBuy, storeSell, storeWants, buyPrice, sellPrice } from './stores.ts';
 import { refreshBonuses } from './effectsCore.ts';
 import { randint0, distance } from './util.ts';
@@ -180,6 +181,30 @@ function explore(g: Game): boolean {
 }
 
 // -----------------------------------------------------------------------------------------
+// Loot: the nearest remembered item worth the walk.
+
+/** Would the bot take this if it stood on it? Gold, keys and chests never need room in the pack. */
+function wantsItem(g: Game, it: Item): boolean {
+  const k = kindOf(it), p = g.player;
+  if (k.tval === 'gold' || k.tval === 'key' || k.tval === 'chest') return true;
+  if (isIgnored(g, it)) return false;
+  if (isAmmo(k)) return p.quiver.length < QUIVER_SLOTS || p.quiver.some(q => canStack(q, it, g.flavors));
+  return p.inven.length < INVEN_MAX || p.inven.some(o => canStack(o, it, g.flavors));
+}
+/** The closest item on a grid the bot remembers, skipping what it has already given up on. */
+function nearestLoot(g: Game): FloorItem | null {
+  const lv = g.level, p = g.player;
+  let best: FloorItem | null = null, bd = 1e9;
+  for (const fi of lv.items) {
+    if (fi.x === p.x && fi.y === p.y) continue;
+    if (!(flagAt(lv, fi.x, fi.y) & F.MARK) || passed.has(fi.item.id) || !wantsItem(g, fi.item)) continue;
+    const d = distance(p.x, p.y, fi.x, fi.y);
+    if (d < bd) { bd = d; best = fi; }
+  }
+  return best;
+}
+
+// -----------------------------------------------------------------------------------------
 // Shopping
 
 /** Buy the supplies on the list, sell what the store wants and the bot will not use. */
@@ -271,12 +296,14 @@ let stepsOnLevel = 0;
 let shopped = new Set<number>();
 /** Grids the bot has already walked into once; a wall it cannot remember is not worth a second try. */
 let probed = new Set<number>();
+/** Items the bot stood on and still could not take, or could not reach: not worth another walk. */
+let passed = new Set<number>();
 /** Forget the current level (a new hero, or a save loaded over this one). */
-export function resetAutoplay(): void { levelKey = ''; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); idle = 0; }
+export function resetAutoplay(): void { levelKey = ''; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); idle = 0; }
 /** Bot turns spent on the level the hero is standing on. */
 function levelAge(g: Game): number {
   const key = `${g.player.name}|${g.level.depth}|${g.stats.levelsVisited}`;
-  if (key !== levelKey) { levelKey = key; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); }
+  if (key !== levelKey) { levelKey = key; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); }
   return ++stepsOnLevel;
 }
 /** A look round, but not a survey: a hundred-by-sixty level has corners not worth the turns. */
@@ -401,7 +428,17 @@ function decide(g: Game, step: number): void {
     if (itemsAt(lv, p.x, p.y).length && C.pickupHere(g, false)) return;
     const chest = itemsAt(lv, p.x, p.y).find(fi => kindOf(fi.item).tval === 'chest');
     if (chest) { C.openChest(g, chest); return; }
+    // Whatever is still underfoot could not be taken (a full pack, mostly): remember that, or the
+    // walk below would bring the bot straight back here.
+    for (const fi of itemsAt(lv, p.x, p.y)) passed.add(fi.item.id);
     if (!threats.length && (p.chp < p.mhp * HURT || p.csp < p.msp / 2)) { C.rest(g, -1); C.restStep(g); return; }
+    // Loot the bot has seen and walked past: worth a detour while the level is still its business,
+    // and a few steps even when it is on its way out.
+    const loot = nearestLoot(g);
+    if (loot && (staying || distance(p.x, p.y, loot.x, loot.y) <= 6)) {
+      if (headFor(g, loot.x, loot.y)) return;
+      passed.add(loot.item.id);
+    }
     if (staying && step % 31 === 30) { C.searchAround(g); return; }
   }
 

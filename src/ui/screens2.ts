@@ -15,7 +15,7 @@ import { artifactList, artifactById } from '../game/artifacts.ts';
 import { drawMonsterSprite, drawItemIcon } from './sprites.ts';
 import type { KeyEvent } from './input.ts';
 import { dirOfKey } from './input.ts';
-import { createPlayer, statText, rollStats, statCost, POINT_BUDGET, boughtStats, makeHistory } from '../game/player.ts';
+import { createPlayer, statText, rollStats, statCost, POINT_BUDGET, boughtStats, randomBuy, makeHistory } from '../game/player.ts';
 import { buildHero, drawHero, type HeroSprite } from './hero.ts';
 import { describeRace, wrapText } from '../game/recall.ts';
 import { loreOf } from '../game/lore.ts';
@@ -268,6 +268,8 @@ export class BirthScreen2 implements Overlay {
   private stats(): Record<Stat, number> { return this.pointBuy ? boughtStats(this.base, RACES[this.race].id, CLASSES[this.cls].id) : (this.rolled || rollStats(RACES[this.race].id, CLASSES[this.cls].id, (a, b) => a + Math.floor(Math.random() * (b - a + 1)))); }
   private spent(): number { let t = 0; for (const s of STATS) for (let v = 10; v < this.base[s]; v++) t += statCost(v); return t; }
   private reroll(): void { this.rolled = rollStats(RACES[this.race].id, CLASSES[this.cls].id, (a, b) => a + Math.floor(Math.random() * (b - a + 1))); }
+  /** Point buy, but let chance spend the budget. */
+  private randomise(): void { this.base = randomBuy((a, b) => a + Math.floor(Math.random() * (b - a + 1))); }
 
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
     ctx.fillStyle = '#0b0a10'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -321,7 +323,7 @@ export class BirthScreen2 implements Overlay {
     if (this.pointBuy) {
       const left = POINT_BUDGET - this.spent();
       drawText(ctx, `POINTS LEFT ${left}   (UNSPENT POINTS BECOME ${left * 50} GOLD)`, x, 230, { size: 1, color: left ? HI : DIM });
-      drawText(ctx, 'UP / DOWN PICK A STAT   RIGHT / +  RAISE   LEFT / -  LOWER   R RESET', x, 250, { size: 1, color: DIM });
+      drawText(ctx, 'UP / DOWN PICK A STAT   RIGHT / +  RAISE   LEFT / -  LOWER   X SPENDS THE POINTS AT RANDOM   R RESET', x, 250, { size: 1, color: DIM });
     } else {
       drawText(ctx, 'R REROLLS   (THE TOTAL SHOWN IS WHAT YOU GET)', x, 230, { size: 1, color: DIM });
     }
@@ -355,7 +357,7 @@ export class BirthScreen2 implements Overlay {
   }
   private preview(ctx: CanvasRenderingContext2D, ui: Ui): void {
     const cls = CLASSES[this.cls].id, race = RACES[this.race].id;
-    const key = cls + '/' + race;
+    const key = cls + '/' + race + '/' + this.sex;
     if (!this.previewFor || this.previewKey !== key) {
       const p = createPlayer('Preview', race, cls, this.sex);
       const w = CLASS_BY_ID[cls].startItems.find(([k]) => isWeapon(kindOf({ kind: k } as Item)));
@@ -392,6 +394,7 @@ export class BirthScreen2 implements Overlay {
       if (e.key === 'p' || e.key === 'P') { this.pointBuy = !this.pointBuy; if (!this.pointBuy && !this.rolled) this.reroll(); return true; }
       if (e.key === 'r' || e.key === 'R') { if (this.pointBuy) this.base = { STR: 10, INT: 10, WIS: 10, DEX: 10, CON: 10, CHR: 10 }; else this.reroll(); return true; }
       if (!this.pointBuy) return true;
+      if (e.key === 'x' || e.key === 'X') { this.randomise(); return true; }
       if (e.key === 'ArrowDown' || e.key === 'j') this.statSel = (this.statSel + 1) % 6;
       if (e.key === 'ArrowUp' || e.key === 'k') this.statSel = (this.statSel + 5) % 6;
       const s = STATS[this.statSel];
@@ -434,7 +437,13 @@ export class BirthScreen2 implements Overlay {
       return true;
     }
     if (this.step === 'options') { const i = Math.floor((y - 86) / 22); if (i >= 0 && i < BIRTH_OPTIONS.length) { this.optSel = i; const o = BIRTH_OPTIONS[i]; this.options[o] = !this.options[o]; } else this.key({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }, ui); return true; }
-    if (this.step === 'stats') { const i = Math.floor((y - 117) / 16); if (this.pointBuy && i >= 0 && i < 6) { this.statSel = i; this.key({ key: x > 300 ? 'ArrowRight' : 'ArrowLeft', shift: false, ctrl: false, alt: false, code: '' }, ui); } else this.key({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }, ui); return true; }
+    if (this.step === 'stats') {
+      const i = Math.floor((y - 117) / 16);
+      if (this.pointBuy && i >= 0 && i < 6) { this.statSel = i; this.key({ key: x > 300 ? 'ArrowRight' : 'ArrowLeft', shift: false, ctrl: false, alt: false, code: '' }, ui); }
+      else if (this.pointBuy && y >= 244 && y < 262) this.randomise(); // the hint line: a tap spends the points at random
+      else this.key({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }, ui);
+      return true;
+    }
     this.key({ key: 'Enter', shift: false, ctrl: false, alt: false, code: '' }, ui);
     return true;
   }

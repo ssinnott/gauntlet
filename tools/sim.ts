@@ -14,7 +14,8 @@ import { generateLevel } from '../src/game/gen/level.ts';
 import { generateCavern } from '../src/game/gen/cavern.ts';
 import { generateLabyrinth } from '../src/game/gen/labyrinth.ts';
 import { tileAt, monsterAt, passable, createLevel } from '../src/game/level.ts';
-import { T, isPassable } from '../src/game/types.ts';
+import { T, isPassable, STATS } from '../src/game/types.ts';
+import { randomBuy, statCost, POINT_BUDGET } from '../src/game/player.ts';
 import { CLASSES } from '../src/game/data/classes.ts';
 import { RACES } from '../src/game/data/races.ts';
 import { MONSTERS, MONSTER_BY_ID } from '../src/game/data/monsters.ts';
@@ -153,6 +154,20 @@ console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RAC
   ok(inscriptionTags(it, 'q').join('') === '12' && inscriptionTags(it, 'r').join('') === '3' && inscriptionTags(it, 'f').length === 0, 'inscription @ tags');
   ok(inscriptionConfirms(it, 'k') && !inscriptionConfirms(it, 'q'), 'inscription ! confirmations');
   ok(inscriptionConfirms({ inscription: 'my sword !*' } as unknown as Item, 'd') && !inscriptionConfirms({} as Item, 'd'), 'inscription !* confirms everything');
+}
+
+// A randomised point buy spends the whole budget, keeps every stat within the point-buy range, and
+// is a pure function of the dice it is handed.
+{
+  const spent = (b: Record<string, number>) => { let t = 0; for (const s of STATS) for (let v = 10; v < b[s]; v++) t += statCost(v); return t; };
+  let seed = 7;
+  const dice = () => (a: number, b: number) => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return a + (seed % (b - a + 1)); };
+  const buys = [3, 99, 2024].map(s => { seed = s; return randomBuy(dice()); });
+  ok(buys.every(b => spent(b) === POINT_BUDGET), `random buy spends the whole budget (${buys.map(spent).join(', ')} of ${POINT_BUDGET})`);
+  ok(buys.every(b => STATS.every(s => b[s] >= 10 && b[s] <= 18)), 'random buy keeps every stat between 10 and 18');
+  seed = 3; const again = randomBuy(dice());
+  ok(STATS.every(s => again[s] === buys[0][s]), 'random buy is deterministic given the dice');
+  ok(buys.some(b => STATS.some(s => b[s] !== buys[0][s])), 'different dice give a different buy');
 }
 
 // 1. Level generation at many depths: connected and populated.

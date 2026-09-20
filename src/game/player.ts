@@ -65,6 +65,21 @@ export function rollStats(race: string, cls: string, rnd: (a: number, b: number)
 /** Point-based birth: the cost to raise a base stat from v to v + 1 (before race/class modifiers). */
 export function statCost(v: number): number { return v < 14 ? 1 : v < 16 ? 2 : v < 17 ? 3 : v < 18 ? 4 : 6; }
 export const POINT_BUDGET = 20;
+/** Point-based birth with chance doing the buying: from all 10s, raise a random stat that is still
+ *  affordable until the budget is gone (or nothing left can be raised). Uniform over the stats, so
+ *  a mage may end up brawny; that is the point of asking for a random buy. */
+export function randomBuy(rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b)): Record<Stat, number> {
+  const base = {} as Record<Stat, number>;
+  for (const s of STATS) base[s] = 10;
+  let spent = 0;
+  for (;;) {
+    const can = STATS.filter(s => base[s] < 18 && spent + statCost(base[s]) <= POINT_BUDGET);
+    if (!can.length) return base;
+    const s = can[rnd(0, can.length - 1)];
+    spent += statCost(base[s]);
+    base[s]++;
+  }
+}
 /** Apply race and class modifiers to bought base stats. */
 export function boughtStats(base: Record<Stat, number>, race: string, cls: string): Record<Stat, number> {
   const r = RACE_BY_ID[race], c = CLASS_BY_ID[cls];
