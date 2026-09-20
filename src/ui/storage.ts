@@ -22,6 +22,9 @@ export interface SaveMeta {
   name: string;
   race: string;
   cls: string;
+  /** Ids, absent on slots written before bloodlines and paths existed. */
+  subrace?: string;
+  subclass?: string;
   lev: number;
   depth: number;
   maxDepth: number;

@@ -125,7 +125,7 @@ class App implements Ui2 {
       input.click();
     } catch (e) { console.warn('import failed', e); }
   }
-  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string }): void {
+  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string }): void {
     this.g = createGame(name, race, cls, sex, undefined, { ...extra, lore: this.loadLore() });
     this.currentSlot = newSlotId();
     this.begin();
@@ -145,7 +145,7 @@ class App implements Ui2 {
     if (!this.currentSlot) this.currentSlot = newSlotId();
     this.lastSave = this.frame;
     this.queueSave({
-      id: this.currentSlot, name: p.name, race: p.race, cls: p.cls, lev: p.lev,
+      id: this.currentSlot, name: p.name, race: p.race, cls: p.cls, subrace: p.subrace, subclass: p.subclass, lev: p.lev,
       depth: p.depth, maxDepth: p.maxDepth, turn: g.turn, savedAt: Date.now(), dead: p.dead,
       data: serialize(g),
     });
@@ -493,6 +493,8 @@ class App implements Ui2 {
       case 'D': { const chest = itemsAt(g.level, p.x, p.y).find(fi => kindOf(fi.item).tval === 'chest'); if (chest) { C.disarmChest(g, chest); break; } this.dirThen('Disarm', d => { C.disarm(g, d); this.afterAction(); }, false); break; }
       case 'O': this.push(new IgnoreOverlay()); break;
       case 'S': p.searching = !p.searching; g.msg.add(p.searching ? 'You begin searching carefully.' : 'You stop searching.'); refreshBonuses(g); break;
+      // A song can also be stopped by singing it again; this is the way to fall silent outright.
+      case 'P': C.stopSinging(g); this.afterAction(); break;
       case '?': this.push(new HelpOverlay()); break;
       case 'Q': this.push(new Confirm('Retire this character? (the save is deleted)', () => { p.dead = true; p.deathCause = 'retirement'; this.afterAction(); })); break;
       case 'Escape': break;
@@ -634,7 +636,7 @@ window.__game.api = {
   get game() { return app.g; },
   app,
   newGame: (name: string, race: string, cls: string, sex: 'male' | 'female') => app.newGame(name, race, cls, sex),
-  newGame2: (name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string }) => app.newGame2(name, race, cls, sex, extra),
+  newGame2: (name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string }) => app.newGame2(name, race, cls, sex, extra),
   dump: () => characterDump(app.g),
   key: (key: string, shift = false, ctrl = false) => { app.handleKeyPublic({ key, shift, ctrl, alt: false, code: '' }); },
   step: () => { app.update(); app.render(); },
@@ -645,7 +647,7 @@ export type GameApi = {
   readonly game: Game;
   app: unknown;
   newGame(name: string, race: string, cls: string, sex: 'male' | 'female'): void;
-  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string }): void;
+  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string }): void;
   dump(): string;
   key(key: string, shift?: boolean, ctrl?: boolean): void;
   step(): void;

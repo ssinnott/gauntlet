@@ -5,10 +5,12 @@ import { VIEW_W, VIEW_H, MAP_X, MAP_Y, MAP_W, MAP_H, TILE } from '../constants.t
 import { drawText, drawTextOutlined } from '../lib/engine/text.ts';
 import { rrect } from '../lib/art/shapes.ts';
 import type { Game } from '../game/state.ts';
-import { type Item, type Pos, type Stat, STATS, type MonsterRace } from '../game/types.ts';
+import { type Item, type Pos, type Stat, STATS, type MonsterRace, type SubraceDef, type SubclassDef } from '../game/types.ts';
 import { kindOf, isWeapon, makeItem, isAware, baseName } from '../game/items.ts';
 import { RACES, RACE_BY_ID } from '../game/data/races.ts';
 import { CLASSES, CLASS_BY_ID } from '../game/data/classes.ts';
+import { subracesOf, SUBRACE_BY_ID } from '../game/data/subraces.ts';
+import { subclassesOf, SUBCLASS_BY_ID } from '../game/data/subclasses.ts';
 import { MONSTERS, MONSTER_BY_ID } from '../game/data/monsters.ts';
 import { OBJECTS, EGOS } from '../game/data/objects.ts';
 import { artifactList, artifactById } from '../game/artifacts.ts';
@@ -47,7 +49,7 @@ export interface Ui2 extends Ui {
   dumpCharacter(): void;
   exportSave(): void;
   importSave(): void;
-  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string }): void;
+  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string }): void;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -249,13 +251,13 @@ export class LocateMode implements Overlay {
 // ---------------------------------------------------------------------------------------------
 // Birth
 
-type BirthStep = 'race' | 'class' | 'stats' | 'options' | 'name';
-const STEPS: BirthStep[] = ['race', 'class', 'stats', 'options', 'name'];
+type BirthStep = 'race' | 'subrace' | 'class' | 'subclass' | 'stats' | 'options' | 'name';
+const STEPS: BirthStep[] = ['race', 'subrace', 'class', 'subclass', 'stats', 'options', 'name'];
 export class BirthScreen2 implements Overlay {
   wantsYesNo = true;
   opaque = true;
   step: BirthStep = 'race';
-  race = 0; cls = 0; sex: 'male' | 'female' = 'male'; name = '';
+  race = 0; cls = 0; subrace = 0; subclass = 0; sex: 'male' | 'female' = 'male'; name = '';
   pointBuy = true;
   base: Record<Stat, number> = { STR: 10, INT: 10, WIS: 10, DEX: 10, CON: 10, CHR: 10 };
   rolled: Record<Stat, number> | null = null;
@@ -265,15 +267,22 @@ export class BirthScreen2 implements Overlay {
   history = '';
   private previewFor: HeroSprite | null = null;
   private previewKey = '';
-  private stats(): Record<Stat, number> { return this.pointBuy ? boughtStats(this.base, RACES[this.race].id, CLASSES[this.cls].id) : (this.rolled || rollStats(RACES[this.race].id, CLASSES[this.cls].id, (a, b) => a + Math.floor(Math.random() * (b - a + 1)))); }
+  /** The three bloodlines of the highlighted race, and the three paths of the highlighted class. */
+  private subraceList(): SubraceDef[] { return subracesOf(RACES[this.race].id); }
+  private subclassList(): SubclassDef[] { return subclassesOf(CLASSES[this.cls].id); }
+  private subraceId(): string | undefined { return this.subraceList()[this.subrace]?.id; }
+  private subclassId(): string | undefined { return this.subclassList()[this.subclass]?.id; }
+  private stats(): Record<Stat, number> { return this.pointBuy ? boughtStats(this.base, RACES[this.race].id, CLASSES[this.cls].id, this.subraceId(), this.subclassId()) : (this.rolled || rollStats(RACES[this.race].id, CLASSES[this.cls].id, (a, b) => a + Math.floor(Math.random() * (b - a + 1)), this.subraceId(), this.subclassId())); }
   private spent(): number { let t = 0; for (const s of STATS) for (let v = 10; v < this.base[s]; v++) t += statCost(v); return t; }
-  private reroll(): void { this.rolled = rollStats(RACES[this.race].id, CLASSES[this.cls].id, (a, b) => a + Math.floor(Math.random() * (b - a + 1))); }
+  private reroll(): void { this.rolled = rollStats(RACES[this.race].id, CLASSES[this.cls].id, (a, b) => a + Math.floor(Math.random() * (b - a + 1)), this.subraceId(), this.subclassId()); }
   /** Point buy, but let chance spend the budget. */
   private randomise(): void { this.base = randomBuy((a, b) => a + Math.floor(Math.random() * (b - a + 1))); }
   /** The fully random hero: chance answers every question on this screen and the game begins. */
   randomStart(ui: Ui): void {
     const h = randomHero((a, b) => a + Math.floor(Math.random() * (b - a + 1)));
     this.race = RACES.findIndex(r => r.id === h.race); this.cls = CLASSES.findIndex(c => c.id === h.cls);
+    this.subrace = Math.max(0, this.subraceList().findIndex(x => x.id === h.subrace));
+    this.subclass = Math.max(0, this.subclassList().findIndex(x => x.id === h.subclass));
     this.sex = h.sex; this.name = h.name; this.history = h.history;
     this.pointBuy = h.pointBuy;
     if (h.base) this.base = h.base; else this.rolled = h.stats;
@@ -284,7 +293,7 @@ export class BirthScreen2 implements Overlay {
     const u = ui as Ui2;
     const name = this.name.trim() || randomName((a, b) => a + Math.floor(Math.random() * (b - a + 1)));
     const stats = this.stats();
-    const extra = { stats, options: this.options, history: this.history };
+    const extra = { stats, options: this.options, history: this.history, subrace: this.subraceId(), subclass: this.subclassId() };
     ui.pop();
     if (u.newGame2) u.newGame2(name, RACES[this.race].id, CLASSES[this.cls].id, this.sex, extra); else ui.newGame(name, RACES[this.race].id, CLASSES[this.cls].id, this.sex);
     // Unspent points become gold.
@@ -293,10 +302,11 @@ export class BirthScreen2 implements Overlay {
 
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
     ctx.fillStyle = '#0b0a10'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    const titles: Record<BirthStep, string> = { race: 'CHOOSE YOUR RACE', class: 'CHOOSE YOUR CLASS', stats: 'YOUR STATS', options: 'BIRTH OPTIONS', name: 'NAME YOUR HERO' };
+    const titles: Record<BirthStep, string> = { race: 'CHOOSE YOUR RACE', subrace: 'CHOOSE YOUR BLOODLINE', class: 'CHOOSE YOUR CLASS', subclass: 'CHOOSE YOUR PATH', stats: 'YOUR STATS', options: 'BIRTH OPTIONS', name: 'NAME YOUR HERO' };
     drawTextOutlined(ctx, titles[this.step], VIEW_W / 2, 24, { size: 3, color: HI, align: 'center' });
     drawText(ctx, STEPS.map(s => s.toUpperCase()).join('  >  ').replace(this.step.toUpperCase(), `[${this.step.toUpperCase()}]`), VIEW_W / 2, 52, { size: 1, color: DIM, align: 'center' });
     if (this.step === 'race' || this.step === 'class') this.drawPick(ctx, ui);
+    else if (this.step === 'subrace' || this.step === 'subclass') this.drawSubPick(ctx, ui);
     else if (this.step === 'stats') this.drawStats(ctx, ui);
     else if (this.step === 'options') this.drawOptions(ctx);
     else this.drawName(ctx, ui);
@@ -326,6 +336,50 @@ export class BirthScreen2 implements Overlay {
     const skills = d.skills;
     ly += 22;
     drawText(ctx, `MELEE ${skills.melee}  BOWS ${skills.bows}  STEALTH ${skills.stealth}  SEARCH ${skills.search}  DISARM ${skills.disarm}  DEVICE ${skills.device}  SAVE ${skills.save}`, x, ly, { size: 1, color: DIM });
+    drawText(ctx, 'ARROWS  ENTER CONFIRM  ESC BACK   *  A RANDOM HERO', VIEW_W / 2, VIEW_H - 24, { size: 1, color: DIM, align: 'center' });
+  }
+  /**
+   * The bloodline and path steps. They share a shape with drawPick but not its fields: a sub-race
+   * has no hit die and a subclass has no starting kit, and both carry features the parent does
+   * not, so the detail pane is written out separately rather than bent into the other one.
+   */
+  private drawSubPick(ctx: CanvasRenderingContext2D, ui: Ui): void {
+    const isRace = this.step === 'subrace';
+    const list: (SubraceDef | SubclassDef)[] = isRace ? this.subraceList() : this.subclassList();
+    const sel = isRace ? this.subrace : this.subclass;
+    const parent = isRace ? RACES[this.race].name : CLASSES[this.cls].name;
+    drawText(ctx, parent.toUpperCase(), 60, 76, { size: 1, color: DIM });
+    for (let i = 0; i < list.length; i++) drawText(ctx, (sel === i ? '> ' : '  ') + list[i].name.toUpperCase(), 60, 96 + i * 20, { size: 2, color: sel === i ? HI : TEXT });
+    const d = list[sel];
+    if (!d) { drawText(ctx, 'ENTER CONTINUES', VIEW_W / 2, VIEW_H - 24, { size: 1, color: DIM, align: 'center' }); return; }
+    const x = 330;
+    drawText(ctx, d.name.toUpperCase(), x, 76, { size: 2, color: HI });
+    const desc = wrapText(d.desc, 62);
+    for (let i = 0; i < desc.length; i++) drawText(ctx, desc[i], x, 100 + i * 11, { size: 1, color: TEXT });
+    let ly = 100 + desc.length * 11 + 12;
+    // Stat tweaks, and for a path the class numbers it overrides.
+    const st = d.stats || {};
+    const shown = STATS.filter(s => st[s]);
+    if (shown.length) { drawText(ctx, shown.map(s => `${s} ${st[s]! >= 0 ? '+' : ''}${st[s]}`).join('   '), x, ly, { size: 1, color: '#a0ffa0' }); ly += 14; }
+    if (!isRace) {
+      const sc = d as SubclassDef, c = CLASSES[this.cls];
+      const over: string[] = [];
+      if (sc.hitDie !== undefined) over.push(`HIT DIE ${c.hitDie} -> ${sc.hitDie}`);
+      if (sc.expPct !== undefined) over.push(`EXP ${c.expPct}% -> ${sc.expPct}%`);
+      if (sc.maxAttacks !== undefined) over.push(`BLOWS ${c.maxAttacks} -> ${sc.maxAttacks}`);
+      if (sc.minWeight !== undefined) over.push(`WEAPON WEIGHT ${c.minWeight} -> ${sc.minWeight}`);
+      if (sc.attackMultiplier !== undefined) over.push(`BLOW MULT ${c.attackMultiplier} -> ${sc.attackMultiplier}`);
+      if (sc.firstSpellLevel !== undefined) over.push(`SPELLS FROM LEVEL ${c.firstSpellLevel} -> ${sc.firstSpellLevel}`);
+      for (const line of wrapText(over.join('   '), 70)) { drawText(ctx, line, x, ly, { size: 1, color: '#ffd040' }); ly += 11; }
+      if (over.length) ly += 4;
+    }
+    const feats = isRace ? [(d as SubraceDef).feature] : (d as SubclassDef).features;
+    for (const f of feats) {
+      drawText(ctx, `LEVEL ${f.at}  ${f.name.toUpperCase()}`, x, ly, { size: 1, color: '#a0c0ff' }); ly += 11;
+      for (const line of wrapText(f.desc, 66)) { drawText(ctx, line, x + 8, ly, { size: 1, color: DIM }); ly += 11; }
+      ly += 3;
+    }
+    this.preview(ctx, ui);
     drawText(ctx, 'ARROWS  ENTER CONFIRM  ESC BACK   *  A RANDOM HERO', VIEW_W / 2, VIEW_H - 24, { size: 1, color: DIM, align: 'center' });
   }
   private drawStats(ctx: CanvasRenderingContext2D, ui: Ui): void {
@@ -395,15 +449,37 @@ export class BirthScreen2 implements Overlay {
   key(e: KeyEvent, ui: Ui): boolean {
     // * at any step hands the whole hero to chance (it is not a character a name may contain).
     if (e.key === '*') { this.randomStart(ui); return true; }
-    const next = () => { this.step = STEPS[Math.min(STEPS.length - 1, STEPS.indexOf(this.step) + 1)]; };
-    const back = () => { if (this.step === 'race') ui.pop(); else this.step = STEPS[STEPS.indexOf(this.step) - 1]; };
+    // A step with nothing to choose from is stepped over in both directions, so a race or class
+    // that has no sub-list yet simply does not ask the question.
+    const empty = (st: BirthStep) => (st === 'subrace' && !this.subraceList().length) || (st === 'subclass' && !this.subclassList().length);
+    const next = () => { let i = STEPS.indexOf(this.step); do { i = Math.min(STEPS.length - 1, i + 1); } while (empty(STEPS[i]) && i < STEPS.length - 1); this.step = STEPS[i]; };
+    const back = () => {
+      let i = STEPS.indexOf(this.step);
+      do { i--; } while (i > 0 && empty(STEPS[i]));
+      if (i < 0) ui.pop(); else this.step = STEPS[i];
+    };
     if (this.step === 'race' || this.step === 'class') {
       const n = this.step === 'race' ? RACES.length : CLASSES.length;
       const cur = this.step === 'race' ? this.race : this.cls;
       let nx = cur;
       if (e.key === 'ArrowDown' || e.key === 'j') nx = (cur + 1) % n;
       if (e.key === 'ArrowUp' || e.key === 'k') nx = (cur + n - 1) % n;
-      if (this.step === 'race') this.race = nx; else this.cls = nx;
+      if (this.step === 'race') { if (nx !== this.race) this.subrace = 0; this.race = nx; } else { if (nx !== this.cls) this.subclass = 0; this.cls = nx; }
+      if (nx !== cur) this.rolled = null;
+      if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { next(); if ((this.step as BirthStep) === 'stats' && !this.pointBuy && !this.rolled) this.reroll(); }
+      if (e.key === 'Escape' || e.key === 'ArrowLeft') back();
+      return true;
+    }
+    if (this.step === 'subrace' || this.step === 'subclass') {
+      const isRace = this.step === 'subrace';
+      const n = (isRace ? this.subraceList() : this.subclassList()).length;
+      const cur = isRace ? this.subrace : this.subclass;
+      let nx = cur;
+      if (n) {
+        if (e.key === 'ArrowDown' || e.key === 'j') nx = (cur + 1) % n;
+        if (e.key === 'ArrowUp' || e.key === 'k') nx = (cur + n - 1) % n;
+      }
+      if (isRace) this.subrace = nx; else this.subclass = nx;
       if (nx !== cur) this.rolled = null;
       if (e.key === 'Enter' || e.key === ' ' || e.key === 'ArrowRight') { next(); if ((this.step as BirthStep) === 'stats' && !this.pointBuy && !this.rolled) this.reroll(); }
       if (e.key === 'Escape' || e.key === 'ArrowLeft') back();
@@ -536,6 +612,9 @@ export class IgnoreOverlay implements Overlay {
 
 const CLASS_NAME = (id: string): string => CLASS_BY_ID[id]?.name || id;
 const RACE_NAME = (id: string): string => RACE_BY_ID[id]?.name || id;
+// A slot saved before bloodlines and paths existed has neither, and renders exactly as it did.
+const SUBRACE_NAME = (id?: string): string => (id && SUBRACE_BY_ID[id]?.name) || '';
+const SUBCLASS_NAME = (id?: string): string => (id && SUBCLASS_BY_ID[id]?.name) || '';
 
 function agoText(then: number, now: number): string {
   const s = Math.max(0, Math.round((now - then) / 1000));
@@ -571,7 +650,8 @@ export class SaveSlotsOverlay implements Overlay {
       if (i === this.sel) { ctx.fillStyle = 'rgba(255,224,96,0.15)'; ctx.fillRect(120, y - 6, VIEW_W - 240, 26); }
       const col = s.dead ? '#a06060' : i === this.sel ? HI : TEXT;
       drawText(ctx, s.name.toUpperCase(), 140, y, { size: 2, color: col });
-      drawText(ctx, `${RACE_NAME(s.race)} ${CLASS_NAME(s.cls)}   LEVEL ${s.lev}`, 340, y + 2, { size: 1, color: DIM });
+      const sub = SUBRACE_NAME(s.subrace), path = SUBCLASS_NAME(s.subclass);
+      drawText(ctx, `${sub ? sub + ' ' : ''}${RACE_NAME(s.race)} ${path || CLASS_NAME(s.cls)}   LEVEL ${s.lev}`, 340, y + 2, { size: 1, color: DIM });
       drawText(ctx, s.depth === 0 ? 'IN TOWN' : `DEPTH ${s.depth}`, 620, y + 2, { size: 1, color: '#a0a0ff' });
       drawText(ctx, s.dead ? 'DEAD' : agoText(s.savedAt, now), VIEW_W - 140, y + 2, { size: 1, color: DIM, align: 'right' });
     }

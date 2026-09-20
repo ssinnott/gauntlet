@@ -4,11 +4,13 @@ import { VIEW_W, VIEW_H, PANEL_W, BAR_H, MAP_X, MAP_Y, MAP_W, MAP_H } from '../c
 import { drawText, drawTextOutlined, measureText } from '../lib/engine/text.ts';
 import { rrect } from '../lib/art/shapes.ts';
 import type { Game } from '../game/state.ts';
-import { statText, title, expToLevel, totalAc } from '../game/player.ts';
+import { statText, title, expToLevel, totalAc, subraceOf, subclassOf } from '../game/player.ts';
 import { foodState } from '../game/game.ts';
 import { CLASS_BY_ID } from '../game/data/classes.ts';
 import { RACE_BY_ID } from '../game/data/races.ts';
 import { kindOf, itemName } from '../game/items.ts';
+import { SONG_BY_ID } from '../game/data/songs.ts';
+import { SPELL_BY_ID } from '../game/data/spells.ts';
 import { drawItemIcon } from './sprites.ts';
 import { STATS } from '../game/types.ts';
 import { newSpellCount } from '../game/commands.ts';
@@ -40,7 +42,8 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: Game, frame: number): 
   const w = PANEL_W - 24;
   // Name and class.
   drawText(ctx, p.name.toUpperCase(), x, y, { size: 2, color: c.palette.primary === '#3a3a48' ? '#c0c0d0' : c.palette.primary }); y += 20;
-  drawText(ctx, `${r.name} ${c.name}`, x, y, { size: 1, color: TEXT }); y += 10;
+  const sr = subraceOf(p), sc = subclassOf(p);
+  drawText(ctx, shorten(`${sr ? sr.name + ' ' : ''}${r.name} ${sc ? sc.name : c.name}`, 32), x, y, { size: 1, color: TEXT }); y += 10;
   drawText(ctx, `${title(p)}  (${c.hero})`, x, y, { size: 1, color: DIM }); y += 16;
   // HEALTH, Gauntlet style.
   const pct = p.mhp ? p.chp / p.mhp : 0;
@@ -103,6 +106,12 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: Game, frame: number): 
   if (g.options.autoplay) { drawText(ctx, 'AUTOPLAY (ANY KEY STOPS)', x, y, { size: 1, color: '#ffd040' }); y += 10; }
   if (p.searching) { drawText(ctx, 'SEARCHING', x, y, { size: 1, color: '#c0c0ff' }); y += 10; }
   if (g.resting) { drawText(ctx, 'RESTING', x, y, { size: 1, color: '#c0c0ff' }); y += 10; }
+  // What the hero is singing, and what it costs to keep going: a bard's mana bar is a clock.
+  for (const id of p.songs || []) {
+    const song = SONG_BY_ID[id];
+    if (!song) continue;
+    drawText(ctx, shorten(`SINGING ${(SPELL_BY_ID[id]?.name || id).toUpperCase()} -${song.upkeep}`, 32), x, y, { size: 1, color: '#ffd0ff' }); y += 10;
+  }
   if (newSpellCount(g) > 0) { drawText(ctx, 'STUDY! (G)', x, y, { size: 1, color: '#a0ffa0' }); y += 10; }
   // Bottom hints.
   drawText(ctx, '? HELP   I INVEN   C SHEET', x, VIEW_H - 22, { size: 1, color: DIM });

@@ -9,6 +9,7 @@ import { tileAt, flagAt, monsterAt, itemsAt, inBounds, projectPath } from './lev
 import { kindOf, isKnown, isAmmo, isWearable, wieldSlot, itemName, canStack, getNextItemId, setNextItemId } from './items.ts';
 import { isIgnored, itemQuality, alwaysPickUp } from './ignore.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
+import { isSong } from './data/songs.ts';
 import { maintainStore, storeBuy, storeSell, storeWants, buyPrice, sellPrice } from './stores.ts';
 import { refreshBonuses } from './effectsCore.ts';
 import { randint0, distance } from './util.ts';
@@ -398,6 +399,17 @@ function attackSpell(g: Game): SpellDef | null {
   const attack = usable.filter(s => hasEffect(s.effect, 'bolt') || hasEffect(s.effect, 'ball') || hasEffect(s.effect, 'drain_life'));
   return attack.length ? attack[0] : null;
 }
+/**
+ * A song worth striking up. The bot sings only with mana to spare, because a song spends mana for
+ * as long as it runs: starting one on an empty pool buys a single turn of it and nothing more.
+ */
+function songToSing(g: Game): SpellDef | null {
+  const p = g.player;
+  if ((p.songs || []).length) return null;
+  if (p.csp < p.msp * 0.5) return null;
+  const usable = C.spellsAvailable(g).filter(s => p.learned.includes(s.id) && isSong(s.id) && C.spellMana(g, s) <= p.csp && C.spellFail(g, s) < 40);
+  return usable.length ? usable[usable.length - 1] : null;
+}
 function healSpell(g: Game): SpellDef | null {
   const p = g.player;
   const usable = C.spellsAvailable(g).filter(s => p.learned.includes(s.id) && C.spellMana(g, s) <= p.csp && hasEffect(s.effect, 'heal'));
@@ -512,6 +524,9 @@ function decide(g: Game, step: number): void {
   // is enough; the last corner of the level is not worth the turns, and a swarm even less.
   const staying = town || (!!more && age < (swarm ? SWARM_GIVE_UP : GIVE_UP) && !(down && age > LOOK_ROUND));
   const fleeing = !staying && swarm;
+
+  // 0. Strike up a song before the fighting starts, while there is mana to hold it.
+  if (close.length) { const song = songToSing(g); if (song) { C.cast(g, song, {}); return; } }
 
   // 1. Staying alive.
   if (p.chp < p.mhp * PANIC) {

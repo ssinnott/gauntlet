@@ -1,8 +1,10 @@
 // The small set of player-state operations every other system needs: timed effects, bonus
 // refresh, teleports and saving throws. Kept apart from effects.ts so combat.ts and monster.ts can
 // import it without a cycle.
-import { type Timed, type Monster, F, T } from './types.ts';
-import { computeBonuses, recomputeHp, recomputeMana } from './player.ts';
+import { type Timed, type Monster, type SongDef, F, T } from './types.ts';
+import { computeBonuses, recomputeHp, recomputeMana, hasQuirk } from './player.ts';
+import { SONG_BY_ID } from './data/songs.ts';
+import { SPELL_BY_ID } from './data/spells.ts';
 import { tileAt, isEmptyFloor, hasFlag, updateView, monsterAt } from './level.ts';
 import { randint0, randint1, distance, oneIn as oneInM } from './util.ts';
 import { MONSTER_BY_ID } from './data/monsters.ts';
@@ -16,6 +18,88 @@ export function refreshBonuses(g: Game): void {
   g.bonuses = computeBonuses(g.player);
   recomputeHp(g.player, g.bonuses);
   recomputeMana(g.player, g.bonuses);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Songs
+//
+// A bard's song runs until it is stopped or the mana to hold it runs out. It is deliberately not
+// a timed effect: those count down on their own and disturb the player on every change, which
+// would forbid resting or running while singing. So a song sits in `Player.songs`, its benefit is
+// folded into the bonus refresh alongside everything else, and it is charged here once per world
+// turn -- in the same place and on the same clock as the cursed gear that drains mana.
+
+/** The songs actually running, dropping any id that no longer names a song. */
+export function activeSongs(g: Game): SongDef[] {
+  return (g.player.songs || []).map(id => SONG_BY_ID[id]).filter(Boolean);
+}
+
+/** How many songs may run at once. The weaving of two themes is a bard's late trick. */
+export function maxSongs(g: Game): number { return hasQuirk(g.player, 'song_weaving') ? 2 : 1; }
+
+export function startSong(g: Game, id: string): void {
+  const song = SONG_BY_ID[id];
+  if (!song) return;
+  const p = g.player;
+  p.songs = p.songs || [];
+  if (p.songs.includes(id)) return;
+  // Starting a song past the limit lets the oldest one fall silent rather than refusing.
+  while (p.songs.length >= maxSongs(g)) {
+    const dropped = p.songs.shift();
+    if (dropped) g.msg.add(`Your ${spellName(dropped)} falls silent.`, '#a0a0a0');
+  }
+  p.songs.push(id);
+  refreshBonuses(g);
+}
+
+export function stopSong(g: Game, id: string, why = 'You stop singing'): boolean {
+  const p = g.player;
+  if (!p.songs || !p.songs.includes(id)) return false;
+  p.songs = p.songs.filter(s => s !== id);
+  g.msg.add(`${why}: ${spellName(id)}.`, '#a0a0a0');
+  refreshBonuses(g);
+  return true;
+}
+
+export function stopAllSongs(g: Game, why = 'You stop singing'): void {
+  for (const id of [...(g.player.songs || [])]) stopSong(g, id, why);
+}
+
+function spellName(id: string): string { return SPELL_BY_ID[id]?.name || id; }
+
+/**
+ * Charge for every running song and apply the ones that work on the listeners. Called once per
+ * world turn from processWorld. A song the singer cannot pay for stops, which is the whole of the
+ * bard's resource management: mana is not a pool of casts but a length of time.
+ */
+export function songUpkeep(g: Game): void {
+  const p = g.player;
+  if (!p.songs || !p.songs.length) return;
+  let paid = 0;
+  for (const song of activeSongs(g)) paid += song.upkeep;
+  if (paid > p.csp) {
+    stopAllSongs(g, 'Your voice fails and the song ends');
+    return;
+  }
+  p.csp -= paid;
+  for (const song of activeSongs(g)) if (song.aura) applyAura(g, song.aura);
+}
+
+function applyAura(g: Game, aura: NonNullable<SongDef['aura']>): void {
+  const p = g.player;
+  for (const m of g.level.monsters) {
+    if (m.hp <= 0) continue;
+    if (distance(m.x, m.y, p.x, p.y) > aura.radius) continue;
+    const r = raceOfM(m);
+    // A song persuades; it does not compel. Uniques and the mindless are deaf to it, and anything
+    // far out of the singer's depth shrugs it off more often than not.
+    if (r.flags.includes('EMPTY_MIND') || r.flags.includes('UNIQUE')) continue;
+    if (randint0(aura.power + r.depth) >= aura.power) continue;
+    if (aura.kind === 'fear') { if (!r.flags.includes('NO_FEAR')) m.afraid = Math.max(m.afraid, randint1(4)); }
+    else if (aura.kind === 'sleep') { if (!r.flags.includes('NO_SLEEP')) m.sleep = Math.max(m.sleep, randint1(6)); }
+    else if (aura.kind === 'slow') m.slowed = Math.max(m.slowed, randint1(4));
+    else if (aura.kind === 'confuse') { if (!r.flags.includes('NO_CONF')) m.confused = Math.max(m.confused, randint1(4)); }
+  }
 }
 
 const TIMED_ON: Partial<Record<Timed, [string, string]>> = {

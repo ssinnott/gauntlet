@@ -2,9 +2,12 @@
 // timed effects. Angband's xtra1.c / birth.c in spirit, with stats on a 3..40 internal scale
 // (18/10 = 19, 18/50 = 23, 18/100 = 28, up to 18/220 = 40).
 import { rng } from '../lib/engine/rng.ts';
-import { type Player, type PlayerBonuses, type Stat, type Item, type SkillSet, type ObjectFlag, type Timed, STATS, SLOTS, type SlotName } from './types.ts';
+import { type Player, type PlayerBonuses, type Stat, type Item, type SkillSet, type ObjectFlag, type Timed, type Feature, type QuirkId, type SubraceDef, type SubclassDef, STATS, SLOTS, type SlotName } from './types.ts';
 import { RACES, RACE_BY_ID } from './data/races.ts';
 import { CLASSES, CLASS_BY_ID } from './data/classes.ts';
+import { SUBRACE_BY_ID, subracesOf } from './data/subraces.ts';
+import { SUBCLASS_BY_ID, subclassesOf } from './data/subclasses.ts';
+import { SONG_BY_ID } from './data/songs.ts';
 import { kindOf, itemFlags, isWeapon, artifactOf } from './items.ts';
 import { FOOD_MAX } from '../constants.ts';
 import { clamp } from './util.ts';
@@ -51,13 +54,64 @@ export const adj = {
   magStudy: (v: number) => tab(v, ADJ_MAG_STUDY), chrGold: (v: number) => tab(v, ADJ_CHR_GOLD),
 };
 
+// ---------------------------------------------------------------------------------------------
+// Sub-races and subclasses
+//
+// Everything below resolves through these four helpers, so an unknown or absent id (an old save,
+// a hero rolled before either existed) degrades to the plain race and class rather than throwing.
+
+export function subraceOf(p: { subrace?: string }): SubraceDef | undefined { return p.subrace ? SUBRACE_BY_ID[p.subrace] : undefined; }
+export function subclassOf(p: { subclass?: string }): SubclassDef | undefined { return p.subclass ? SUBCLASS_BY_ID[p.subclass] : undefined; }
+
+/** Birth-time stat modifiers: the race and class, plus whichever sub-race and subclass were chosen. */
+function birthStatMod(s: Stat, race: string, cls: string, subrace?: string, subclass?: string): number {
+  const sr = subrace ? SUBRACE_BY_ID[subrace] : undefined, sc = subclass ? SUBCLASS_BY_ID[subclass] : undefined;
+  return RACE_BY_ID[race].stats[s] + CLASS_BY_ID[cls].stats[s] + (sr?.stats?.[s] || 0) + (sc?.stats?.[s] || 0);
+}
+
+/**
+ * The features in force: the sub-race's perk, the subclass features unlocked so far, and whatever
+ * the hero is currently singing. Songs join the list because a song's benefit and a bloodline's
+ * perk are the same three fields, and folding them together means one place applies both.
+ */
+export function activeFeatures(p: Player): Feature[] {
+  const out: Feature[] = [];
+  const sr = subraceOf(p);
+  if (sr && sr.feature.at <= p.lev) out.push(sr.feature);
+  const sc = subclassOf(p);
+  if (sc) for (const f of sc.features) if (f.at <= p.lev) out.push(f);
+  for (const id of p.songs || []) { const song = SONG_BY_ID[id]; if (song) out.push(...song.effects); }
+  return out;
+}
+
+export function hasQuirk(p: Player, q: QuirkId): boolean {
+  for (const f of activeFeatures(p)) if (f.kind === 'quirk' && f.quirk === q) return true;
+  return false;
+}
+
+/**
+ * The class's numbers after the subclass has had its say. Everything that used to read
+ * CLASS_BY_ID[p.cls].maxAttacks and friends goes through here instead, so a subclass can change
+ * how a character fights without a second code path.
+ */
+export function classNums(p: Player): { hitDie: number; expPct: number; maxAttacks: number; minWeight: number; attackMultiplier: number; firstSpellLevel: number } {
+  const c = CLASS_BY_ID[p.cls], sc = subclassOf(p);
+  return {
+    hitDie: sc?.hitDie ?? c.hitDie,
+    expPct: sc?.expPct ?? c.expPct,
+    maxAttacks: sc?.maxAttacks ?? c.maxAttacks,
+    minWeight: sc?.minWeight ?? c.minWeight,
+    attackMultiplier: sc?.attackMultiplier ?? c.attackMultiplier,
+    firstSpellLevel: sc?.firstSpellLevel ?? c.firstSpellLevel,
+  };
+}
+
 /** Roll birth stats (Angband's 3 + 3d5... condensed: 8 + d10 spread, race/class mods applied). */
-export function rollStats(race: string, cls: string, rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b)): Record<Stat, number> {
-  const r = RACE_BY_ID[race], c = CLASS_BY_ID[cls];
+export function rollStats(race: string, cls: string, rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b), subrace?: string, subclass?: string): Record<Stat, number> {
   const out = {} as Record<Stat, number>;
   for (const s of STATS) {
     let v = 8 + rnd(1, 5) + rnd(1, 5) + rnd(0, 2);
-    v += r.stats[s] + c.stats[s];
+    v += birthStatMod(s, race, cls, subrace, subclass);
     out[s] = clamp(v, 3, 20);
   }
   return out;
@@ -81,17 +135,19 @@ export function randomBuy(rnd: (a: number, b: number) => number = (a, b) => rng.
   }
 }
 /** Apply race and class modifiers to bought base stats. */
-export function boughtStats(base: Record<Stat, number>, race: string, cls: string): Record<Stat, number> {
-  const r = RACE_BY_ID[race], c = CLASS_BY_ID[cls];
+export function boughtStats(base: Record<Stat, number>, race: string, cls: string, subrace?: string, subclass?: string): Record<Stat, number> {
   const out = {} as Record<Stat, number>;
-  for (const s of STATS) out[s] = clamp(base[s] + r.stats[s] + c.stats[s], 3, 20);
+  for (const s of STATS) out[s] = clamp(base[s] + birthStatMod(s, race, cls, subrace, subclass), 3, 20);
   return out;
 }
 /** A few lines of history for the character sheet (Angband's player_history, in miniature). */
-export function makeHistory(race: string, sex: 'male' | 'female', rnd: (n: number) => number = n => rng.int(0, n - 1)): string {
+export function makeHistory(race: string, sex: 'male' | 'female', rnd: (n: number) => number = n => rng.int(0, n - 1), subrace?: string): string {
   const r = RACE_BY_ID[race];
+  const sr = subrace ? SUBRACE_BY_ID[subrace] : undefined;
   const pick = (a: string[]) => a[rnd(a.length)];
-  const origin = r.history && r.history.length ? pick(r.history) : pick(['You are the illegitimate and unacknowledged child of a serf.', 'You are one of several children of a yeoman.', 'You are the only child of a guildsman.', 'You are the first child of a landed knight.', 'You are the heir of a noble house.']);
+  // A bloodline says more about where a hero came from than the race does, so it speaks first.
+  const roots = sr?.history?.length ? sr.history : r.history;
+  const origin = roots && roots.length ? pick(roots) : pick(['You are the illegitimate and unacknowledged child of a serf.', 'You are one of several children of a yeoman.', 'You are the only child of a guildsman.', 'You are the first child of a landed knight.', 'You are the heir of a noble house.']);
   const look = pick(['You have dark brown eyes, straight black hair and an average complexion.', 'You have blue eyes, wavy blond hair and a fair complexion.', 'You have green eyes, curly red hair and a ruddy complexion.', 'You have grey eyes, straight brown hair and a dark complexion.', 'You have hazel eyes, wild auburn hair and a pale complexion.']);
   const rep = pick(['You are a credit to the family.', 'You are the black sheep of the family.', 'You are a well liked child.', 'You are a shunned child.', 'You are of average fame.']);
   return `${origin} ${rep} ${look}`.replace(/\bYou are (a|the) (well liked|shunned) child/, sex === 'female' ? 'You are $1 $2 daughter' : 'You are $1 $2 son');
@@ -103,7 +159,7 @@ export function randomName(rnd: (a: number, b: number) => number = (a, b) => rng
 
 /** Everything the birth screen asks for, answered by chance. */
 export interface RandomHero {
-  race: string; cls: string; sex: 'male' | 'female'; name: string; history: string;
+  race: string; subrace: string; cls: string; subclass: string; sex: 'male' | 'female'; name: string; history: string;
   /** Whether the stats came from a random point buy (base is the bought stats before modifiers) or a roll. */
   pointBuy: boolean; base: Record<Stat, number> | null; stats: Record<Stat, number>;
 }
@@ -112,21 +168,36 @@ export interface RandomHero {
  *  not the hero's, so they are left alone. Pure in the dice, like rollStats and randomBuy. */
 export function randomHero(rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b)): RandomHero {
   const race = RACES[rnd(0, RACES.length - 1)].id, cls = CLASSES[rnd(0, CLASSES.length - 1)].id;
+  const subrace = pickSubrace(race, rnd), subclass = pickSubclass(cls, rnd);
   const sex = rnd(0, 1) ? 'female' : 'male';
   const pointBuy = rnd(0, 1) === 1;
   const base = pointBuy ? randomBuy(rnd) : null;
-  const stats = base ? boughtStats(base, race, cls) : rollStats(race, cls, rnd);
-  return { race, cls, sex, name: randomName(rnd), history: makeHistory(race, sex, n => rnd(0, n - 1)), pointBuy, base, stats };
+  const stats = base ? boughtStats(base, race, cls, subrace, subclass) : rollStats(race, cls, rnd, subrace, subclass);
+  return { race, subrace, cls, subclass, sex, name: randomName(rnd), history: makeHistory(race, sex, n => rnd(0, n - 1), subrace), pointBuy, base, stats };
 }
 
-export function createPlayer(name: string, race: string, cls: string, sex: 'male' | 'female', chosenStats?: Record<Stat, number>): Player {
-  const stats = chosenStats || rollStats(race, cls);
+/** Chance picks a bloodline and a path. Both fall back to '' where no data has been written yet. */
+export function pickSubrace(race: string, rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b)): string {
+  const list = subracesOf(race);
+  return list.length ? list[rnd(0, list.length - 1)].id : '';
+}
+export function pickSubclass(cls: string, rnd: (a: number, b: number) => number = (a, b) => rng.int(a, b)): string {
+  const list = subclassesOf(cls);
+  return list.length ? list[rnd(0, list.length - 1)].id : '';
+}
+
+export function createPlayer(name: string, race: string, cls: string, sex: 'male' | 'female', chosenStats?: Record<Stat, number>, subrace?: string, subclass?: string): Player {
+  // An unknown id is dropped rather than carried: the character sheet, the bonus refresh and the
+  // save all read these through lookups that must not find a dangling name.
+  const sr = subrace && SUBRACE_BY_ID[subrace] ? subrace : undefined;
+  const sc = subclass && SUBCLASS_BY_ID[subclass] ? subclass : undefined;
+  const stats = chosenStats || rollStats(race, cls, undefined, sr, sc);
   const timed = {} as Record<Timed, number>;
   for (const t of TIMED_NAMES) timed[t] = 0;
   const equip = {} as Record<SlotName, Item | null>;
   for (const s of SLOTS) equip[s] = null;
   const p: Player = {
-    name, race, cls, sex, x: 0, y: 0, statBase: { ...stats }, statCur: { ...stats }, lev: 1, exp: 0, maxExp: 0,
+    name, race, subrace: sr, cls, subclass: sc, sex, x: 0, y: 0, statBase: { ...stats }, statCur: { ...stats }, lev: 1, exp: 0, maxExp: 0,
     mhp: 10, chp: 10, msp: 0, csp: 0, food: FOOD_MAX * 0.6, gold: 0, depth: 0, maxDepth: 0, energy: 100, timed, equip, inven: [], quiver: [],
     learned: [], cast: [], keys: 0, searching: false, dead: false, deathCause: '', turns: 0, kills: 0, recallDepth: 0, facing: 1,
   };
@@ -146,6 +217,13 @@ export function computeBonuses(p: Player): PlayerBonuses {
   let extraBlows = 0, extraShots = 0, extraMight = 0;
   const skills: SkillSet = { ...r.skills };
   for (const k of Object.keys(skills) as (keyof SkillSet)[]) skills[k] += c.skills[k] + Math.floor(c.skillsGrowth[k] * p.lev / 10);
+  // The bloodline and the chosen path, layered on the race and class the same way. A subclass's
+  // growth is per ten levels, like the class's, so the two halves of a class drift apart as the
+  // character gains levels rather than starting apart.
+  const sr = subraceOf(p), sc = subclassOf(p), nums = classNums(p);
+  if (sr?.skills) for (const k of Object.keys(sr.skills) as (keyof SkillSet)[]) skills[k] += sr.skills[k] || 0;
+  if (sc) for (const k of Object.keys(skills) as (keyof SkillSet)[]) skills[k] += (sc.skills?.[k] || 0) + Math.floor((sc.skillsGrowth?.[k] || 0) * p.lev / 10);
+  if (sr?.infra) infra += sr.infra;
   for (const s of SLOTS) {
     const it = p.equip[s];
     if (!it) continue;
@@ -171,6 +249,26 @@ export function computeBonuses(p: Player): PlayerBonuses {
   }
   for (const it of p.inven) weight += kindOf(it).weight * it.number;
   for (const it of p.quiver) weight += kindOf(it).weight * it.number;
+  // Unlocked sub-race and subclass features. Four of the five kinds are expressible as something
+  // this function already computes, so they cost no machinery of their own; 'quirk' is read
+  // elsewhere, by whichever file its comment in types.ts names.
+  for (const f of activeFeatures(p)) {
+    const n = f.amount || 0;
+    if (f.kind === 'flag' && f.flag) flags.add(f.flag);
+    else if (f.kind === 'stat' && f.stat) stat[f.stat] += n;
+    else if (f.kind === 'skill' && f.skill) skills[f.skill] += n;
+    else if (f.kind === 'bonus') {
+      if (f.field === 'blows') extraBlows += n;
+      else if (f.field === 'shots') extraShots += n;
+      else if (f.field === 'might') extraMight += n;
+      else if (f.field === 'speed') speed += n;
+      else if (f.field === 'toHit') toHit += n;
+      else if (f.field === 'toDam') toDam += n;
+      else if (f.field === 'ac') toAc += n;
+      else if (f.field === 'lightRadius') lightRadius += n;
+      else if (f.field === 'infra') infra += n;
+    }
+  }
   for (const s of STATS) stat[s] = clamp(stat[s], 3, 40);
   // Timed effects.
   const t = p.timed;
@@ -207,15 +305,15 @@ export function computeBonuses(p: Player): PlayerBonuses {
     const wk = kindOf(weapon);
     const hold = adj.strHold(stat.STR) * 10;
     if (hold < wk.weight) { heavyWeapon = true; toHit += 2 * (hold - wk.weight) / 10; }
-    const div = Math.max(wk.weight, c.minWeight);
-    const strIndex = Math.min(11, Math.floor(adj.strBlow(stat.STR) * c.attackMultiplier / div));
+    const div = Math.max(wk.weight, nums.minWeight);
+    const strIndex = Math.min(11, Math.floor(adj.strBlow(stat.STR) * nums.attackMultiplier / div));
     const dexIndex = adj.dexBlow(stat.DEX);
     const BLOWS_TABLE = [
       [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4], [1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5], [1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5],
       [1, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5], [2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 6], [2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 6], [2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5, 6],
       [3, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6],
     ];
-    blows = Math.min(c.maxAttacks, BLOWS_TABLE[Math.min(11, strIndex)][Math.min(11, dexIndex)]);
+    blows = Math.min(nums.maxAttacks, BLOWS_TABLE[Math.min(11, strIndex)][Math.min(11, dexIndex)]);
     if (heavyWeapon) blows = 1;
     if (p.cls === 'warrior' && blows < 2 && p.lev >= 10) blows = 2;
     blows += extraBlows;
@@ -241,7 +339,7 @@ export function computeBonuses(p: Player): PlayerBonuses {
 /** Max hp from level, race+class hit die and CON. */
 export function recomputeHp(p: Player, b: PlayerBonuses): void {
   const r = RACE_BY_ID[p.race], c = CLASS_BY_ID[p.cls];
-  const die = r.hitDie + c.hitDie;
+  const die = r.hitDie + classNums(p).hitDie;
   // Deterministic per-level rolls (seeded by the name) so max hp does not fluctuate.
   let mhp = die;
   let seed = 0; for (let i = 0; i < p.name.length; i++) seed = (seed * 31 + p.name.charCodeAt(i)) >>> 0;
@@ -252,9 +350,10 @@ export function recomputeHp(p: Player, b: PlayerBonuses): void {
   if (p.chp > p.mhp) p.chp = p.mhp;
 }
 export function recomputeMana(p: Player, b: PlayerBonuses): void {
-  const c = CLASS_BY_ID[p.cls];
-  if (!c.realm || p.lev < c.firstSpellLevel) { p.msp = 0; p.csp = 0; return; }
-  const levels = p.lev - c.firstSpellLevel + 1;
+  const c = CLASS_BY_ID[p.cls], first = classNums(p).firstSpellLevel;
+  // A subclass may forswear magic outright, which is the one way a class with a realm holds no mana.
+  if (!c.realm || p.lev < first || hasQuirk(p, 'no_spells')) { p.msp = 0; p.csp = 0; return; }
+  const levels = p.lev - first + 1;
   let msp = Math.floor(adj.magMana(b.stat[c.spellStat]) * levels / 100) + 1;
   // Gloves hurt mages; heavy armour hurts everyone.
   if ((c.realm === 'magic' || c.realm === 'necro') && p.equip.gloves) { const fl = itemFlags(p.equip.gloves); if (!fl.has('FREE_ACT') && !(fl.has('DEX') && p.equip.gloves.pval > 0)) msp = Math.floor(msp * 3 / 4); }
@@ -269,7 +368,7 @@ export function recomputeMana(p: Player, b: PlayerBonuses): void {
 export function expToLevel(p: Player, lev: number): number {
   const c = CLASS_BY_ID[p.cls], r = RACE_BY_ID[p.race];
   if (lev <= 1) return 0;
-  return Math.floor(EXP_TABLE[lev - 2] * (100 + r.expPct + c.expPct) / 100);
+  return Math.floor(EXP_TABLE[lev - 2] * (100 + r.expPct + classNums(p).expPct) / 100);
 }
 /** Recompute level from exp. Returns levels gained (or lost). */
 export function checkLevel(p: Player): number {
@@ -278,7 +377,10 @@ export function checkLevel(p: Player): number {
   while (p.lev < MAX_LEVEL && p.exp >= expToLevel(p, p.lev + 1)) { p.lev++; gained++; }
   return gained;
 }
-export function title(p: Player): string { return CLASS_BY_ID[p.cls].titles[Math.min(9, Math.floor((p.lev - 1) / 5))]; }
+export function title(p: Player): string {
+  const titles = subclassOf(p)?.titles || CLASS_BY_ID[p.cls].titles;
+  return titles[Math.min(9, Math.floor((p.lev - 1) / 5))];
+}
 
 /** Skill with weapon (Angband's to-hit chance builder) uses skills.melee + toHit * 3. */
 export function meleeSkill(p: Player, b: PlayerBonuses): number {
@@ -292,7 +394,9 @@ export function bowSkill(p: Player, b: PlayerBonuses): number {
 
 /** Class weapon restrictions: priests want blunt weapons (or blessed blades). */
 export function weaponPenalty(p: Player, it: Item): boolean {
-  if (p.cls !== 'priest') return false;
+  // A priest's oath against edged weapons, which a subclass may take on or be released from.
+  if (hasQuirk(p, 'edged_ok')) return false;
+  if (p.cls !== 'priest' && !hasQuirk(p, 'blunt_only')) return false;
   const k = kindOf(it);
   if (!isWeapon(k) || k.tval === 'hafted') return false;
   return !itemFlags(it).has('BLESSED');

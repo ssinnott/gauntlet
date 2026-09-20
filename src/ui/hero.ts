@@ -189,6 +189,28 @@ function accessoriesFor(cls: string, pal: Palette) {
     ctx.fillStyle = pal.accent; ctx.beginPath(); ctx.moveTo(-9, -10); ctx.lineTo(-17, -22); ctx.lineTo(-5, -13); ctx.closePath(); ctx.stroke(); ctx.fill();
     ctx.beginPath(); ctx.moveTo(9, -10); ctx.lineTo(17, -22); ctx.lineTo(5, -13); ctx.closePath(); ctx.stroke(); ctx.fill();
   } });
+  if (cls === 'bard') {
+    // A soft wide cap with a long plume sweeping back off it. The mage's hat is a tall cone and the
+    // ranger's is a hood with a short upright feather, so the sweep is what tells this one apart.
+    acc.push({ attach: 'head', draw: (ctx, rig) => {
+      ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline; ctx.lineJoin = 'round';
+      ctx.fillStyle = pal.primary; ctx.beginPath(); ctx.moveTo(-14, -5); ctx.lineTo(13, -5); ctx.lineTo(9, -12); ctx.lineTo(-8, -13); ctx.closePath(); ctx.stroke(); ctx.fill();
+      ctx.fillStyle = pal.accent; ctx.beginPath(); ctx.moveTo(6, -11); ctx.lineTo(24, -19); ctx.lineTo(19, -9); ctx.lineTo(8, -8); ctx.closePath(); ctx.stroke(); ctx.fill();
+    } });
+    // A lute slung across the back: a teardrop body and a neck angled over the shoulder.
+    acc.push({ attach: 'torso', layer: 'back', draw: (ctx, rig) => {
+      ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline; ctx.lineJoin = 'round';
+      ctx.fillStyle = pal.secondary; ctx.beginPath(); ctx.ellipse(-10, -4, 8, 10, 0.3, 0, Math.PI * 2); ctx.stroke(); ctx.fill();
+      ctx.fillStyle = pal.dark; ctx.beginPath(); ctx.ellipse(-10, -5, 2.5, 2.5, 0, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = pal.secondary; ctx.beginPath(); ctx.moveTo(-14, -12); ctx.lineTo(-11, -13); ctx.lineTo(-4, -28); ctx.lineTo(-8, -29); ctx.closePath(); ctx.stroke(); ctx.fill();
+      if (!rig.override) { ctx.fillStyle = rig.col(pal.glow); ctx.fillRect(-9, -27, 4, 1.5); }
+    } });
+    // A singer's sash, so the class reads even from the front.
+    acc.push({ attach: 'torso', draw: (ctx, rig) => {
+      const H = rig.p.torsoH;
+      celPoly(ctx, rig, [-9, -H + 4, -4, -H + 3, 8, -2, 3, 1], pal.accent, 0.3, 0);
+    } });
+  }
   if (cls === 'archer') {
     acc.push({ attach: 'head', draw: (ctx, rig) => {
       ctx.lineWidth = rig.ow * 2; ctx.strokeStyle = rig.outline; ctx.lineJoin = 'round';

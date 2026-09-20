@@ -137,7 +137,7 @@ export function storeWants(s: Store, it: Item): boolean {
     case 2: return isWeapon(k) || k.tval === 'bow' || isAmmo(k);
     case 3: return k.tval === 'prayer_book' || k.tval === 'nature_book' || k.tval === 'hafted' || k.tval === 'potion' || k.tval === 'scroll';
     case 4: return k.tval === 'potion' || k.tval === 'scroll';
-    case 5: return ['magic_book', 'necro_book', 'ring', 'amulet', 'wand', 'staff', 'rod'].includes(k.tval);
+    case 5: return ['magic_book', 'necro_book', 'song_book', 'ring', 'amulet', 'wand', 'staff', 'rod'].includes(k.tval);
     case 6: return true;
   }
   return false;

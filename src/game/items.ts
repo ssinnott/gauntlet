@@ -1,7 +1,7 @@
 // Object instances: creation, magic, flavours, naming, stacking and value. Angband's object1.c and
 // object2.c in spirit.
 import { rng } from '../lib/engine/rng.ts';
-import { type Item, type ObjectKind, type ObjectFlag, type TVal, type SlotName, type EgoKind, type ArtifactKind, type Sense } from './types.ts';
+import { type Item, type ObjectKind, type ObjectFlag, type TVal, type SlotName, type EgoKind, type ArtifactKind, type Sense, BOOK_TVALS } from './types.ts';
 import { OBJECTS, OBJECT_BY_ID, EGOS, EGO_BY_ID } from './data/objects.ts';
 import { artifactList, artifactById } from './artifacts.ts';
 import { randint0, randint1, oneIn, mBonus, damroll, plural, capitalize, shuffle, weightedPick } from './util.ts';
@@ -78,7 +78,7 @@ export function makeItem(kindId: string, number = 1): Item {
   if ((k.flags || []).includes('CURSED')) it.cursed = true;
   if (k.tval === 'chest') it.pval = Math.max(1, k.pval || 1);
   // Simple kinds are known on sight.
-  if (!k.flavored && ['food', 'flask', 'spike', 'key', 'gold', 'junk', 'magic_book', 'prayer_book', 'nature_book', 'necro_book', 'shot', 'arrow', 'bolt', 'light', 'digger'].includes(k.tval) && !k.charges) it.known = !['shot', 'arrow', 'bolt', 'digger'].includes(k.tval);
+  if (!k.flavored && ['food', 'flask', 'spike', 'key', 'gold', 'junk', ...BOOK_TVALS, 'shot', 'arrow', 'bolt', 'light', 'digger'].includes(k.tval) && !k.charges) it.known = !['shot', 'arrow', 'bolt', 'digger'].includes(k.tval);
   return it;
 }
 
@@ -199,7 +199,7 @@ export function makeArtifact(it: Item, a: ArtifactKind): void {
 export function makeObject(level: number, good: boolean, great: boolean): Item | null {
   let lev = level;
   if (oneIn(10)) lev = Math.min(100, lev + Math.floor(lev / 4) + randint1(10));
-  const cands = OBJECTS.filter(k => k.tval !== 'gold' && k.tval !== 'junk' && k.level <= lev && (!good || isWeapon(k) || isArmor(k) || k.tval === 'bow' || k.tval === 'ring' || k.tval === 'amulet' || k.tval === 'light' || k.tval === 'magic_book' || k.tval === 'prayer_book' || k.tval === 'nature_book' || k.tval === 'necro_book' || (k.tval === 'potion' && k.level >= 20) || (k.tval === 'scroll' && k.level >= 20)));
+  const cands = OBJECTS.filter(k => k.tval !== 'gold' && k.tval !== 'junk' && k.level <= lev && (!good || isWeapon(k) || isArmor(k) || k.tval === 'bow' || k.tval === 'ring' || k.tval === 'amulet' || k.tval === 'light' || BOOK_TVALS.includes(k.tval) || (k.tval === 'potion' && k.level >= 20) || (k.tval === 'scroll' && k.level >= 20)));
   const k = weightedPick(cands, c => 100 / c.rarity * (c.level >= lev - 10 ? 1.5 : 1));
   if (!k) return null;
   const it = makeItem(k.id, 1);
@@ -266,6 +266,7 @@ export function itemName(it: Item, fl: Flavors, opts: { article?: boolean; count
     case 'prayer_book': base = `${mk('Holy Book')} ${k.name}`; break;
     case 'nature_book': base = `${mk('Nature Book')} ${k.name}`; break;
     case 'necro_book': base = `${mk('Necromantic Tome')} ${k.name}`; break;
+    case 'song_book': base = `${mk('Song Book')} ${k.name}`; break;
     case 'gold': base = `${it.pval} gold pieces worth of ${k.name}`; break;
     case 'chest': base = mk(k.name); if (it.known) base += it.toHit > 0 ? ' (locked)' : it.toDam > 0 ? ' (trapped)' : ' (unlocked)'; break;
     default: base = mk(k.name);
@@ -324,7 +325,7 @@ export function pluralName(n: number, s: string): string {
 export function canStack(a: Item, b: Item, fl: Flavors): boolean {
   if (a.kind !== b.kind || a.artifact || b.artifact) return false;
   const k = kindOf(a);
-  if (!k.stackable && !(k.tval === 'wand' || k.tval === 'staff' || k.tval === 'rod' || k.tval === 'magic_book' || k.tval === 'prayer_book' || k.tval === 'nature_book' || k.tval === 'necro_book')) {
+  if (!k.stackable && !(k.tval === 'wand' || k.tval === 'staff' || k.tval === 'rod' || BOOK_TVALS.includes(k.tval))) {
     if (!(isAmmo(k) || k.tval === 'potion' || k.tval === 'scroll' || k.tval === 'food' || k.tval === 'flask' || k.tval === 'spike' || k.tval === 'key' || k.tval === 'light')) return false;
   }
   if (a.toHit !== b.toHit || a.toDam !== b.toDam || a.toAc !== b.toAc || a.pval !== b.pval || a.ego !== b.ego || a.cursed !== b.cursed) return false;
@@ -377,7 +378,7 @@ export function itemValue(it: Item, fl: Flavors, known = true): number {
 }
 
 export function tvalLabel(t: TVal): string {
-  const m: Record<TVal, string> = { sword: 'Swords', hafted: 'Hafted weapons', polearm: 'Polearms', digger: 'Diggers', bow: 'Launchers', shot: 'Shots', arrow: 'Arrows', bolt: 'Bolts', soft_armor: 'Soft armour', hard_armor: 'Hard armour', dragon_armor: 'Dragon armour', shield: 'Shields', helm: 'Helms', crown: 'Crowns', cloak: 'Cloaks', gloves: 'Gloves', boots: 'Boots', ring: 'Rings', amulet: 'Amulets', light: 'Lights', potion: 'Potions', scroll: 'Scrolls', wand: 'Wands', staff: 'Staffs', rod: 'Rods', food: 'Food', flask: 'Flasks', magic_book: 'Magic books', prayer_book: 'Prayer books', nature_book: 'Nature books', necro_book: 'Necromantic tomes', spike: 'Spikes', chest: 'Chests', gold: 'Gold', key: 'Keys', junk: 'Junk' };
+  const m: Record<TVal, string> = { sword: 'Swords', hafted: 'Hafted weapons', polearm: 'Polearms', digger: 'Diggers', bow: 'Launchers', shot: 'Shots', arrow: 'Arrows', bolt: 'Bolts', soft_armor: 'Soft armour', hard_armor: 'Hard armour', dragon_armor: 'Dragon armour', shield: 'Shields', helm: 'Helms', crown: 'Crowns', cloak: 'Cloaks', gloves: 'Gloves', boots: 'Boots', ring: 'Rings', amulet: 'Amulets', light: 'Lights', potion: 'Potions', scroll: 'Scrolls', wand: 'Wands', staff: 'Staffs', rod: 'Rods', food: 'Food', flask: 'Flasks', magic_book: 'Magic books', prayer_book: 'Prayer books', nature_book: 'Nature books', necro_book: 'Necromantic tomes', song_book: 'Song books', spike: 'Spikes', chest: 'Chests', gold: 'Gold', key: 'Keys', junk: 'Junk' };
   return m[t];
 }
 /** Which icon sprites.ts draws for a kind. */
@@ -389,7 +390,7 @@ export function itemIcon(k: ObjectKind): string {
     case 'shot': case 'arrow': case 'bolt': return 'ammo';
     case 'soft_armor': case 'hard_armor': case 'dragon_armor': return 'armor';
     case 'helm': case 'crown': return 'helm';
-    case 'magic_book': case 'prayer_book': case 'nature_book': case 'necro_book': return 'book';
+    case 'magic_book': case 'prayer_book': case 'nature_book': case 'necro_book': case 'song_book': return 'book';
     default: return k.tval;
   }
 }

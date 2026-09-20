@@ -9,9 +9,10 @@ import { playerAttack, takeHit, elementDamage, monsterTakeHit, testHit, critical
 import { raceOf, hasMFlag, monsterName, monsterNameVisible, updateMonsterVisibility, createMonster, pickRace, nearFloor, monsterTurn } from './monster.ts';
 import { kindOf, itemName, itemFlags, isAmmo, isWeapon, isArmor, wieldSlot, canStack, absorb, splitStack, makeAware, markTried, isAware, identify, isKnown, itemDice, makeItem } from './items.ts';
 import { runEffect, needsDir, needsItem, type EffectCtx } from './effects.ts';
-import { setTimed, refreshBonuses, teleportPlayer, movePlayerTo, randomDir } from './effectsCore.ts';
+import { setTimed, refreshBonuses, teleportPlayer, movePlayerTo, randomDir, startSong, stopSong, stopAllSongs } from './effectsCore.ts';
 import { adj, weaponPenalty, bowSkill, drainStat, meleeSkill } from './player.ts';
 import { SPELL_BY_ID, SPELLS, spellsInBook } from './data/spells.ts';
+import { isSong } from './data/songs.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
 import { disturb, dropNear } from './world.ts';
 import { randint0, randint1, oneIn, damroll, distance } from './util.ts';
@@ -19,7 +20,7 @@ import { project, targetFromDir } from './projection.ts';
 import { maintainStore } from './stores.ts';
 import { INVEN_MAX, FOOD_MAX, QUIVER_SLOTS } from '../constants.ts';
 import { deepestAllowed } from './game.ts';
-import { REALM_BOOK, REALM_WORD, type Realm } from './types.ts';
+import { REALM_BOOK, REALM_WORD, BOOK_TVALS, type Realm } from './types.ts';
 import { noteItemKnown } from './effects.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -383,7 +384,9 @@ export function addToInventory(g: Game, it: Item): boolean {
   return true;
 }
 export function sortInventory(g: Game): void {
-  const order = ['magic_book', 'prayer_book', 'food', 'potion', 'scroll', 'wand', 'staff', 'rod', 'ring', 'amulet', 'light', 'flask', 'spike', 'key', 'sword', 'hafted', 'polearm', 'digger', 'bow', 'shot', 'arrow', 'bolt', 'soft_armor', 'hard_armor', 'dragon_armor', 'shield', 'helm', 'crown', 'cloak', 'gloves', 'boots', 'chest', 'junk', 'gold'];
+  // Every book tval, then the rest. The list used to name only two of the books, so a druid's and
+  // a necromancer's sorted to index -1 and floated above everything else.
+  const order = [...BOOK_TVALS, 'food', 'potion', 'scroll', 'wand', 'staff', 'rod', 'ring', 'amulet', 'light', 'flask', 'spike', 'key', 'sword', 'hafted', 'polearm', 'digger', 'bow', 'shot', 'arrow', 'bolt', 'soft_armor', 'hard_armor', 'dragon_armor', 'shield', 'helm', 'crown', 'cloak', 'gloves', 'boots', 'chest', 'junk', 'gold'];
   g.player.inven.sort((a, b) => order.indexOf(kindOf(a).tval) - order.indexOf(kindOf(b).tval) || kindOf(a).level - kindOf(b).level || kindOf(a).cost - kindOf(b).cost);
 }
 export function removeFromInventory(g: Game, it: Item, n = it.number): Item {
@@ -645,7 +648,7 @@ function criticalShot(weight: number, plus: number, dam: number, lev: number): [
 // ---------------------------------------------------------------------------------------------
 // Spells
 
-const PRIMARY_CASTERS = ['mage', 'priest', 'druid', 'necromancer'];
+const PRIMARY_CASTERS = ['mage', 'priest', 'druid', 'necromancer', 'bard'];
 export function classSpells(g: Game): SpellDef[] {
   const c = CLASS_BY_ID[g.player.cls];
   if (!c.realm) return [];
@@ -653,6 +656,12 @@ export function classSpells(g: Game): SpellDef[] {
 }
 /** The realm's words: [spell, cast, book]. */
 export function realmWords(g: Game): [string, string, string] { const c = CLASS_BY_ID[g.player.cls]; return REALM_WORD[(c.realm || 'magic') as Realm]; }
+/** Stop every song, for the `S` key and for anything that silences the singer. */
+export function stopSinging(g: Game): void {
+  if (!(g.player.songs || []).length) { g.msg.add('You are not singing.'); return; }
+  stopAllSongs(g);
+  endTurn(g);
+}
 /** Level and mana adjusted for non-primary casters (rogues, rangers, paladins learn late), or the class's own table when the spell has one. */
 export function spellLevel(g: Game, s: SpellDef): number {
   const cls = g.player.cls;
@@ -725,6 +734,17 @@ export function cast(g: Game, s: SpellDef, ctx: EffectCtx = {}): void {
   const fail = spellFail(g, s);
   p.csp -= mana;
   if (randint0(100) < fail) { g.msg.add(c.realm === 'prayer' ? 'You failed to concentrate hard enough!' : `You failed to get the ${word} off!`, '#ff8080'); playSound(g, 'fail'); endTurn(g); return; }
+  // A song is struck up rather than cast: the mana above bought the first breath, and the upkeep
+  // in processWorld buys every one after it. Singing the song you are already singing stops it.
+  if (isSong(s.id)) {
+    if ((p.songs || []).includes(s.id)) { stopSong(g, s.id); endTurn(g); return; }
+    g.msg.add(`You begin to sing ${s.name}.`, '#c0c0ff');
+    playSound(g, 'cast');
+    startSong(g, s.id);
+    if (!p.cast.includes(s.id)) { p.cast.push(s.id); gainExp(g, spellExp(g, s) * spellLevel(g, s)); g.msg.add('You have learned something new.', '#a0ffa0'); }
+    endTurn(g);
+    return;
+  }
   g.msg.add(`You ${verb} ${s.name}.`, '#c0c0ff');
   playSound(g, 'cast');
   const power = s.id === 'magic_missile' || s.id === 'nether_bolt' ? Math.floor((p.lev - 1) / 5) : 0;

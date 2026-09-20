@@ -190,7 +190,7 @@ export interface Monster extends Pos {
 
 export type TVal = 'sword' | 'hafted' | 'polearm' | 'digger' | 'bow' | 'shot' | 'arrow' | 'bolt' |
   'soft_armor' | 'hard_armor' | 'dragon_armor' | 'shield' | 'helm' | 'crown' | 'cloak' | 'gloves' | 'boots' |
-  'ring' | 'amulet' | 'light' | 'potion' | 'scroll' | 'wand' | 'staff' | 'rod' | 'food' | 'flask' | 'magic_book' | 'prayer_book' | 'nature_book' | 'necro_book' |
+  'ring' | 'amulet' | 'light' | 'potion' | 'scroll' | 'wand' | 'staff' | 'rod' | 'food' | 'flask' | 'magic_book' | 'prayer_book' | 'nature_book' | 'necro_book' | 'song_book' |
   'spike' | 'chest' | 'gold' | 'key' | 'junk';
 
 export type Stat = 'STR' | 'INT' | 'WIS' | 'DEX' | 'CON' | 'CHR';
@@ -464,9 +464,13 @@ export interface RaceDef {
   history?: string[];
 }
 
-export type Realm = 'magic' | 'prayer' | 'nature' | 'necro';
-export const REALM_BOOK: Record<Realm, TVal> = { magic: 'magic_book', prayer: 'prayer_book', nature: 'nature_book', necro: 'necro_book' };
-export const REALM_WORD: Record<Realm, [spell: string, cast: string, book: string]> = { magic: ['spell', 'cast', 'magic book'], prayer: ['prayer', 'recite', 'prayer book'], nature: ['spell', 'call', 'nature book'], necro: ['ritual', 'perform', 'necromantic tome'] };
+export type Realm = 'magic' | 'prayer' | 'nature' | 'necro' | 'song';
+export const REALM_BOOK: Record<Realm, TVal> = { magic: 'magic_book', prayer: 'prayer_book', nature: 'nature_book', necro: 'necro_book', song: 'song_book' };
+export const REALM_WORD: Record<Realm, [spell: string, cast: string, book: string]> = { magic: ['spell', 'cast', 'magic book'], prayer: ['prayer', 'recite', 'prayer book'], nature: ['spell', 'call', 'nature book'], necro: ['ritual', 'perform', 'necromantic tome'], song: ['song', 'sing', 'song book'] };
+/** Every realm's book tval. Half a dozen places ask "is this a spellbook" and used to spell the
+ *  list out by hand, which is how the nature and necromantic books came to sort before everything
+ *  else in the inventory: one of those lists had never been updated. */
+export const BOOK_TVALS: TVal[] = Object.values(REALM_BOOK);
 
 export interface ClassDef {
   id: string;
@@ -483,7 +487,7 @@ export interface ClassDef {
   minWeight: number;
   attackMultiplier: number;
   realm: Realm | null;
-  spellStat: 'INT' | 'WIS';
+  spellStat: 'INT' | 'WIS' | 'CHR';
   /** Blackguards and rogues get their spells late and few. */
   maxSpellLevel?: number;
   firstSpellLevel: number;
@@ -493,6 +497,107 @@ export interface ClassDef {
   /** Rig palette for the hero's kit: garments, trim and metal. Skin and hair come from the race. */
   palette: { primary: string; secondary: string; accent: string; metal: string; dark: string; glow: string };
   desc: string;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sub-races and subclasses
+//
+// Both hang off the same small vocabulary of features. A feature that grants a flag, a stat, a
+// derived bonus or a skill needs no code of its own: player.ts folds it into the same bonus
+// refresh that equipment and timed effects already go through. A `quirk` is the escape hatch for
+// the handful of things that vocabulary cannot say, and every one of them is hand-written in the
+// file named in its comment.
+
+/** The field of PlayerBonuses a 'bonus' feature adds to. */
+export type FeatureField = 'blows' | 'shots' | 'might' | 'speed' | 'toHit' | 'toDam' | 'ac' | 'lightRadius' | 'infra';
+
+/** Hand-written quirks. Each is implemented where its comment says; nothing else reads these. */
+export type QuirkId =
+  | 'no_spells'          // player.ts: never learns or casts, whatever the parent class does
+  | 'blunt_only'         // player.ts weaponPenalty: takes the priest's edged-weapon penalty
+  | 'edged_ok'           // player.ts weaponPenalty: exempt from it
+  | 'fast_metabolism'    // game.ts: burns food twice as fast
+  | 'slow_metabolism'    // game.ts: burns food half as fast
+  | 'light_sleeper'      // monster.ts: monsters notice this hero from further away
+  | 'unlight'            // player.ts: stealth improves in the dark, worsens in bright light
+  | 'deep_pockets'       // game.ts birth: extra starting gold
+  | 'scavenger'          // commands.ts: always identifies the flavour of what it eats or drinks
+  | 'bloodscent'         // monster.ts: senses wounded monsters through walls
+  | 'song_weaving';      // commands.ts: may sustain two songs at once
+
+export interface Feature {
+  /** Character level it unlocks at. Sub-race perks are all level 1. */
+  at: number;
+  kind: 'flag' | 'stat' | 'bonus' | 'skill' | 'quirk';
+  flag?: ObjectFlag;
+  stat?: Stat;
+  field?: FeatureField;
+  skill?: keyof SkillSet;
+  quirk?: QuirkId;
+  amount?: number;
+  /** Shown on the character sheet and the birth screen. */
+  name: string;
+  desc: string;
+}
+
+/** A bloodline or region within a race: a small stat tweak and one modest perk. */
+export interface SubraceDef {
+  id: string;
+  /** Parent race id. */
+  race: string;
+  name: string;
+  /** Layered on top of the race's own modifiers at birth. */
+  stats: Partial<Record<Stat, number>>;
+  skills?: Partial<SkillSet>;
+  infra?: number;
+  feature: Feature;
+  desc: string;
+  history?: string[];
+}
+
+/**
+ * A specialisation of a class, chosen at birth, in the spirit of a D&D archetype: it overrides
+ * the class's own numbers and unlocks three features as the character levels, so the arc of the
+ * run diverges from the parent class rather than merely being labelled differently.
+ */
+export interface SubclassDef {
+  id: string;
+  /** Parent class id. */
+  cls: string;
+  name: string;
+  /** Overrides of the parent ClassDef's numbers. Anything absent is inherited. */
+  hitDie?: number;
+  expPct?: number;
+  maxAttacks?: number;
+  minWeight?: number;
+  attackMultiplier?: number;
+  firstSpellLevel?: number;
+  stats?: Partial<Record<Stat, number>>;
+  skills?: Partial<SkillSet>;
+  skillsGrowth?: Partial<SkillSet>;
+  /** Three of them, unlocking as the character levels. */
+  features: Feature[];
+  /** Replaces the parent class's ten level titles when present. */
+  titles?: string[];
+  desc: string;
+}
+
+/**
+ * A bard's song. The SpellDef of the same id supplies the name, the book, the level and the mana
+ * it costs to begin; this says what happens for as long as it is kept going.
+ *
+ * A song is not a timed effect. Timed effects count down and disturb the player every time they
+ * change, which would make it impossible to rest or run while singing, so a song lives in
+ * `Player.songs` and is paid for once per world turn until the mana runs out.
+ */
+export interface SongDef {
+  id: string;
+  /** Mana charged each world turn while it runs. */
+  upkeep: number;
+  /** What it does for the singer, in the same vocabulary a subclass feature uses. */
+  effects: Feature[];
+  /** Some songs work on whatever can hear them rather than on the singer. */
+  aura?: { kind: 'fear' | 'sleep' | 'slow' | 'confuse'; power: number; radius: number };
 }
 
 export interface SpellDef {
@@ -517,7 +622,11 @@ export interface SpellDef {
 export interface Player extends Pos {
   name: string;
   race: string;
+  /** Bloodline within the race. Absent in saves written before sub-races existed. */
+  subrace?: string;
   cls: string;
+  /** Specialisation within the class. Absent in saves written before subclasses existed. */
+  subclass?: string;
   sex: 'male' | 'female';
   /** Stats: base rolls, current (drained), and max (including equipment) on the 3..40 internal scale. */
   statBase: Record<Stat, number>;
@@ -541,6 +650,12 @@ export interface Player extends Pos {
   learned: string[];
   /** Spells cast at least once (worth exp the first time). */
   cast: string[];
+  /**
+   * The bard's sustained songs. A song is not a timed effect: it runs until the mana to keep it
+   * going runs out or it is stopped, so it lives here rather than in `timed`, where the per-turn
+   * decrement and the disturb-on-change rule would both fight it.
+   */
+  songs?: string[];
   keys: number;
   searching: boolean;
   dead: boolean;

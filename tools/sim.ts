@@ -17,6 +17,9 @@ import { tileAt, monsterAt, passable, createLevel } from '../src/game/level.ts';
 import { T, isPassable, STATS } from '../src/game/types.ts';
 import { randomBuy, randomHero, statCost, POINT_BUDGET, boughtStats } from '../src/game/player.ts';
 import { CLASSES } from '../src/game/data/classes.ts';
+import { SUBRACES, subracesOf } from '../src/game/data/subraces.ts';
+import { SUBCLASSES, subclassesOf } from '../src/game/data/subclasses.ts';
+import { SONGS } from '../src/game/data/songs.ts';
 import { RACES } from '../src/game/data/races.ts';
 import { MONSTERS, MONSTER_BY_ID } from '../src/game/data/monsters.ts';
 import { OBJECTS } from '../src/game/data/objects.ts';
@@ -146,7 +149,7 @@ function shopAround(g: Game): void {
   if (sellable.length) { const it = sellable[0]; const before = g.player.gold; g.player.inven.splice(g.player.inven.indexOf(it), 1); const paid = storeSell(g, s, it, it.number); ok(s.type === 7 || paid >= 0, 'negative sale price'); ok(g.player.gold === before + paid, 'gold mismatch on sale'); }
 }
 
-console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RACES.length} races, ${CLASSES.length} classes`);
+console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RACES.length} races (${SUBRACES.length} sub-races), ${CLASSES.length} classes (${SUBCLASSES.length} subclasses), ${SONGS.length} songs`);
 
 // Command inscriptions parse as Angband's do: `@q1` tags a command letter, `!k` / `!*` ask first.
 {
@@ -177,6 +180,7 @@ console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RAC
   const dice = (seed: number) => { const r = makeRng(seed); return (a: number, b: number) => r.int(a, b); };
   const heroes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(s => randomHero(dice(s)));
   ok(heroes.every(h => RACES.some(r => r.id === h.race) && CLASSES.some(c => c.id === h.cls) && (h.sex === 'male' || h.sex === 'female') && h.name.length > 0 && h.history.length > 0), 'random hero picks a real race, class, sex, name and history');
+  ok(heroes.every(h => (!h.subrace || subracesOf(h.race).some(x => x.id === h.subrace)) && (!h.subclass || subclassesOf(h.cls).some(x => x.id === h.subclass))), 'random hero picks a bloodline of its race and a path of its class');
   ok(heroes.every(h => h.pointBuy ? h.base !== null && STATS.every(s => h.stats[s] === boughtStats(h.base!, h.race, h.cls)[s]) : h.base === null && STATS.every(s => h.stats[s] >= 3 && h.stats[s] <= 20)), 'random hero stats follow its point buy or its roll');
   ok(heroes.some(h => h.pointBuy) && heroes.some(h => !h.pointBuy), 'random heroes are sometimes bought and sometimes rolled');
   const again = randomHero(dice(1));
@@ -475,9 +479,13 @@ void dummy;
 let deaths = 0, maxDepth = 0, totalKills = 0;
 for (let seed = 1; seed <= SEEDS; seed++) {
   const cls = CLASSES[(seed - 1) % CLASSES.length], race = RACES[(seed * 3) % RACES.length];
+  // Every seed also takes a bloodline and a path, cycling through them so each is played.
+  const srList = subracesOf(race.id), scList = subclassesOf(cls.id);
+  const subrace = srList.length ? srList[seed % srList.length].id : undefined;
+  const subclass = scList.length ? scList[seed % scList.length].id : undefined;
   let g: Game;
   const opts = seed % 3 === 0 ? { ironman: true, smartMonsters: true } : seed % 3 === 1 ? { noSelling: true, persistentLevels: true, connectedStairs: false } : { randarts: true };
-  try { g = createGame('Sim' + seed, race.id, cls.id, seed % 2 ? 'male' : 'female', seed * 7919, { options: opts }); }
+  try { g = createGame('Sim' + seed, race.id, cls.id, seed % 2 ? 'male' : 'female', seed * 7919, { options: opts, subrace, subclass }); }
   catch (e) { failures++; console.log(`  FAIL: createGame seed ${seed}: ${(e as Error).stack}`); continue; }
   let step = 0;
   try {
