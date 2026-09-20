@@ -56,8 +56,13 @@ get a navigation bar. The `touchControls` option forces them on with a mouse.
 `ctrl+A` (or the **Autoplay** game option under `=`) hands the hero to a bot: it shops for rations,
 Cure Light Wounds and Phase Door, walks into the dungeon, explores what it has not seen, throws oil
 and fires arrows at what comes, rests when it is safe, drinks when it is not, and takes the stairs
-down once it knows where they are. It plays with the same commands you have and knows only what you
-know -- no revealed map, no free healing -- so it dies like anyone else. Any key takes control back.
+down once it knows where they are. It weighs up a fight before it picks one -- what the thing hits
+for, what it hits back for, and so what killing it would cost -- and walks round, shoots at or
+leaves behind anything dearer than its hit points can spare: a corridor to meet a pack in, the
+stairs when something faster than it is hunting, and never a rest with that something still loose.
+It plays with the same commands you have and knows only what you know -- no revealed map, no free
+healing -- so it dies like anyone else, just not on the first floor every time. Any key takes
+control back.
 
 Birth offers rolled or point-bought stats (`X` on the point-buy screen lets chance spend the
 points), a short history, and the birth options: connected

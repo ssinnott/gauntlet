@@ -73,7 +73,9 @@ export function project(g: Game, x0: number, y0: number, x1: number, y1: number,
     }
     if (o.beam && o.source !== 'player' && p.x === g.player.x && p.y === g.player.y) { /* beams continue */ }
   }
-  if (!cut.length) return false;
+  // Aimed at its own grid (a flask of oil bursting where it landed) the path is empty: it lands
+  // right there instead of fizzling.
+  if (!cut.length) { if (x0 === x1 && y0 === y1) cut.push(end); else return false; }
   const anySeen = cut.some(p => playerCanSee(lv, p.x, p.y));
   if (anySeen) g.fx.push({ type: 'bolt', path: cut.slice(), element: elem, beam: o.beam });
   let affected = false;
