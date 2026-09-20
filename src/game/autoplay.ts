@@ -32,7 +32,18 @@ const MARGIN = 0.3;
 const RESERVE = 20;
 /** What the bot likes to leave town with. */
 const SHOPPING: [string, number][] = [['ration', 5], ['potion_clw', 6], ['scroll_phase_door', 4], ['flask_oil', 15], ['torch', 3]];
-/** Above this depth it will walk back up to town for potions when the last one is gone. */
+/**
+ * The way home, and the way back down. It is never sold, but it costs what a young hero's whole
+ * quiver of cures costs, so it is only bought once the hero is going deep enough for the walk
+ * home to be worth more than another potion -- by its own level, before it needs one.
+ */
+const RECALL = 'scroll_word_of_recall';
+function shoppingList(g: Game): [string, number][] {
+  const p = g.player;
+  if (g.options.ironman || (depthFor(p.lev) <= RESTOCK_DEPTH && p.maxDepth <= RESTOCK_DEPTH)) return SHOPPING;
+  return [...SHOPPING, [RECALL, 2]];
+}
+/** At or above this depth it walks back up to town for potions; below it, it reads its way up. */
 const RESTOCK_DEPTH = 3;
 
 // -----------------------------------------------------------------------------------------
@@ -119,6 +130,12 @@ function healingPotion(g: Game): Item | null {
 }
 function escapeScroll(g: Game): Item | null {
   return findItem(g, it => kindOf(it).tval === 'scroll' && known(g, it) && hasEffect(kindOf(it).effect, 'teleport') && !g.player.timed.blind && !g.player.timed.confused);
+}
+/** A Word of Recall the hero could read now. Reading one while its word is already spoken cancels it. */
+function recallScroll(g: Game): Item | null {
+  const p = g.player;
+  if (g.options.ironman || p.timed.recall || p.timed.blind || p.timed.confused) return null;
+  return findItem(g, it => kindOf(it).tval === 'scroll' && known(g, it) && hasEffect(kindOf(it).effect, 'recall'));
 }
 /** A proper meal; a hero getting weak from hunger will take a scrap of anything that is not a mushroom. */
 function foodItem(g: Game): Item | null {
@@ -520,7 +537,9 @@ function keepValue(g: Game, it: Item): number {
   if (k.tval === 'light' && countKind(g, it.kind) <= 4) return KEEP_KIT;
   if (k.tval === 'food' && (k.pval || 0) >= 500) return KEEP_KIT;
   if (k.tval === 'potion' && known(g, it) && hasEffect(k.effect, 'heal')) return KEEP_KIT;
-  if (k.tval === 'scroll' && known(g, it) && hasEffect(k.effect, 'teleport')) return KEEP_KIT;
+  // The escapes, and the way home: a Word of Recall thrown away to make room for a rusty dagger
+  // is a walk up a dozen staircases to buy the next one.
+  if (k.tval === 'scroll' && known(g, it) && (hasEffect(k.effect, 'teleport') || hasEffect(k.effect, 'recall'))) return KEEP_KIT;
   if (isWearable(k)) {
     if (q === 'worthless') return KEEP_JUNK;
     if (emptySlot(g, k)) return KEEP_GEAR;
@@ -606,14 +625,14 @@ export function autoShop(g: Game): void {
     const k = kindOf(it);
     if (!storeWants(s, it) || k.tval === 'gold') continue;
     // Keep anything wielded, the shopping list, and books; sell the rest of the loot.
-    if (SHOPPING.some(w => w[0] === it.kind) || k.tval === 'food' || k.tval.endsWith('book')) continue;
+    if (SHOPPING.some(w => w[0] === it.kind) || it.kind === RECALL || k.tval === 'food' || k.tval.endsWith('book')) continue;
     if (isWearable(k) && !p.equip[wieldSlot(k) || 'weapon']) continue;
     if (sellPrice(g, s, it) <= 0) continue;
     const sold = C.removeFromInventory(g, it, it.number);
     storeSell(g, s, sold, sold.number);
     refreshBonuses(g);
   }
-  for (const [kindId, want] of SHOPPING) {
+  for (const [kindId, want] of shoppingList(g)) {
     while (countKind(g, kindId) < want) {
       const stock = s.stock.find(it => it.kind === kindId);
       if (!stock) break;
@@ -632,9 +651,9 @@ export function autoShop(g: Game): void {
 }
 /** Which store still sells something the bot is short of? */
 function wantedStore(g: Game): number {
-  const short = SHOPPING.filter(([id, n]) => countKind(g, id) < n).map(w => w[0]);
+  const short = shoppingList(g).filter(([id, n]) => countKind(g, id) < n).map(w => w[0]);
   if (!short.length || g.player.gold < 50) return -1;
-  if (!shopped.has(0) && short.some(id => id === 'ration' || id === 'flask_oil' || id === 'torch')) return 0;
+  if (!shopped.has(0) && short.some(id => id === 'ration' || id === 'flask_oil' || id === 'torch' || id === RECALL)) return 0;
   if (!shopped.has(4) && (short.includes('potion_clw') || short.includes('scroll_phase_door'))) return 4;
   return -1;
 }
@@ -686,6 +705,11 @@ function levelAge(g: Game): number {
   }
   return ++stepsOnLevel;
 }
+/**
+ * Turns spent shopping before the town has had its share of the hero's life. Long enough to walk
+ * an unmapped town and find both shops, which is the first thing any hero does.
+ */
+const TOWN_PATIENCE = 400;
 /** A look round, but not a survey: a hundred-by-sixty level has corners not worth the turns. */
 const LOOK_ROUND = 200;
 const GIVE_UP = 500;
@@ -768,8 +792,11 @@ function decide(g: Game, step: number): void {
   // close above, and it climbs; otherwise it dives only as far as its level warrants.
   const tooDeep = lv.depth > depthFor(p.lev);
   const starving = p.food < FOOD_HUNGRY && !foodItem(g);
-  const needTown = lv.depth <= RESTOCK_DEPTH && p.gold >= 60 && (countKind(g, 'potion_clw') === 0 || starving);
-  const wantUp = !town && !g.options.ironman && (tooDeep || needTown);
+  // Out of the two things a trip to town is for, with the gold to put that right.
+  const restock = p.gold >= 60 && (countKind(g, 'potion_clw') === 0 || starving);
+  const needTown = lv.depth <= RESTOCK_DEPTH && restock;
+  // A word already spoken is a trip home booked: no walking up the stairs as well.
+  const wantUp = !town && !g.options.ironman && !p.timed.recall && (tooDeep || needTown);
   const mayDive = !wantUp && lv.depth + 1 <= depthFor(p.lev);
   const hurt = p.chp < p.mhp * HURT;
   // Explore while there is ground left to cover -- but once the way down is known, a look round
@@ -818,6 +845,12 @@ function decide(g: Game, step: number): void {
     const meal = foodItem(g);
     if (meal) { C.eat(g, meal); return; }
   }
+  // Out of potions a dozen floors down, where the stairs home are a long walk through everything
+  // the hero came past: speak the word instead and carry on until it takes hold.
+  if (!town && lv.depth > RESTOCK_DEPTH && restock) {
+    const scroll = recallScroll(g);
+    if (scroll) { C.read(g, scroll, {}); return; }
+  }
   // A dig in progress: keep at it while nothing is coming, and give up on a grid that will not yield.
   if (dig) {
     const t = tileAt(lv, dig.x, dig.y);
@@ -865,7 +898,8 @@ function decide(g: Game, step: number): void {
   // 3. The town: stock up, then find the way down.
   if (town) {
     const want = wantedStore(g);
-    if (want >= 0) {
+    // A shop it cannot find is not worth combing the town for while the dungeon waits.
+    if (want >= 0 && age <= TOWN_PATIENCE) {
       const door = nearestTile(g, t => isShop(t) && t - T.SHOP_0 === want);
       if (door && headFor(g, door.x, door.y, false)) return;
       // A door it can see but not reach is not worth walking at; the shop is given up on.
@@ -873,7 +907,16 @@ function decide(g: Game, step: number): void {
       // The shop has not been found yet: no hero walks into the dungeon without potions.
       else if (explore(g, open)) return;
     }
-    const stairs = nearestTile(g, t => t === T.STAIRS_DOWN);
+    // Nothing more to buy, or nothing more it can reach. With what it came for in the pack and
+    // floors below it has already cleared, read the word again and be dropped back where it left
+    // off, rather than walking down through all of them.
+    if (countKind(g, 'potion_clw') >= 2 && foodItem(g) && p.maxDepth > RESTOCK_DEPTH && p.maxDepth <= depthFor(p.lev)) {
+      const scroll = recallScroll(g);
+      if (scroll) { C.read(g, scroll, {}); return; }
+    }
+    // With the word spoken the stairs are the slow way down, and walking out now would only
+    // strand the hero on the first floor when it takes hold.
+    const stairs = p.timed.recall ? null : nearestTile(g, t => t === T.STAIRS_DOWN);
     if (stairs) {
       if (stairs.x === p.x && stairs.y === p.y) { C.goDown(g); return; }
       if (headFor(g, stairs.x, stairs.y)) return;
