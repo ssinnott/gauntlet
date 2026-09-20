@@ -62,8 +62,14 @@ get a navigation bar. The `touchControls` option forces them on with a mouse.
 `ctrl+A` (or the **Autoplay** game option under `=`) hands the hero to a bot: it shops for rations,
 Cure Light Wounds and Phase Door, walks into the dungeon, explores what it has not seen, digs through
 rubble in its way and veins that show treasure, throws oil and fires arrows at what comes, rests when
-it is safe, drinks when it is not, and takes the stairs down once it knows where they are. It plays with the same commands you have and knows only what you
-know -- no revealed map, no free healing -- so it dies like anyone else. Any key takes control back.
+it is safe, drinks when it is not, and takes the stairs down once it knows where they are. It weighs
+up a fight before it picks one -- what the thing hits for, what it hits back for, and so what killing
+it would cost -- and walks round, shoots at or leaves behind anything dearer than its hit points can
+spare: a corridor to meet a pack in, the stairs when something faster than it is hunting. Out of
+cures too far down for the stairs home to be worth the walk, it reads a Word of Recall, shops, and
+reads the second one to be dropped back where it left off. It plays with the same commands you have
+and knows only what you know -- no revealed map, no free healing -- so it dies like anyone else,
+just not on the first floor every time. Any key takes control back.
 
 Birth also asks for a **bloodline** and a **path**. A bloodline is one of three sub-races, and is
 small: a point of one stat for a point of another, plus one perk. A path is one of three
