@@ -49,8 +49,8 @@ and are not listed as gaps.
 - Options menu (`=`) and birth options: connected stairs, ironman, no selling, smart monsters,
   persistent levels, random artifacts; game options for auto-pickup, damage numbers, disturb,
   confirmations, sound, the narrator, touch controls and ignoring junk.
-- Birth: point-buy (20 points, unspent points become gold) or rolled stats, a short history, race
-  and class previews.
+- Birth: point-buy (20 points, spent by hand or at random, unspent points become gold) or rolled
+  stats, a short history, race and class previews.
 - Hall of Heroes (high scores), character dumps (`C` then `F`), save export and import.
 - Commands: `Enter` repeats, `ctrl+L` locates, `/` recalls the nearest monster, `,` holds.
 - Stun has light, heavy and knocked-out tiers; cuts run from grazes to mortal wounds that do not

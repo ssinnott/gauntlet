@@ -59,7 +59,8 @@ and fires arrows at what comes, rests when it is safe, drinks when it is not, an
 down once it knows where they are. It plays with the same commands you have and knows only what you
 know -- no revealed map, no free healing -- so it dies like anyone else. Any key takes control back.
 
-Birth offers rolled or point-bought stats, a short history, and the birth options: connected
+Birth offers rolled or point-bought stats (`X` on the point-buy screen lets chance spend the
+points), a short history, and the birth options: connected
 stairs, ironman, no selling, smart monsters, persistent levels and random artifacts. Persistent
 levels do not sit still while you are away -- things wander, things arrive, and the generators keep
 generating. Random artifacts roll a fresh set of 121 from the game seed instead of the famous ones.
