@@ -30,10 +30,11 @@ Two facts about this codebase shape everything below.
 
 **Every race needs a visual hook.** The hero rig draws the race as the body and the class as the kit
 worn over it, and `tools/smoke.ts` asserts that every race-and-class combination renders
-differently, pixel for pixel (187 of them, since the Bard landed). A new race is therefore never just a row in `src/game/data/races.ts`.
-It needs a silhouette, a feature or a palette that `src/ui/heroRaces.ts` can draw, and the assertion's
-expected count moves with it. This is a feature, not an obstacle: it rules out the "three elves that
-differ by two points of dexterity" pattern that bloats the variant family.
+differently, pixel for pixel (187 of them, since the Bard landed). A new race is therefore never
+just a row in `src/game/data/races.ts`. It needs a silhouette, a feature or a palette that
+`src/ui/heroRaces.ts` can draw, and the assertion's expected count moves with it. This is a feature,
+not an obstacle: it rules out the "three elves that differ by two points of dexterity" pattern that
+bloats the variant family.
 
 **Levels are keyed by depth alone.** `g.savedLevels` is indexed by a number, and `depth === 0` means
 "the town" in several places across `src/game/game.ts` and `src/game/commands.ts`. Anything with more
