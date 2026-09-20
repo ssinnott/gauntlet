@@ -750,14 +750,15 @@ export class BirthScreen implements Overlay {
     }
   }
   private previewFor: HeroSprite | null = null;
-  private previewCls = '';
+  private previewKey = '';
   private preview(ctx: CanvasRenderingContext2D, cls: string, ui: Ui): void {
-    if (!this.previewFor || this.previewCls !== cls) {
+    const key = cls + '/' + RACES[this.race].id + '/' + this.sex;
+    if (!this.previewFor || this.previewKey !== key) {
       const p = createPlayer('Preview', RACES[this.race].id, cls, this.sex);
       const w = CLASS_BY_ID[cls].startItems.find(([k]) => isWeapon(kindOf({ kind: k } as Item)));
       if (w) p.equip.weapon = makeItem(w[0], 1);
       this.previewFor = buildHero(p);
-      this.previewCls = cls;
+      this.previewKey = key;
     }
     ctx.save();
     ctx.translate(VIEW_W - 150, 330);
