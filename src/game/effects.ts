@@ -8,6 +8,7 @@ import { project, targetFromDir, nearestVisibleMonster } from './projection.ts';
 import { monsterTakeHit, takeHit, gainExp, loseExp } from './combat.ts';
 import { setTimed, refreshBonuses, teleportPlayer, movePlayerTo } from './effectsCore.ts';
 import { restoreStat, gainStat, drainStat } from './player.ts';
+import { quirkSpellDamage, quirkDispelMultiplier, quirkSpellPower } from './quirks.ts';
 import { kindOf, itemFlags, isWeapon, isArmor, isAmmo, identify, itemName, makeObject, isKnown, makeItem, isWearable } from './items.ts';
 import { damroll, randint0, randint1, oneIn, distance } from './util.ts';
 import { lightArea, dropNear, disturb } from './world.ts';
@@ -202,22 +203,22 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
       g.msg.add(`Your ${itemName(it, g.flavors, { article: false, count: false })} glows.`, '#a0ffa0');
       return true;
     }
-    case 'bolt': { const t = tgt(); const dam = damroll(e.dice[0], e.dice[1]) + (e.base || 0) + (ctx.power || 0); const beam = e.beam ? randint0(100) < e.beam + (p.cls === 'mage' ? p.lev : 0) : false; project(g, p.x, p.y, t.x, t.y, e.element, { dam, beam, source: 'player' }); return true; }
-    case 'ball': { const t = tgt(); const dam = e.dam + (e.dice ? damroll(e.dice[0], e.dice[1]) : 0) + (ctx.power || 0); project(g, p.x, p.y, t.x, t.y, e.element, { dam, radius: e.radius, source: 'player' }); return true; }
-    case 'breath': { const t = tgt(); project(g, p.x, p.y, t.x, t.y, e.element, { dam: e.dam, radius: 2, source: 'player' }); g.msg.add(`You breathe ${e.element}!`); return true; }
+    case 'bolt': { const t = tgt(); const dam = quirkSpellDamage(p, damroll(e.dice[0], e.dice[1]) + (e.base || 0) + (ctx.power || 0), 'bolt', e.element); const beam = e.beam ? randint0(100) < e.beam + (p.cls === 'mage' ? p.lev : 0) : false; project(g, p.x, p.y, t.x, t.y, e.element, { dam, beam, source: 'player' }); return true; }
+    case 'ball': { const t = tgt(); const dam = quirkSpellDamage(p, e.dam + (e.dice ? damroll(e.dice[0], e.dice[1]) : 0) + (ctx.power || 0), 'ball', e.element); project(g, p.x, p.y, t.x, t.y, e.element, { dam, radius: e.radius, source: 'player' }); return true; }
+    case 'breath': { const t = tgt(); project(g, p.x, p.y, t.x, t.y, e.element, { dam: quirkSpellDamage(p, e.dam, 'breath', e.element), radius: 2, source: 'player' }); g.msg.add(`You breathe ${e.element}!`); return true; }
     case 'burst': { let any = false; for (const m of lv.monsters.slice()) if (distance(p.x, p.y, m.x, m.y) <= e.radius && playerCanSee(lv, m.x, m.y)) { g.fx.push({ type: 'ball', x: p.x, y: p.y, radius: e.radius, element: e.element, cells: [] }); project(g, p.x, p.y, m.x, m.y, e.element, { dam: e.dam, source: 'player', range: e.radius + 1 }); any = true; } return any; }
     case 'stone_to_mud': { const t = tgt(); return project(g, p.x, p.y, t.x, t.y, 'missile', { dam: 20 + randint1(30), source: 'player', kind: 'stone_to_mud', range: 20 }); }
     case 'door_destruction': case 'trap_destruction': { let any = false; for (let d = 1; d <= 9; d++) { if (d === 5) continue; const x = p.x + DIR_DX[d], y = p.y + DIR_DY[d]; const t = tileAt(lv, x, y); if (t === T.TRAP || t === T.TRAP_HIDDEN || t === T.DOOR_CLOSED || t === T.DOOR_OPEN || t === T.DOOR_BROKEN || t === T.SECRET_DOOR) { setTile(lv, x, y, T.FLOOR); any = true; } } if (any) g.msg.add('There is a bright flash of light!'); return any; }
     case 'sleep_monsters': case 'slow_monsters': case 'scare_monsters': case 'confuse_monsters': {
       let any = false;
       const kind = e.kind === 'sleep_monsters' ? 'sleep' : e.kind === 'slow_monsters' ? 'slow' : e.kind === 'scare_monsters' ? 'scare' : 'confuse';
-      for (const m of lv.monsters.slice()) if (m.visible && playerCanSee(lv, m.x, m.y)) { project(g, p.x, p.y, m.x, m.y, 'missile', { dam: p.lev * 2 + 10, source: 'player', kind, range: 30 }); any = true; }
+      for (const m of lv.monsters.slice()) if (m.visible && playerCanSee(lv, m.x, m.y)) { project(g, p.x, p.y, m.x, m.y, 'missile', { dam: quirkSpellPower(p, p.lev * 2 + 10), source: 'player', kind, range: 30 }); any = true; }
       return any;
     }
     case 'sleep_monster': case 'slow_monster': case 'confuse_monster': case 'scare_monster': case 'haste_monster': case 'heal_monster': case 'clone_monster': case 'polymorph': case 'teleport_other': {
       const t = tgt();
       const kind = e.kind === 'sleep_monster' ? 'sleep' : e.kind === 'slow_monster' ? 'slow' : e.kind === 'confuse_monster' ? 'confuse' : e.kind === 'scare_monster' ? 'scare' : e.kind === 'haste_monster' ? 'haste' : e.kind === 'heal_monster' ? 'heal' : e.kind === 'clone_monster' ? 'clone' : e.kind === 'polymorph' ? 'polymorph' : 'teleport_other';
-      return project(g, p.x, p.y, t.x, t.y, 'missile', { dam: kind === 'teleport_other' ? 100 : kind === 'heal' ? 40 : p.lev * 2 + 10, source: 'player', kind });
+      return project(g, p.x, p.y, t.x, t.y, 'missile', { dam: kind === 'teleport_other' ? 100 : kind === 'heal' ? 40 : quirkSpellPower(p, p.lev * 2 + 10), source: 'player', kind });
     }
     case 'drain_life': { const t = tgt(); return project(g, p.x, p.y, t.x, t.y, 'nether', { dam: e.dam, source: 'player', kind: 'drain' }); }
     case 'vampiric': {
@@ -255,7 +256,7 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
         if (e.what === 'undead' && !hasMFlag(r, 'UNDEAD')) continue;
         if (e.what === 'evil' && !hasMFlag(r, 'EVIL')) continue;
         g.msg.add(`${monsterName(m)} shudders.`);
-        monsterTakeHit(g, m, randint1(e.dam), 'dissolves');
+        monsterTakeHit(g, m, Math.floor(randint1(e.dam) * quirkDispelMultiplier(p)), 'dissolves', true, 'spell');
         any = true;
       }
       return any;

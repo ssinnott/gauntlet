@@ -23,6 +23,13 @@ const magic = (bookId: string, list: S[], tables?: Record<string, ClassTable>) =
 const prayer = (bookId: string, list: S[], tables?: Record<string, ClassTable>) => book('prayer', bookId, list, tables);
 const nature = (bookId: string, list: S[], tables?: Record<string, ClassTable>) => book('nature', bookId, list, tables);
 const necro = (bookId: string, list: S[], tables?: Record<string, ClassTable>) => book('necro', bookId, list, tables);
+const song = (bookId: string, list: S[], tables?: Record<string, ClassTable>) => book('song', bookId, list, tables);
+/**
+ * A song carries no effect of its own. Casting one is intercepted in commands.ts, which hands it
+ * to startSong instead of the effect interpreter; what it then does for as long as it is held is
+ * in data/songs.ts. This row exists to give the song a name, a book, a level and a price.
+ */
+const NOTHING: Effect = { kind: 'nothing' };
 
 /** The class never learns this spell. */
 const NONE: Row = [99, 0, 0, 0];
@@ -377,6 +384,46 @@ export const SPELLS: SpellDef[] = [
     ['the_unmaking', 'The Unmaking', 49, 50, 80, 90, { kind: 'banish' }, 'Removes every monster of one kind from the level.'],
     ['dark_ascension', 'Dark Ascension', 50, 60, 85, 100, { kind: 'seq', effects: [{ kind: 'heal', amount: 200, cure: ['cut', 'stun', 'poisoned', 'afraid'] }, timed('fast', 15), timed('sinvis', 30), timed('telepathy', 30)] }, 'Heals 200 hit points and grants speed, see invisible and telepathy for a while.'],
   ], { '*': BLACKGUARD_NONE }),
+
+  // ---------------------------------------------------------------------------------------------
+  // Songs. The bard's realm: each of these is struck up rather than cast, and keeps going.
+  ...song('song_book_1', [
+    ['song_kindler', 'Song of the Kindler', 1, 1, 22, 4, NOTHING, 'You name the Kindler of the Stars, and the dark draws back a pace. Your light reaches one square further for as long as you sing.'],
+    ['song_silence', 'Song of Silence', 3, 2, 25, 5, NOTHING, 'A song so low it is felt rather than heard, and it swallows the noise you make. +3 stealth while it lasts.'],
+    ['song_staunching', 'Song of Staunching', 5, 3, 28, 6, NOTHING, 'The old lay for wounds, sung over and over. Your flesh knits while you sing it.'],
+    ['song_delvings', 'Song of Delvings', 7, 4, 30, 7, NOTHING, 'You sing to the rock and listen to how it answers. +35 searching, so hidden doors and traps give themselves away as you walk.'],
+    ['song_elbereth', 'Song of Elbereth', 9, 5, 34, 9, NOTHING, 'The name that the servants of the Enemy cannot bear to hear. Those near you flinch and flee while you keep singing it.'],
+    ['song_freedom', 'Song of Freedom', 11, 6, 36, 10, NOTHING, 'No chain and no spell holds a singer in the middle of a verse. Grants free action for as long as you sing.'],
+  ]),
+  ...song('song_book_2', [
+    ['song_lorien', 'Song of Lorien', 13, 7, 38, 12, NOTHING, 'The drowsy air of the Gardens of Lorien, carried down into the dark. What hears it keeps nodding off beside you.'],
+    ['song_valour', 'Song of Valour', 15, 8, 40, 14, NOTHING, 'A marching lay for a hero long dead, which does the living some good too. You are heroic while you sing it.'],
+    ['song_trees', 'Song of the Two Trees', 17, 9, 42, 16, NOTHING, 'Silver and gold, remembered rather than seen. Your light reaches two squares further; it replaces the Kindler rather than adding to it.'],
+    ['song_slaying', 'Song of Slaying', 19, 10, 44, 18, NOTHING, 'You set your blows to the beat and they land like hammer strokes. +10 damage while it lasts.'],
+    ['song_beguiling', 'Song of Beguiling', 21, 11, 46, 20, NOTHING, 'The verses double back on themselves until the listener forgets which way it was facing.'],
+    ['song_sharpsight', 'Song of Sharpened Sight', 23, 12, 48, 22, NOTHING, 'You sing what is there rather than what can be seen, and your eyes catch up. You see invisible creatures while it lasts.'],
+  ]),
+  ...song('song_book_3', [
+    ['song_mastery', 'Song of Mastery', 25, 13, 50, 25, NOTHING, 'You take up the room\'s rhythm and set it slower than it wants to go. Everything near you drags.'],
+    ['song_stone', 'Song of Stone', 27, 14, 52, 28, NOTHING, 'A dwarvish delving-chant, sung at yourself. Your skin answers the rock and hardens while you keep it up.'],
+    ['song_challenge', 'Song of Challenge', 29, 15, 54, 30, NOTHING, 'You name your lineage aloud and dare the dark to answer it. Nothing steadies an arm like having said it out loud: +15 to hit.'],
+    ['song_nirnaeth', 'Song of the Nirnaeth', 31, 16, 56, 32, NOTHING, 'The lay of Unnumbered Tears, and the Enemy\'s own hosts remember that day badly. A wider, heavier Elbereth.'],
+    ['song_wrath', 'Song of Wrath', 33, 17, 58, 34, NOTHING, 'The verse stops being words somewhere in the third line. You fight berserk for as long as your breath holds.'],
+    ['song_warding', 'Song of Warding', 35, 18, 60, 36, NOTHING, 'A ward sung rather than carved, and it holds only while the sound does. +25 armour.'],
+  ]),
+  ...song('song_book_4', [
+    ['song_lament', 'Song of Lamentation', 37, 19, 62, 38, NOTHING, 'Grief so old it has become a shield. Evil things cannot come at you cleanly while you mourn aloud.'],
+    ['song_farlistening', 'Song of Far-listening', 39, 21, 64, 40, NOTHING, 'You sing one note and wait for the level to sing it back. You sense every mind that hears you.'],
+    ['song_binding', 'Song of Binding', 41, 23, 66, 42, NOTHING, 'The song Luthien sang over the Enemy himself, as much of it as anyone now remembers. The deep form of Lorien.'],
+    ['song_swiftfeet', 'Song of Swift Feet', 43, 25, 68, 44, NOTHING, 'A dancing measure, and your feet keep it whether you meant them to or not. +2 speed while it lasts.'],
+    ['song_oath', 'Song of the Oath', 45, 27, 70, 46, NOTHING, 'The oath that ruined a house, sung by someone who should know better. One more blow every round, for as long as you are fool enough to hold the note.'],
+  ]),
+  ...song('song_book_5', [
+    ['song_dooming', 'The Doom of Mandos', 47, 30, 72, 48, NOTHING, 'A sentence pronounced, not a tune. Everything that hears it moves as though through deep water.'],
+    ['song_elderking', 'Song of the Elder King', 48, 33, 74, 50, NOTHING, 'You sing the winds of Manwe about yourself and nothing gets through them cleanly. +45 armour.'],
+    ['song_everwhite', 'Song of the Everwhite', 49, 36, 76, 52, NOTHING, 'The high thin air of the Everwhite Mountain, and your feet barely touch the stone. +3 speed; it replaces Swift Feet rather than adding to it.'],
+    ['song_theme', 'The Theme of Iluvatar', 50, 40, 80, 60, NOTHING, 'The Music the world was made out of. Everything that hears it is caught up and forgets what it was doing, for eight squares in every direction, until your voice gives out.'],
+  ]),
 ];
 export const SPELL_BY_ID: Record<string, SpellDef> = Object.fromEntries(SPELLS.map(s => [s.id, s]));
 export function spellsInBook(book: string): SpellDef[] { return SPELLS.filter(s => s.book === book); }

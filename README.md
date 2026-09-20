@@ -2,9 +2,10 @@
 
 An Angband-style roguelike drawn like the 1985 arcade *Gauntlet*: a procedurally generated dungeon
 seen from a 3/4 top-down view, a town with the eight stores and a day/night cycle, seventeen races
-and ten classes across four magic realms, flavoured potions, egos and artifacts, hand-drawn vaults
-and monster pits, caverns and labyrinths, monster memory, generators that spawn monsters until you
-smash them, Sauron and Morgoth at the bottom, and a hero who **needs food badly**.
+and eleven classes across five magic realms, three bloodlines for every race and three paths for
+every class, flavoured potions, egos and artifacts, hand-drawn vaults and monster pits, caverns and
+labyrinths, monster memory, generators that spawn monsters until you smash them, Sauron and Morgoth
+at the bottom, and a hero who **needs food badly**.
 
 Every sound is synthesised in the browser and the arcade narrator announces your misfortunes, so
 there are no asset files. It plays with a keyboard, a mouse or a thumb.
@@ -33,10 +34,11 @@ Gold, keys and items are picked up as you step on them. `?` lists the rest; the 
 staff, `z` zap a rod, `f` fire, `v` throw, `m`/`p` cast, `G` study, `R` rest, `<` `>` stairs,
 `C` character sheet, `M` map, `x` look, `Ctrl+S` save. Clicking the map travels there.
 
-Ten classes, drawn as the Gauntlet heroes: Warrior, Mage (Wizard), Priest (Cleric), Rogue (Thief),
-Ranger (Elf), Paladin (Valkyrie), Druid (Falconess, nature magic), Necromancer (Sorceress, the
-necromantic realm), Blackguard (Knight, a brawler with a few dark rituals) and Archer. Seventeen
-races: the eleven Angband ones plus Dark-Elf, Half-Giant, Barbarian, Ent, Beorning and Druadan.
+Eleven classes, drawn as the Gauntlet heroes: Warrior, Mage (Wizard), Priest (Cleric), Rogue
+(Thief), Ranger (Elf), Paladin (Valkyrie), Druid (Falconess, nature magic), Necromancer (Sorceress,
+the necromantic realm), Blackguard (Knight, a brawler with a few dark rituals), Archer and Bard
+(Jester, who fights to music). Seventeen races: the eleven Angband ones plus Dark-Elf, Half-Giant,
+Barbarian, Ent, Beorning and Druadan.
 Every race and class combination has its own sprite: the race is the body (skin, hair, ears, beard,
 build -- a hobbit's bare feet, a kobold's snout and tail, an Ent's bark and leaves) and the class is
 the kit worn over it (the Gauntlet hero's colours, hat, robe, cloak, shield or pauldrons); women get
@@ -62,6 +64,17 @@ Cure Light Wounds and Phase Door, walks into the dungeon, explores what it has n
 rubble in its way and veins that show treasure, throws oil and fires arrows at what comes, rests when
 it is safe, drinks when it is not, and takes the stairs down once it knows where they are. It plays with the same commands you have and knows only what you
 know -- no revealed map, no free healing -- so it dies like anyone else. Any key takes control back.
+
+Birth also asks for a **bloodline** and a **path**. A bloodline is one of three sub-races, and is
+small: a point of one stat for a point of another, plus one perk. A path is one of three
+subclasses, and is not small: it overrides the class's own numbers and unlocks a feature at levels
+1, 10 and 25, so a Hammerhand and an Axe-Thrower stop resembling each other somewhere around level
+ten. Both are shown on the character sheet and in the dump.
+
+The **Bard** sings rather than casts. A song is struck up once and keeps running while you fight,
+spending mana every turn, and it ends when the mana does, so a bard's mana bar is a clock rather
+than a purse. Sing the same song again, or press `P`, to stop. It is also the only class that
+lives on charisma.
 
 Birth offers rolled or point-bought stats (`X` on the point-buy screen lets chance spend the
 points), a short history, and the birth options: connected
@@ -108,7 +121,11 @@ src/game/                pure game logic: no DOM anywhere below here
   options.ts             birth and game options; scores.ts the Hall of Heroes
   autoplay.ts            the bot behind the Autoplay option (shared with the headless simulator)
   gen/vaults.ts          hand-drawn lesser and greater vaults in Angband's vault.txt glyphs
-  data/                  monsters (510), objects (430 kinds, 112 egos, 121 artifacts), spells (176 in four realms), races, classes
+  data/                  monsters (510), objects (435 kinds, 112 egos, 121 artifacts), spells (203 in five realms), races, classes
+  data/subraces.ts       51 bloodlines, three per race: a stat tweak and one small perk
+  data/subclasses.ts     33 paths, three per class: they override the class numbers and unlock features at 1, 10 and 25
+  data/songs.ts          what the bard's 27 songs do while they are being sung
+  quirks.ts              the hand-written half of a path: the rules the feature vocabulary cannot say
 src/ui/                  everything that draws, and everything that touches the browser
   render.ts              the 3/4 map: floors, raised walls, doors, items, monsters, effects
   audio.ts               synthesised sound effects and the arcade narrator

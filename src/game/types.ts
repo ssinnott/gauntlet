@@ -511,19 +511,50 @@ export interface ClassDef {
 /** The field of PlayerBonuses a 'bonus' feature adds to. */
 export type FeatureField = 'blows' | 'shots' | 'might' | 'speed' | 'toHit' | 'toDam' | 'ac' | 'lightRadius' | 'infra';
 
-/** Hand-written quirks. Each is implemented where its comment says; nothing else reads these. */
+/**
+ * Hand-written quirks: the things a subclass wants that the declarative kinds cannot say.
+ *
+ * Every one of them is implemented in quirks.ts, which is the only file that decides what a quirk
+ * means; the rest of the game calls a named hook from there at a handful of points. The comment
+ * beside each id names the hook that reads it.
+ */
 export type QuirkId =
+  // Melee
+  | 'stun_on_big_hit'    // quirkMeleeHit: a heavy blow rattles what it lands on
+  | 'hold_the_line'      // quirkHoldsTheLine: adjacent monsters cannot sidestep
+  | 'sneak_attack'       // quirkMeleeDamage: triple against a monster that has not noticed you
+  | 'hunter_mark'        // quirkMeleeDamage / quirkShotDamage: triple against a sleeping monster
+  | 'life_leech'         // quirkMeleeHit: every blow on the living returns a little health
+  | 'blood_rage'         // quirkMeleeBonus: fights harder below half health
+  | 'slay_heal'          // quirkOnKill: a kill in melee heals
+  | 'dread_blow'         // quirkMeleeHit: a blow may rout what it strikes
+  // Missiles and throwing
+  | 'steady_aim'         // quirkShotDamage: double after a turn spent still
+  | 'point_blank'        // quirkShotDamage: half again at two squares or less
+  | 'fletcher'           // quirkAmmoSurvives: ammunition never breaks
+  | 'no_extra_shots'     // player.ts: forgoes the class's own level-based extra shots
+  | 'mighty_throw'       // quirkThrowMultiplier: throwing weapons and flasks hit far harder
+  // Spells
+  | 'focused_bolts'      // quirkSpellDamage / quirkSpellCost: bolts and balls, dearer and stronger
+  | 'strong_enchantment' // quirkSpellPower: a mind-affecting spell pushes harder
+  | 'blood_magic'        // quirkCastPool: holds no mana and pays with hit points instead
+  | 'storm_lord'         // quirkSpellDamage: lightning and sound
+  | 'holy_dispel'        // quirkDispelMultiplier: dispel hits half again as hard
+  | 'soul_harvest'       // quirkOnKill: a spell kill returns mana
+  // Defence and posture
+  | 'shield_wall'        // quirkDamageTaken: a shield turns a quarter of everything
+  | 'rooted'             // player.ts: heavy armour of the earth while standing still
+  | 'unlight'            // player.ts: stealth improves unlit, worsens under a bright lamp
+  | 'bear_hands'         // player.ts: fights unarmed as well as most fight armed
+  // Everything else
+  | 'pickpocket'         // quirkGold: finds more coin in the same purse
   | 'no_spells'          // player.ts: never learns or casts, whatever the parent class does
   | 'blunt_only'         // player.ts weaponPenalty: takes the priest's edged-weapon penalty
   | 'edged_ok'           // player.ts weaponPenalty: exempt from it
   | 'fast_metabolism'    // game.ts: burns food twice as fast
   | 'slow_metabolism'    // game.ts: burns food half as fast
-  | 'light_sleeper'      // monster.ts: monsters notice this hero from further away
-  | 'unlight'            // player.ts: stealth improves in the dark, worsens in bright light
   | 'deep_pockets'       // game.ts birth: extra starting gold
-  | 'scavenger'          // commands.ts: always identifies the flavour of what it eats or drinks
-  | 'bloodscent'         // monster.ts: senses wounded monsters through walls
-  | 'song_weaving';      // commands.ts: may sustain two songs at once
+  | 'song_weaving';      // effectsCore.ts: may sustain two songs at once
 
 export interface Feature {
   /** Character level it unlocks at. Sub-race perks are all level 1. */
@@ -596,6 +627,13 @@ export interface SongDef {
   upkeep: number;
   /** What it does for the singer, in the same vocabulary a subclass feature uses. */
   effects: Feature[];
+  /**
+   * A song may instead hold an ordinary timed effect open. The upkeep tops the counter back up
+   * after processWorld has decremented it, writing to `timed` directly rather than through
+   * setTimed, because setTimed disturbs the player on every change and singing would then forbid
+   * resting and running.
+   */
+  timed?: Timed;
   /** Some songs work on whatever can hear them rather than on the singer. */
   aura?: { kind: 'fear' | 'sleep' | 'slow' | 'confuse'; power: number; radius: number };
 }
@@ -657,6 +695,12 @@ export interface Player extends Pos {
    */
   songs?: string[];
   keys: number;
+  /**
+   * The turn the hero last moved or struck. Two subclasses care whether a turn was spent standing
+   * still -- an archer steadying a shot and a druid rooted to the spot -- and both read it here
+   * rather than each keeping their own count.
+   */
+  movedAt?: number;
   searching: boolean;
   dead: boolean;
   deathCause: string;

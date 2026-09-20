@@ -181,7 +181,7 @@ console.log(`data: ${MONSTERS.length} monsters, ${OBJECTS.length} objects, ${RAC
   const heroes = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map(s => randomHero(dice(s)));
   ok(heroes.every(h => RACES.some(r => r.id === h.race) && CLASSES.some(c => c.id === h.cls) && (h.sex === 'male' || h.sex === 'female') && h.name.length > 0 && h.history.length > 0), 'random hero picks a real race, class, sex, name and history');
   ok(heroes.every(h => (!h.subrace || subracesOf(h.race).some(x => x.id === h.subrace)) && (!h.subclass || subclassesOf(h.cls).some(x => x.id === h.subclass))), 'random hero picks a bloodline of its race and a path of its class');
-  ok(heroes.every(h => h.pointBuy ? h.base !== null && STATS.every(s => h.stats[s] === boughtStats(h.base!, h.race, h.cls)[s]) : h.base === null && STATS.every(s => h.stats[s] >= 3 && h.stats[s] <= 20)), 'random hero stats follow its point buy or its roll');
+  ok(heroes.every(h => h.pointBuy ? h.base !== null && STATS.every(s => h.stats[s] === boughtStats(h.base!, h.race, h.cls, h.subrace, h.subclass)[s]) : h.base === null && STATS.every(s => h.stats[s] >= 3 && h.stats[s] <= 20)), 'random hero stats follow its point buy or its roll');
   ok(heroes.some(h => h.pointBuy) && heroes.some(h => !h.pointBuy), 'random heroes are sometimes bought and sometimes rolled');
   const again = randomHero(dice(1));
   ok(JSON.stringify(again) === JSON.stringify(heroes[0]), 'random hero is deterministic given the dice');

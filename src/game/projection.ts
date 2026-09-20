@@ -189,6 +189,7 @@ function affectMonster(g: Game, m: Monster, elem: Element, dam: number, o: Proje
   }
   if (dam <= 0) { if (seen && note) g.msg.add(`${name}${note}.`); return true; }
   if (seen && note) g.msg.add(`${name}${note}.`);
-  monsterTakeHit(g, m, dam, '');
+  // A kill here came from a spell, a wand or a breath, which is what a gravecaller feeds on.
+  monsterTakeHit(g, m, dam, '', true, o.source === 'player' ? 'spell' : 'other');
   return true;
 }

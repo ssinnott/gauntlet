@@ -12,6 +12,7 @@ import { dropNear } from './world.ts';
 import { disturb } from './world.ts';
 import { noteSight } from './lore.ts';
 import { RACE_BY_ID } from './data/races.ts';
+import { hasQuirk } from './player.ts';
 import { MAX_DEPTH } from '../constants.ts';
 
 export function raceOf(m: Monster): MonsterRace { return MONSTER_BY_ID[m.race]; }
@@ -537,6 +538,11 @@ function tryMove(g: Game, m: Monster, dx: number, dy: number): void {
     else return;
   } else if (!isPassable(t) && t !== T.TREE) return;
   else if (t === T.TREE && !hasMFlag(r, 'PASS_WALL')) return;
+  // A shieldbearer holds the line: what stands beside it cannot slide along to a better grid.
+  // Written here rather than in quirks.ts, which imports this file and would make a cycle.
+  if (hasQuirk(g.player, 'hold_the_line') && g.player.lev >= 25 &&
+      Math.max(Math.abs(m.x - g.player.x), Math.abs(m.y - g.player.y)) === 1 &&
+      Math.max(Math.abs(nx - g.player.x), Math.abs(ny - g.player.y)) === 1) return;
   const other = monsterAt(lv, nx, ny);
   if (other) {
     const or = raceOf(other);

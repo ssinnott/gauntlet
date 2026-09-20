@@ -49,13 +49,16 @@ export function startSong(g: Game, id: string): void {
     if (dropped) g.msg.add(`Your ${spellName(dropped)} falls silent.`, '#a0a0a0');
   }
   p.songs.push(id);
+  if (song.timed) p.timed[song.timed] = Math.max(p.timed[song.timed], 2);
   refreshBonuses(g);
 }
 
 export function stopSong(g: Game, id: string, why = 'You stop singing'): boolean {
-  const p = g.player;
+  const p = g.player, song = SONG_BY_ID[id];
   if (!p.songs || !p.songs.includes(id)) return false;
   p.songs = p.songs.filter(s => s !== id);
+  // Let go of a counter this song was holding open, but never of one something else topped up.
+  if (song?.timed && p.timed[song.timed] <= 2) p.timed[song.timed] = 0;
   g.msg.add(`${why}: ${spellName(id)}.`, '#a0a0a0');
   refreshBonuses(g);
   return true;
@@ -82,7 +85,11 @@ export function songUpkeep(g: Game): void {
     return;
   }
   p.csp -= paid;
-  for (const song of activeSongs(g)) if (song.aura) applyAura(g, song.aura);
+  for (const song of activeSongs(g)) {
+    // Hold the counter open. processWorld has already decremented it this turn.
+    if (song.timed) p.timed[song.timed] = Math.max(p.timed[song.timed], 2);
+    if (song.aura) applyAura(g, song.aura);
+  }
 }
 
 function applyAura(g: Game, aura: NonNullable<SongDef['aura']>): void {

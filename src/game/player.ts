@@ -18,6 +18,13 @@ export const TIMED_NAMES: Timed[] = ['fast', 'slow', 'blind', 'paralyzed', 'conf
 export const EXP_TABLE = [10, 25, 45, 70, 100, 140, 200, 280, 380, 500, 650, 850, 1100, 1400, 1800, 2300, 2900, 3600, 4400, 5400, 6800, 8400, 10200, 12500, 17500, 25000, 35000, 50000, 75000, 100000, 150000, 200000, 275000, 350000, 450000, 550000, 700000, 850000, 1000000, 1250000, 1500000, 1800000, 2100000, 2400000, 2700000, 3000000, 3500000, 4000000, 4500000, 5000000];
 export const MAX_LEVEL = 50;
 
+/** Blows per round by strength index and dexterity index (Angband's blows_table). */
+const BLOWS_TABLE = [
+  [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4], [1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5], [1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5],
+  [1, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5], [2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 6], [2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 6], [2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5, 6],
+  [3, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6],
+];
+
 /** Display a 3..40 stat as Angband does: "18/50". */
 export function statText(v: number): string {
   if (v <= 18) return String(v);
@@ -269,6 +276,10 @@ export function computeBonuses(p: Player): PlayerBonuses {
       else if (f.field === 'infra') infra += n;
     }
   }
+  // Quirks that are really bonuses, but bonuses that depend on the hero's own state rather than on
+  // a level the pure bonus calculation cannot see.
+  if (hasQuirk(p, 'rooted') && p.turns - (p.movedAt ?? -99) >= 1) toAc += 30;
+  if (hasQuirk(p, 'unlight')) { if (lightRadius === 0) skills.stealth += 3; else if (lightRadius >= 2) skills.stealth -= 2; }
   for (const s of STATS) stat[s] = clamp(stat[s], 3, 40);
   // Timed effects.
   const t = p.timed;
@@ -301,6 +312,14 @@ export function computeBonuses(p: Player): PlayerBonuses {
   const weapon = p.equip.weapon;
   let blows = 1;
   let heavyWeapon = false;
+  // A skin-changer's hands are a weapon: 1d8 at weight 30, so the blow table treats them as one.
+  const barehanded = !weapon && hasQuirk(p, 'bear_hands');
+  if (barehanded) {
+    const div = Math.max(30, nums.minWeight);
+    const strIndex = Math.min(11, Math.floor(adj.strBlow(stat.STR) * nums.attackMultiplier / div));
+    const dexIndex = adj.dexBlow(stat.DEX);
+    blows = Math.min(nums.maxAttacks, BLOWS_TABLE[Math.min(11, strIndex)][Math.min(11, dexIndex)]) + extraBlows;
+  }
   if (weapon) {
     const wk = kindOf(weapon);
     const hold = adj.strHold(stat.STR) * 10;
@@ -308,11 +327,6 @@ export function computeBonuses(p: Player): PlayerBonuses {
     const div = Math.max(wk.weight, nums.minWeight);
     const strIndex = Math.min(11, Math.floor(adj.strBlow(stat.STR) * nums.attackMultiplier / div));
     const dexIndex = adj.dexBlow(stat.DEX);
-    const BLOWS_TABLE = [
-      [1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2], [1, 1, 1, 1, 2, 2, 3, 3, 3, 4, 4, 4], [1, 1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5], [1, 2, 2, 3, 3, 4, 4, 4, 5, 5, 5, 5],
-      [1, 2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5], [2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 6], [2, 2, 3, 3, 4, 4, 5, 5, 5, 5, 5, 6], [2, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5, 6],
-      [3, 3, 3, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6], [3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6],
-    ];
     blows = Math.min(nums.maxAttacks, BLOWS_TABLE[Math.min(11, strIndex)][Math.min(11, dexIndex)]);
     if (heavyWeapon) blows = 1;
     if (p.cls === 'warrior' && blows < 2 && p.lev >= 10) blows = 2;
@@ -325,9 +339,12 @@ export function computeBonuses(p: Player): PlayerBonuses {
     const bk = kindOf(bow);
     might = (bk.multiplier || 2) + extraMight;
     shots += extraShots;
-    if (p.cls === 'ranger' && bk.ammo === 'arrow') shots += Math.floor(p.lev / 20) + 1 > 1 ? Math.floor((p.lev + 20) / 20) : 0;
-    if (p.cls === 'rogue' && bk.ammo === 'shot') shots += Math.floor(p.lev / 20) + 1;
-    if (p.cls === 'archer') shots += 1 + Math.floor(p.lev / 15);
+    // A strongbow trades the class's volley for weight of shot, so it forgoes these entirely.
+    if (!hasQuirk(p, 'no_extra_shots')) {
+      if (p.cls === 'ranger' && bk.ammo === 'arrow') shots += Math.floor(p.lev / 20) + 1 > 1 ? Math.floor((p.lev + 20) / 20) : 0;
+      if (p.cls === 'rogue' && bk.ammo === 'shot') shots += Math.floor(p.lev / 20) + 1;
+      if (p.cls === 'archer') shots += 1 + Math.floor(p.lev / 15);
+    }
     const hold = adj.strHold(stat.STR) * 10;
     if (hold < bk.weight) heavyBow = true;
   }
@@ -352,7 +369,8 @@ export function recomputeHp(p: Player, b: PlayerBonuses): void {
 export function recomputeMana(p: Player, b: PlayerBonuses): void {
   const c = CLASS_BY_ID[p.cls], first = classNums(p).firstSpellLevel;
   // A subclass may forswear magic outright, which is the one way a class with a realm holds no mana.
-  if (!c.realm || p.lev < first || hasQuirk(p, 'no_spells')) { p.msp = 0; p.csp = 0; return; }
+  // A blood mage holds none: quirks.ts spends hit points for it instead.
+  if (!c.realm || p.lev < first || hasQuirk(p, 'no_spells') || hasQuirk(p, 'blood_magic')) { p.msp = 0; p.csp = 0; return; }
   const levels = p.lev - first + 1;
   let msp = Math.floor(adj.magMana(b.stat[c.spellStat]) * levels / 100) + 1;
   // Gloves hurt mages; heavy armour hurts everyone.

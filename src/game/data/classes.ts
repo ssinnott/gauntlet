@@ -11,6 +11,7 @@ const DRUID_TITLES = ['Wanderer', 'Tamer', 'Nurturer', 'Gardener', 'Creator', 'E
 const NECRO_TITLES = ['Acolyte', 'Curser', 'Dark Student', 'Initiate', 'Slavemaster', 'Summoner', 'Controller', 'Commander', 'Dark Master', 'Night Lord'];
 const BLACKGUARD_TITLES = ['Hewer', 'Marauder', 'Brute', 'Ravager', 'Reaver', 'Warmonger', 'Slayer', 'Dread Knight', 'Champion of Ruin', 'Lord of Ruin'];
 const ARCHER_TITLES = ['Fletcher', 'Bowman', 'Marksman', 'Sharpshooter', 'Hunter', 'Deadeye', 'Falconer', 'Bow Master', 'Arrow Lord', 'Windwalker'];
+const BARD_TITLES = ['Busker', 'Rhymer', 'Piper', 'Minstrel', 'Chanter', 'Lay-singer', 'Balladeer', 'Loremaster', 'Song-smith', 'Song Lord'];
 
 export const CLASSES: ClassDef[] = [
   { id: 'warrior', name: 'Warrior', hero: 'Warrior', stats: { STR: 5, INT: -2, WIS: -2, DEX: 2, CON: 2, CHR: -1 },
@@ -93,5 +94,13 @@ export const CLASSES: ClassDef[] = [
     titles: ARCHER_TITLES,
     palette: { primary: '#7a4a2a', secondary: '#3a6a3a', accent: '#f0e0a0', metal: '#b0b8c8', dark: '#201810', glow: '#ffe080' },
     desc: 'The Gauntlet Archer: no magic, but the fastest shots in the dungeon and the eye to place them. Keep the quiver full.' },
+  { id: 'bard', name: 'Bard', hero: 'Jester', stats: { STR: 0, INT: 1, WIS: -1, DEX: 2, CON: -1, CHR: 4 },
+    skills: { disarm: 32, device: 34, save: 32, stealth: 4, search: 26, perception: 18, melee: 46, bows: 48, throw: 48, digging: 0 },
+    skillsGrowth: { disarm: 10, device: 12, save: 12, stealth: 0, search: 0, perception: 0, melee: 28, bows: 30, throw: 30, digging: 0 },
+    hitDie: 4, expPct: 30, maxAttacks: 4, minWeight: 35, attackMultiplier: 3, realm: 'song', spellStat: 'CHR', firstSpellLevel: 1,
+    startItems: [['song_book_1', 1], ['rapier', 1], ['soft_leather_armor', 1], ['cloak', 1], ['ration', 3], ['torch', 3], ['potion_clw', 2], ['scroll_word_of_recall', 1], ['flask_oil', 5]],
+    titles: BARD_TITLES,
+    palette: { primary: '#a8408c', secondary: '#c07838', accent: '#40d8c8', metal: '#d0c0a8', dark: '#1e1430', glow: '#ff9ce0' },
+    desc: 'The Gauntlet Jester: the only hero who fights to music. A song is struck up once and keeps going while you swing, spending mana every turn, so a bard\'s mana is not a purse of casts but a length of time. It is the one class that lives on CHR, which nothing else in the dungeon cares about.' },
 ];
 export const CLASS_BY_ID: Record<string, ClassDef> = Object.fromEntries(CLASSES.map(c => [c.id, c]));
