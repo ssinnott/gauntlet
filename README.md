@@ -9,6 +9,9 @@ smash them, Sauron and Morgoth at the bottom, and a hero who **needs food badly*
 Every sound is synthesised in the browser and the arcade narrator announces your misfortunes, so
 there are no asset files. It plays with a keyboard, a mouse or a thumb.
 
+**[Play it here](https://ssinnott.github.io/gauntlet/)** -- `.github/workflows/pages.yml` typechecks,
+runs the simulator and publishes `dist/index.html` to GitHub Pages on every push to `main`.
+
 Strict TypeScript on the vanilla canvas, no runtime dependencies, nothing compiled during
 development. The engine (`src/lib/`) is [ssinnott/game-engine](https://github.com/ssinnott/game-engine),
 vendored with `git subtree` exactly as that repo's `docs/VENDORING.md` prescribes.
