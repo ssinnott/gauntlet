@@ -58,9 +58,9 @@ On a phone, touch anywhere: a thumb pad and three pages of command buttons appea
 get a navigation bar. The `touchControls` option forces them on with a mouse.
 
 `ctrl+A` (or the **Autoplay** game option under `=`) hands the hero to a bot: it shops for rations,
-Cure Light Wounds and Phase Door, walks into the dungeon, explores what it has not seen, throws oil
-and fires arrows at what comes, rests when it is safe, drinks when it is not, and takes the stairs
-down once it knows where they are. It plays with the same commands you have and knows only what you
+Cure Light Wounds and Phase Door, walks into the dungeon, explores what it has not seen, digs through
+rubble in its way and veins that show treasure, throws oil and fires arrows at what comes, rests when
+it is safe, drinks when it is not, and takes the stairs down once it knows where they are. It plays with the same commands you have and knows only what you
 know -- no revealed map, no free healing -- so it dies like anyone else. Any key takes control back.
 
 Birth offers rolled or point-bought stats (`X` on the point-buy screen lets chance spend the

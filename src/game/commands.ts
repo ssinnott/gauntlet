@@ -168,6 +168,8 @@ export function tunnelInto(g: Game, x: number, y: number): void {
   if (cannotAct(g)) return;
   const t = tileAt(lv, x, y);
   const skill = g.bonuses.skills.digging;
+  // Swinging at a grid tells you what it is made of, as bumping a wall does.
+  if (t !== T.FLOOR) addFlag(lv, x, y, F.MARK);
   const has = (need: number, name: string) => {
     if (skill > randint0(need)) { setTile(lv, x, y, T.FLOOR); g.msg.add(`You have removed the ${name}.`); g.flowDirty = true; return true; }
     g.msg.add(`You ${name === 'rubble' ? 'dig in' : 'tunnel into'} the ${name}.`);

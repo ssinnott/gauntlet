@@ -89,28 +89,70 @@ function unknownNeighbour(g: Game, x: number, y: number): number {
   }
   return 0;
 }
-/** Breadth-first over remembered, walkable grids; returns the closest frontier. */
-function frontier(g: Game): Pos | null {
+
+// -----------------------------------------------------------------------------------------
+// Digging: rubble across the way on, and veins with treasure showing.
+
+/** Can a hero with no special tools tunnel through this? */
+function diggable(t: number): boolean { return t === T.RUBBLE || t === T.MAGMA || t === T.QUARTZ || t === T.MAGMA_K || t === T.QUARTZ_K; }
+/** Turns the hero can expect to spend clearing a grid of this kind (see commands.tunnelInto). */
+function digTurns(g: Game, t: number): number {
+  const need = t === T.RUBBLE ? 200 : t === T.MAGMA || t === T.MAGMA_K ? 400 : t === T.QUARTZ || t === T.QUARTZ_K ? 800 : 1600;
+  return need / Math.max(1, g.bonuses.skills.digging);
+}
+/** Longest dig the bot will plan for, in expected turns; three times that and it gives the grid up. */
+const DIG_PATIENCE = 60;
+/** A grid worth digging, the walkable grid to dig it from, and the walk to get there. */
+type DigSite = { dig: Pos; from: Pos; steps: number };
+/**
+ * One breadth-first walk over remembered, walkable grids, closest first: the nearest grid with
+ * unseen ground beside it, the nearest rubble with unseen ground behind it (a blocked corridor), and
+ * the nearest vein showing treasure. A bare streamer leads nowhere but rock, so it is not counted.
+ */
+function survey(g: Game): { open: Pos | null; openSteps: number; rubble: DigSite | null; treasure: DigSite | null } {
   const lv = g.level, p = g.player, w = lv.w;
   const seen = new Uint8Array(lv.w * lv.h);
-  const qx: number[] = [p.x], qy: number[] = [p.y];
+  const qx: number[] = [p.x], qy: number[] = [p.y], qs: number[] = [0];
   seen[p.y * w + p.x] = 1;
-  for (let head = 0; head < qx.length; head++) {
-    const x = qx[head], y = qy[head];
-    if ((x !== p.x || y !== p.y) && unknownNeighbour(g, x, y)) return { x, y };
+  let open: Pos | null = null, openSteps = 0, rubble: DigSite | null = null, treasure: DigSite | null = null;
+  for (let head = 0; head < qx.length && !(open && rubble && treasure); head++) {
+    const x = qx[head], y = qy[head], steps = qs[head];
+    if (!open && (x !== p.x || y !== p.y) && unknownNeighbour(g, x, y)) { open = { x, y }; openSteps = steps; }
     for (let d = 1; d <= 9; d++) {
       if (d === 5) continue;
-      const nx = x + DIR_DX[d], ny = y + DIR_DY[d];
-      if (!inBounds(lv, nx, ny) || seen[ny * w + nx]) continue;
-      seen[ny * w + nx] = 1;
-      const t = tileAt(lv, nx, ny);
+      const nx = x + DIR_DX[d], ny = y + DIR_DY[d], i = ny * w + nx;
+      if (!inBounds(lv, nx, ny) || seen[i]) continue;
+      seen[i] = 1;
       if (!(flagAt(lv, nx, ny) & F.MARK)) continue;
+      const t = tileAt(lv, nx, ny);
+      if (diggable(t)) {
+        if (hopeless.has(i) || digTurns(g, t) > DIG_PATIENCE) continue;
+        const site = { dig: { x: nx, y: ny }, from: { x, y }, steps };
+        if (!rubble && t === T.RUBBLE && unknownNeighbour(g, nx, ny)) rubble = site;
+        else if (!treasure && (t === T.MAGMA_K || t === T.QUARTZ_K)) treasure = site;
+        continue;
+      }
       if (!isPassable(t) && t !== T.DOOR_CLOSED) continue;
-      qx.push(nx); qy.push(ny);
+      qx.push(nx); qy.push(ny); qs.push(steps + 1);
     }
   }
-  return null;
+  return { open, openSteps, rubble, treasure };
 }
+/** Start on a grid beside the hero; the turn is spent, and the next steps keep at it. */
+function startDig(g: Game, x: number, y: number, forced = false): void {
+  dig = { x, y, turns: 1, forced };
+  C.tunnelInto(g, x, y);
+  g.repeating = null;
+}
+/** Dig the site if the hero stands beside it, else walk there; false when it cannot be reached. */
+function goDig(g: Game, site: DigSite): boolean {
+  const p = g.player;
+  if (distance(p.x, p.y, site.dig.x, site.dig.y) <= 1) { startDig(g, site.dig.x, site.dig.y); return true; }
+  if (headFor(g, site.from.x, site.from.y)) return true;
+  hopeless.add(site.dig.y * g.level.w + site.dig.x);
+  return false;
+}
+
 /** The nearest remembered tile of a kind, or null. */
 function nearestTile(g: Game, match: (t: number) => boolean): Pos | null {
   const lv = g.level, p = g.player;
@@ -138,7 +180,7 @@ function headFor(g: Game, x: number, y: number): boolean {
   return false;
 }
 /** Open ground the bot has not walked on yet, or a probe into the dark beside it. */
-function explore(g: Game): boolean {
+function explore(g: Game, open: Pos | null): boolean {
   const p = g.player;
   const d = unknownNeighbour(g, p.x, p.y);
   if (d) {
@@ -149,9 +191,10 @@ function explore(g: Game): boolean {
     probed.add(ny * g.level.w + nx);
     C.moveDir(g, d);
     if (isPassable(t) || t === T.DOOR_CLOSED) return true;
+    // Bumping rubble or a vein tunnels into it, which is a turn: whether to keep at it is decided next step.
+    if (diggable(t)) { g.repeating = null; return true; }
   }
-  const f = frontier(g);
-  if (f && headFor(g, f.x, f.y)) return true;
+  if (open && headFor(g, open.x, open.y)) return true;
   return false;
 }
 
@@ -273,12 +316,16 @@ let shopped = new Set<number>();
 let probed = new Set<number>();
 /** Items the bot stood on and still could not take, or could not reach: not worth another walk. */
 let passed = new Set<number>();
+/** The grid being tunnelled and the turns sunk into it; `forced` when it is the only way off the grid. */
+let dig: { x: number; y: number; turns: number; forced: boolean } | null = null;
+/** Grids the bot dug at for too long, or could not get beside: not worth another try. */
+let hopeless = new Set<number>();
 /** Forget the current level (a new hero, or a save loaded over this one). */
-export function resetAutoplay(): void { levelKey = ''; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); }
+export function resetAutoplay(): void { levelKey = ''; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); dig = null; hopeless = new Set(); }
 /** Bot turns spent on the level the hero is standing on. */
 function levelAge(g: Game): number {
   const key = `${g.player.name}|${g.level.depth}|${g.stats.levelsVisited}`;
-  if (key !== levelKey) { levelKey = key; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); }
+  if (key !== levelKey) { levelKey = key; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); dig = null; hopeless = new Set(); }
   return ++stepsOnLevel;
 }
 /** A look round, but not a survey: a hundred-by-sixty level has corners not worth the turns. */
@@ -306,12 +353,15 @@ export function autoplayStep(g: Game, step: number): void {
   if (g.resting) { if (threats.length) g.resting = 0; else { C.restStep(g); return; } }
   if (g.travel) { if (close.length) g.travel = null; else { C.travelStep(g); return; } }
   if (g.running) { if (threats.length) g.running = null; else { C.runStep(g); return; } }
+  // The bot paces its own tunnelling (below); a repeat left over from the player is not its business.
+  g.repeating = null;
 
   // How much of this level is left, and is it still worth the time? The clock ticks before the
   // fighting does, or a breeding pit would hold the bot on one grid for ever.
   const town = lv.depth === 0;
   const swarm = threats.length > 4;
-  const more = town ? null : frontier(g);
+  const { open, openSteps, rubble, treasure } = survey(g);
+  const more = open || rubble || treasure;
   const down = town ? null : nearestTile(g, t => t === T.STAIRS_DOWN);
   const age = levelAge(g);
   // Explore while there is ground left to cover -- but once the way down is known, a look round
@@ -337,6 +387,13 @@ export function autoplayStep(g: Game, step: number): void {
     const meal = foodItem(g);
     if (meal) { C.eat(g, meal); return; }
   }
+  // A dig in progress: keep at it while nothing is coming, and give up on a grid that will not yield.
+  if (dig) {
+    const t = tileAt(lv, dig.x, dig.y);
+    if (!diggable(t) || distance(p.x, p.y, dig.x, dig.y) > 1 || !(staying || dig.forced)) dig = null;
+    else if (dig.turns >= DIG_PATIENCE * 3) { hopeless.add(dig.y * lv.w + dig.x); dig = null; }
+    else if (!close.length && p.chp >= p.mhp * HURT) { dig.turns++; C.tunnelInto(g, dig.x, dig.y); g.repeating = null; return; }
+  }
 
   // 2. Whatever is in arm's reach. A hero walking out on a breeding pit takes the free hits.
   const adj = adjacentDir(g);
@@ -354,14 +411,14 @@ export function autoplayStep(g: Game, step: number): void {
       const door = nearestTile(g, t => isShop(t) && t - T.SHOP_0 === want);
       if (door && headFor(g, door.x, door.y)) return;
       // The shop has not been found yet: no hero walks into the dungeon without potions.
-      if (!door && explore(g)) return;
+      if (!door && explore(g, open)) return;
     }
     const stairs = nearestTile(g, t => t === T.STAIRS_DOWN);
     if (stairs) {
       if (stairs.x === p.x && stairs.y === p.y) { C.goDown(g); return; }
       if (headFor(g, stairs.x, stairs.y)) return;
     }
-    if (explore(g)) return;
+    if (explore(g, open)) return;
     C.passTurn(g);
     return;
   }
@@ -393,21 +450,29 @@ export function autoplayStep(g: Game, step: number): void {
       if (headFor(g, loot.x, loot.y)) return;
       passed.add(loot.item.id);
     }
+    // A vein showing treasure is loot too, at the price of the digging.
+    if (staying && treasure && goDig(g, treasure)) return;
     if (staying && step % 31 === 30) { C.searchAround(g); return; }
   }
 
-  // 7. Move: on into the dark, or off this level.
+  // 7. Move: on into the dark, through what blocks it, or off this level.
   if (!staying && down && headFor(g, down.x, down.y)) return;
-  if (explore(g)) return;
+  // Rubble across the way on is cleared when that is quicker than walking round to the next unseen corner.
+  if (rubble && (!open || rubble.steps + digTurns(g, T.RUBBLE) < openSteps) && goDig(g, rubble)) return;
+  if (explore(g, open)) return;
+  if (rubble && goDig(g, rubble)) return;
   if (down && headFor(g, down.x, down.y)) return;
   // Walled in: dig at the softest neighbour, or feel around for a secret door.
   if (step % 3 === 0) { C.searchAround(g); return; }
+  let soft = 0, softTurns = 1e9;
   for (let d = 1; d <= 9; d++) {
-    const dd = ((step + d) % 9) + 1;
-    if (dd === 5) continue;
-    const t = tileAt(lv, p.x + DIR_DX[dd], p.y + DIR_DY[dd]);
-    if (t === T.RUBBLE || t === T.MAGMA || t === T.QUARTZ || t === T.MAGMA_K || t === T.QUARTZ_K) { C.tunnelInto(g, p.x + DIR_DX[dd], p.y + DIR_DY[dd]); return; }
+    if (d === 5) continue;
+    const x = p.x + DIR_DX[d], y = p.y + DIR_DY[d];
+    const t = tileAt(lv, x, y);
+    if (!diggable(t) || hopeless.has(y * lv.w + x) || digTurns(g, t) >= softTurns) continue;
+    soft = d; softTurns = digTurns(g, t);
   }
+  if (soft) { startDig(g, p.x + DIR_DX[soft], p.y + DIR_DY[soft], true); return; }
   const up = nearestTile(g, t => t === T.STAIRS_UP);
   if (up && !g.options.ironman) {
     if (up.x === p.x && up.y === p.y) { C.goUp(g); return; }
