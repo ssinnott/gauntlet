@@ -4,10 +4,11 @@
 // `=` toggles it as the Autoplay game option, ctrl+A does the same from the map; tools/sim.ts
 // drives the same brain headless so `npm run check` plays a few characters with it.
 import { FOOD_HUNGRY, INVEN_MAX, QUIVER_SLOTS } from '../constants.ts';
-import { T, F, DIR_DX, DIR_DY, dirOf, isPassable, isShop, type Item, type FloorItem, type Monster, type Pos, type Effect, type SpellDef } from './types.ts';
+import { T, F, DIR_DX, DIR_DY, dirOf, isPassable, isShop, type Item, type FloorItem, type Monster, type ObjectKind, type Pos, type SlotName, type Effect, type SpellDef } from './types.ts';
 import { tileAt, flagAt, monsterAt, itemsAt, inBounds, los } from './level.ts';
 import { kindOf, isKnown, isAmmo, isWearable, wieldSlot, itemName, canStack, getNextItemId, setNextItemId } from './items.ts';
-import { isIgnored } from './ignore.ts';
+import { isIgnored, itemQuality, alwaysPickUp } from './ignore.ts';
+import { CLASS_BY_ID } from './data/classes.ts';
 import { maintainStore, storeBuy, storeSell, storeWants, buyPrice, sellPrice } from './stores.ts';
 import { refreshBonuses } from './effectsCore.ts';
 import { randint0, distance } from './util.ts';
@@ -226,13 +227,73 @@ function explore(g: Game, open: Pos | null): boolean {
 // -----------------------------------------------------------------------------------------
 // Loot: the nearest remembered item worth the walk.
 
+/** The empty slot a piece of gear would go into, minding the hero's second ring finger. */
+function emptySlot(g: Game, k: ObjectKind): SlotName | null {
+  const slot = wieldSlot(k), p = g.player;
+  if (!slot) return null;
+  if (slot === 'ring1' && p.equip.ring1) return p.equip.ring2 ? null : 'ring2';
+  return p.equip[slot] ? null : slot;
+}
+/** Is this a book of the hero's own realm? Another realm's is so much weight. */
+function ownBook(g: Game, k: ObjectKind): boolean {
+  const realm = CLASS_BY_ID[g.player.cls]?.realm;
+  return !!realm && k.tval === `${realm}_book`;
+}
+// How much the bot wants to keep a thing, worst to best. This is an order, not a price: it only
+// decides what goes over the side when the pack is full and something better is underfoot.
+const KEEP_JUNK = 0;     // cursed or broken gear: weight, and nothing else
+const KEEP_DULL = 15;    // known and ordinary: a spare robe, a read scroll's twin
+const KEEP_SPARE = 30;   // an unknown flavour -- a lottery ticket, and it sells
+const KEEP_DEVICE = 45;  // wands, staves, rods: the bot fights with these
+const KEEP_GEAR = 60;    // armour and weapons it could wear or swap to
+const KEEP_KIT = 90;     // food, cures, escapes, oil, light, its own spellbooks
+const KEEP_PRIZE = 100;  // artifacts, egos, anything the hero marked to keep
+/** What the pack is worth holding on to, by the bot's lights. */
+function keepValue(g: Game, it: Item): number {
+  const k = kindOf(it);
+  if (it.artifact || alwaysPickUp(it)) return KEEP_PRIZE;
+  const q = itemQuality(it);
+  if (q === 'special' || q === 'excellent') return KEEP_PRIZE;
+  // A caster that throws its own spellbook away cannot cast again: that is never junk.
+  if (ownBook(g, k)) return KEEP_PRIZE;
+  if (k.tval === 'flask') return KEEP_KIT;
+  if (k.tval === 'light' && countKind(g, it.kind) <= 4) return KEEP_KIT;
+  if (k.tval === 'food' && (k.pval || 0) >= 500) return KEEP_KIT;
+  if (k.tval === 'potion' && known(g, it) && hasEffect(k.effect, 'heal')) return KEEP_KIT;
+  if (k.tval === 'scroll' && known(g, it) && hasEffect(k.effect, 'teleport')) return KEEP_KIT;
+  if (isWearable(k)) {
+    if (q === 'worthless') return KEEP_JUNK;
+    if (emptySlot(g, k)) return KEEP_GEAR;
+    return q === 'good' ? KEEP_GEAR : KEEP_DULL;
+  }
+  if (k.tval === 'wand' || k.tval === 'staff' || k.tval === 'rod') return KEEP_DEVICE;
+  return known(g, it) ? KEEP_DULL : KEEP_SPARE;
+}
+/** The thing the bot would throw away first, or null when the pack holds nothing spare. */
+function junkInPack(g: Game): Item | null {
+  let worst: Item | null = null, wv = 1e9, wc = 1e9;
+  for (const it of g.player.inven) {
+    const v = keepValue(g, it), c = kindOf(it).cost;
+    if (v >= KEEP_PRIZE) continue;
+    if (v > wv || (v === wv && c >= wc)) continue;
+    worst = it; wv = v; wc = c;
+  }
+  return worst;
+}
+/** Room for this find: a free slot, a stack to join, or something duller to drop for it. */
+function roomFor(g: Game, it: Item): boolean {
+  const k = kindOf(it), p = g.player;
+  if (isAmmo(k)) return p.quiver.length < QUIVER_SLOTS || p.quiver.some(q => canStack(q, it, g.flavors));
+  if (p.inven.length < INVEN_MAX || p.inven.some(o => canStack(o, it, g.flavors))) return true;
+  const junk = junkInPack(g);
+  return !!junk && keepValue(g, it) > keepValue(g, junk);
+}
 /** Would the bot take this if it stood on it? Gold, keys and chests never need room in the pack. */
 function wantsItem(g: Game, it: Item): boolean {
-  const k = kindOf(it), p = g.player;
+  const k = kindOf(it);
   if (k.tval === 'gold' || k.tval === 'key' || k.tval === 'chest') return true;
-  if (isIgnored(g, it)) return false;
-  if (isAmmo(k)) return p.quiver.length < QUIVER_SLOTS || p.quiver.some(q => canStack(q, it, g.flavors));
-  return p.inven.length < INVEN_MAX || p.inven.some(o => canStack(o, it, g.flavors));
+  if (isIgnored(g, it) || junked.has(it.id)) return false;
+  return roomFor(g, it);
 }
 /** The closest item on a grid the bot remembers, skipping what it has already given up on. */
 function nearestLoot(g: Game): FloorItem | null {
@@ -245,6 +306,30 @@ function nearestLoot(g: Game): FloorItem | null {
     if (d < bd) { bd = d; best = fi; }
   }
   return best;
+}
+/**
+ * A full pack is the commonest reason a bot walks over a ring. Throw the dullest thing in it away
+ * when what is underfoot beats it -- that is a turn spent, like any drop, and the pickup follows
+ * next step. What the bot throws away it remembers, or it would pick the same rag straight back up.
+ */
+function shedForLoot(g: Game): boolean {
+  const p = g.player, lv = g.level;
+  if (p.inven.length < INVEN_MAX) return false;
+  const junk = junkInPack(g);
+  if (!junk) return false;
+  const prize = itemsAt(lv, p.x, p.y).find(fi => {
+    const k = kindOf(fi.item);
+    if (k.tval === 'gold' || k.tval === 'key' || k.tval === 'chest' || isAmmo(k)) return false;
+    if (isIgnored(g, fi.item) || junked.has(fi.item.id)) return false;
+    if (p.inven.some(o => canStack(o, fi.item, g.flavors))) return false;
+    return keepValue(g, fi.item) > keepValue(g, junk);
+  });
+  if (!prize) return false;
+  junked.add(junk.id);
+  C.dropItem(g, junk, junk.number);
+  // Room again: loot the bot gave up on for want of space is worth another look.
+  passed.clear();
+  return true;
 }
 
 // -----------------------------------------------------------------------------------------
@@ -341,16 +426,18 @@ let shopped = new Set<number>();
 let probed = new Set<number>();
 /** Items the bot stood on and still could not take, or could not reach: not worth another walk. */
 let passed = new Set<number>();
+/** Items the bot threw away to make room: its own leavings, never picked back up on purpose. */
+let junked = new Set<number>();
 /** The grid being tunnelled and the turns sunk into it; `forced` when it is the only way off the grid. */
 let dig: { x: number; y: number; turns: number; forced: boolean } | null = null;
 /** Grids the bot dug at for too long, or could not get beside: not worth another try. */
 let hopeless = new Set<number>();
 /** Forget the current level (a new hero, or a save loaded over this one). */
-export function resetAutoplay(): void { levelKey = ''; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); dig = null; hopeless = new Set(); idle = 0; }
+export function resetAutoplay(): void { levelKey = ''; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); junked = new Set(); dig = null; hopeless = new Set(); idle = 0; }
 /** Bot turns spent on the level the hero is standing on. */
 function levelAge(g: Game): number {
   const key = `${g.player.name}|${g.level.depth}|${g.stats.levelsVisited}`;
-  if (key !== levelKey) { levelKey = key; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); dig = null; hopeless = new Set(); }
+  if (key !== levelKey) { levelKey = key; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); junked = new Set(); dig = null; hopeless = new Set(); }
   return ++stepsOnLevel;
 }
 /** A look round, but not a survey: a hundred-by-sixty level has corners not worth the turns. */
@@ -480,13 +567,16 @@ function decide(g: Game, step: number): void {
   // 6. Housekeeping, only when nothing is breathing down the hero's neck.
   if (!close.length) {
     if (C.newSpellCount(g) > 0) { C.study(g); return; }
-    const gear = findItem(g, it => { const k = kindOf(it); return isWearable(k) && !isAmmo(k) && !!wieldSlot(k) && !p.equip[wieldSlot(k)!]; });
+    // A hero with one ring on and a bare finger should put the other one on, so ask for the slot
+    // this kind would actually go into rather than the one it names.
+    const gear = findItem(g, it => { const k = kindOf(it); return isWearable(k) && !isAmmo(k) && !!emptySlot(g, k); });
     if (gear) { C.wield(g, gear); return; }
-    if (itemsAt(lv, p.x, p.y).length && C.pickupHere(g, false)) return;
+    if (itemsAt(lv, p.x, p.y).length && C.pickupHere(g, false, false, it => junked.has(it.id))) return;
+    if (shedForLoot(g)) return;
     const chest = itemsAt(lv, p.x, p.y).find(fi => kindOf(fi.item).tval === 'chest');
     if (chest) { C.openChest(g, chest); return; }
-    // Whatever is still underfoot could not be taken (a full pack, mostly): remember that, or the
-    // walk below would bring the bot straight back here.
+    // Whatever is still underfoot could not be taken and is not worth shedding for: remember that,
+    // or the walk below would bring the bot straight back here.
     for (const fi of itemsAt(lv, p.x, p.y)) passed.add(fi.item.id);
     if (!threats.length && (p.chp < p.mhp * HURT || p.csp < p.msp / 2)) { C.rest(g, -1); C.restStep(g); return; }
     // Loot the bot has seen and walked past: worth a detour while the level is still its business,
