@@ -10,7 +10,7 @@ import { kindOf, isKnown, isAmmo, isWearable, wieldSlot, itemName, canStack, get
 import { isIgnored } from './ignore.ts';
 import { maintainStore, storeBuy, storeSell, storeWants, buyPrice, sellPrice } from './stores.ts';
 import { refreshBonuses } from './effectsCore.ts';
-import { randint1, distance } from './util.ts';
+import { randint0, distance } from './util.ts';
 import * as C from './commands.ts';
 import type { Game } from './state.ts';
 
@@ -49,6 +49,31 @@ function adjacentDir(g: Game): number {
     if (m && (m.visible || m.detected)) return d;
   }
   return 0;
+}
+/** Ground the hero can step onto this turn: no monster, and a tile a move actually enters. */
+function canEnter(g: Game, x: number, y: number): boolean {
+  if (!inBounds(g.level, x, y) || monsterAt(g.level, x, y)) return false;
+  const t = tileAt(g.level, x, y);
+  return isPassable(t) || t === T.DOOR_CLOSED || isShop(t);
+}
+/**
+ * The open neighbour that puts the most ground between the hero and the monster in direction
+ * `from`, or 0 when there is none. Straight away from it into a wall is not a step at all: it
+ * costs no turn, so a frightened hero facing a wall would stand there for ever.
+ */
+function fleeDir(g: Game, from: number): number {
+  const p = g.player;
+  const mx = p.x + DIR_DX[from], my = p.y + DIR_DY[from];
+  let best = 0, bd = -1;
+  for (let d = 1; d <= 9; d++) {
+    if (d === 5) continue;
+    const nx = p.x + DIR_DX[d], ny = p.y + DIR_DY[d];
+    if (!canEnter(g, nx, ny)) continue;
+    let score = distance(mx, my, nx, ny) * 4;
+    for (const m of visibleMonsters(g, 4)) score -= Math.max(0, 4 - distance(m.x, m.y, nx, ny));
+    if (score > bd) { bd = score; best = d; }
+  }
+  return best;
 }
 function hasEffect(e: Effect | undefined, kind: Effect['kind']): boolean {
   if (!e) return false;
@@ -274,7 +299,7 @@ let probed = new Set<number>();
 /** Items the bot stood on and still could not take, or could not reach: not worth another walk. */
 let passed = new Set<number>();
 /** Forget the current level (a new hero, or a save loaded over this one). */
-export function resetAutoplay(): void { levelKey = ''; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); }
+export function resetAutoplay(): void { levelKey = ''; stepsOnLevel = 0; shopped = new Set(); probed = new Set(); passed = new Set(); idle = 0; }
 /** Bot turns spent on the level the hero is standing on. */
 function levelAge(g: Game): number {
   const key = `${g.player.name}|${g.level.depth}|${g.stats.levelsVisited}`;
@@ -286,6 +311,10 @@ const LOOK_ROUND = 200;
 const GIVE_UP = 500;
 const SWARM_GIVE_UP = 150;
 
+/** Free actions in a row before the bot gives the clock a nudge. */
+const IDLE_LIMIT = 4;
+let idle = 0;
+
 // -----------------------------------------------------------------------------------------
 // One bot turn
 
@@ -294,6 +323,17 @@ const SWARM_GIVE_UP = 150;
  * so the caller can pass a plain counter. Never throws: a bot that dies is a bot that died.
  */
 export function autoplayStep(g: Game, step: number): void {
+  const p = g.player;
+  const turn = g.turn, x = p.x, y = p.y, depth = g.level.depth;
+  decide(g, step);
+  // Some actions are free: bumping a wall, a probe into rock, an order the game refused. Free is
+  // fine once or twice, but a bot that keeps choosing one is stuck, and only the clock moving
+  // (fear fading, a monster stepping aside, a door giving) will change its mind.
+  const free = g.turn === turn && p.x === x && p.y === y && g.level.depth === depth && !g.levelChange && g.inStore < 0 && !p.dead;
+  idle = free ? idle + 1 : 0;
+  if (idle >= IDLE_LIMIT) { idle = 0; C.passTurn(g); }
+}
+function decide(g: Game, step: number): void {
   const p = g.player, lv = g.level;
   if (p.dead || g.levelChange) return;
   if (g.inStore >= 0) { autoShop(g); return; }
@@ -343,7 +383,13 @@ export function autoplayStep(g: Game, step: number): void {
   if (adj && p.timed.afraid) {
     const scroll = escapeScroll(g);
     if (scroll) { C.read(g, scroll, {}); return; }
-    C.moveDir(g, 10 - adj); return;
+    const away = fleeDir(g, adj);
+    if (away) { C.moveDir(g, away); return; }
+    // Cornered: too afraid to swing, nowhere to run. Shoot it if it can be seen, else cower and
+    // let the fear wear off -- a turn has to pass for that.
+    const m = monsterAt(lv, p.x + DIR_DX[adj], p.y + DIR_DY[adj]);
+    if (m && m.visible && rangedAttack(g, m)) return;
+    C.passTurn(g); return;
   }
   if (adj && !fleeing) { C.moveDir(g, adj); return; }
 
@@ -414,6 +460,8 @@ export function autoplayStep(g: Game, step: number): void {
     if (headFor(g, up.x, up.y)) return;
   }
   if (adj) { C.moveDir(g, adj); return; }
-  let dir = randint1(9); if (dir === 5) dir = 1;
-  C.moveDir(g, dir);
+  const open: number[] = [];
+  for (let d = 1; d <= 9; d++) if (d !== 5 && canEnter(g, p.x + DIR_DX[d], p.y + DIR_DY[d])) open.push(d);
+  if (open.length) { C.moveDir(g, open[randint0(open.length)]); return; }
+  C.passTurn(g);
 }

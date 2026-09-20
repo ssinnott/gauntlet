@@ -472,18 +472,26 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
 {
   let botDeaths = 0, botDepth = 0, botKills = 0, botGold = 0;
   const runs = Math.max(2, Math.min(SEEDS, 4));
-  for (let seed = 1; seed <= runs; seed++) {
+  // Every third seed: the same four heroes each run, spread wider than the first four.
+  for (let run = 1; run <= runs; run++) {
+    const seed = run * 3;
     const cls = CLASSES[(seed * 5) % CLASSES.length], race = RACES[(seed * 2) % RACES.length];
     let g: Game;
     try { g = createGame('Bot' + seed, race.id, cls.id, seed % 2 ? 'female' : 'male', seed * 104729); }
     catch (e) { failures++; console.log(`  FAIL: autoplay createGame seed ${seed}: ${(e as Error).stack}`); continue; }
-    let step = 0;
+    let step = 0, idle = 0, worstIdle = 0;
     try {
       for (step = 0; step < TURNS && !g.player.dead; step++) {
+        const turn = g.turn, x = g.player.x, y = g.player.y, depth = g.level.depth;
         autoplayStep(g, step);
         if (g.levelChange) enterLevel(g, g.levelChange.depth, g.levelChange.by);
+        // A bot that neither moves nor spends a turn is bumping a wall; a few in a row is a probe,
+        // dozens is a hero stuck for good (fear that never fades, a corner it cannot leave).
+        idle = g.turn === turn && g.player.x === x && g.player.y === y && g.level.depth === depth ? idle + 1 : 0;
+        worstIdle = Math.max(worstIdle, idle);
         if (step % 25 === 0) check(g, `autoplay seed ${seed} step ${step}`);
       }
+      ok(worstIdle < 20, `autoplay seed ${seed}: the bot spent ${worstIdle} steps in a row on one grid without a turn passing; last: ${g.msg.list.slice(-4).map(m => m.text).join(' | ')}`);
     } catch (e) {
       failures++;
       console.log(`  FAIL: autoplay seed ${seed} (${cls.id}) crashed at step ${step} depth ${g.level.depth}: ${(e as Error).stack}`);
