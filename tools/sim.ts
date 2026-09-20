@@ -430,6 +430,33 @@ void dummy;
   console.log(`senses: ${packs.length} pack races close on a standing hero; a wall-passer comes through rock`);
 }
 
+// 3b. Breeders. A worm mass that has never noticed the hero must not breed: before this check every
+// breeder on the level bred from the moment it woke, at six times Angband's rate, and the far end
+// of a level was carpeted before you got there. One that can see the hero must still breed.
+{
+  const breeder = MONSTERS.find(r => r.flags.includes('MULTIPLY') && r.flags.includes('ANIMAL') && r.depth <= 3)!;
+  const g = createGame('Worm', 'human', 'warrior', 'male', 808);
+  // A hero's room on the left, and a sealed pocket of floor on the right: no line of sight, no path
+  // for noise, no scent. The worm wanders inside its pocket and never learns anyone is here.
+  const lv = createLevel(61, 21, 8);
+  for (let y = 1; y < 20; y++) for (let x = 1; x <= 20; x++) { lv.tiles[y * 61 + x] = T.FLOOR; lv.flags[y * 61 + x] |= 1 | 2; }
+  for (let y = 8; y <= 12; y++) for (let x = 40; x <= 44; x++) { lv.tiles[y * 61 + x] = T.FLOOR; lv.flags[y * 61 + x] |= 1 | 2; }
+  g.level = lv;
+  g.flow = null; g.noise = null; g.scent = null; g.scentStamp = 0; g.flowDirty = true;
+  g.player.chp = g.player.mhp = 9999;
+  g.player.x = 10; g.player.y = 10;
+  const m = createMonster(g, breeder.id, 42, 10, false, g.level)!;
+  m.sleep = 0;
+  for (let t = 0; t < 600; t++) passTurn(g);
+  ok(g.level.monsters.length === 1, `a ${breeder.id} sealed away from the hero bred ${g.level.monsters.length - 1} times in 600 turns`);
+  // Now in plain sight. At one in fifty per action the odds of 600 turns with no child are ~5e-6.
+  m.x = 15; m.y = 10;
+  for (let t = 0; t < 600; t++) passTurn(g);
+  ok(g.level.monsters.length > 1, `a ${breeder.id} in plain sight of the hero never bred in 600 turns`);
+  ok(g.level.monsters.length < 60, `a ${breeder.id} in sight of the hero bred to ${g.level.monsters.length} in 600 turns, which is the old runaway rate`);
+  console.log(`breeders: a sealed-away ${breeder.id} never breeds; one in sight grew to ${g.level.monsters.length}`);
+}
+
 // 4. Play.
 let deaths = 0, maxDepth = 0, totalKills = 0;
 for (let seed = 1; seed <= SEEDS; seed++) {
