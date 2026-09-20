@@ -4,11 +4,33 @@
 it. It is a menu with costs attached, not a plan of record, and it is opinionated about ordering
 because the cheapest ideas here multiply the expensive ones.
 
+## What has since been built
+
+Three items from this page are done, and one of them was done differently from the way it is
+argued for below. The argument is left standing because the reasoning still holds; this section
+says where it ended up.
+
+- **The Bard**, as proposed: a fifth realm called song, five books from the Lays of Beleriand to
+  the Music of the Ainur, and 27 songs that keep running while you act and spend mana every turn.
+  It is the one class that lives on charisma. `src/game/data/songs.ts` holds what each song does.
+- **Sub-races and subclasses, in place of new races and new classes.** This page argues that
+  personalities and specialty abilities are the cheap way to multiply builds, and that a fourth
+  kind of elf is not worth the art. Both points survived; what was built instead of personalities
+  is three sub-races per race, which is the same orthogonal-axis idea wearing Tolkien's clothes,
+  and instead of specialty abilities it is three subclasses per class that override the class's own
+  numbers and unlock features at levels 1, 10 and 25. 51 bloodlines and 33 paths.
+- **Quirks**, which were not foreseen here at all. The declarative feature vocabulary covers most
+  of what a path wants, but not a blow that stuns or a mage who pays in blood, so `src/game/quirks.ts`
+  holds 26 hand-written rules with one named hook each.
+
+Still open below: personalities as a separate axis, specialty abilities as such, the five race
+candidates, the Monk, the undead race batch, and the overland map.
+
 Two facts about this codebase shape everything below.
 
 **Every race needs a visual hook.** The hero rig draws the race as the body and the class as the kit
-worn over it, and `tools/smoke.ts` asserts that all 170 race-and-class combinations render
-differently, pixel for pixel. A new race is therefore never just a row in `src/game/data/races.ts`.
+worn over it, and `tools/smoke.ts` asserts that every race-and-class combination renders
+differently, pixel for pixel (187 of them, since the Bard landed). A new race is therefore never just a row in `src/game/data/races.ts`.
 It needs a silhouette, a feature or a palette that `src/ui/heroRaces.ts` can draw, and the assertion's
 expected count moves with it. This is a feature, not an obstacle: it rules out the "three elves that
 differ by two points of dexterity" pattern that bloats the variant family.
@@ -217,10 +239,12 @@ guardians, then the recall choice, then the bot. Each of those is playable on it
 
 Ranked by options gained per unit of work.
 
-1. **Personalities.** One data file. Multiplies every existing combination.
-2. **Specialty abilities.** One data file and a level-up hook. Makes ten classes feel like thirty.
-3. **Bard,** with Music as a fifth realm. The one feature here that plays to this game's synthesised
-   audio, and a new mechanical shape.
+1. ~~**Personalities.**~~ Superseded: sub-races fill the same orthogonal axis. Personalities could
+   still be added as a third one, and would cost about as little.
+2. ~~**Specialty abilities.**~~ Superseded: subclass features unlock at levels 1, 10 and 25 and do
+   the same job. FAangband's rule, where the later picks come from killing dungeon guardians rather
+   than from levelling, is still worth taking if the overland map ever lands.
+3. ~~**Bard,** with Music as a fifth realm.~~ Built.
 4. **The five strong races:** Maia, Draconian, Petty-Dwarf, Shadow Fairy, Yeek. Each has a hook and a
    silhouette. Each needs art in `src/ui/heroRaces.ts`, and wings are the only genuinely new drawing
    problem.
