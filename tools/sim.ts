@@ -27,7 +27,7 @@ import type { Item } from '../src/game/types.ts';
 import { characterDump } from '../src/game/dump.ts';
 import { describeRace } from '../src/game/recall.ts';
 import { bashDoor, jamDoor, disarm, passTurn } from '../src/game/commands.ts';
-import { autoplayStep } from '../src/game/autoplay.ts';
+import { autoplayStep, resetAutoplay } from '../src/game/autoplay.ts';
 import { createMonster } from '../src/game/monster.ts';
 
 const SEEDS = Number(process.argv[2] || 6);
@@ -509,6 +509,70 @@ for (let seed = 1; seed <= SEEDS; seed++) {
 console.log(`play: ${SEEDS} runs, ${deaths} deaths, deepest ${maxDepth}, ${totalKills} kills`);
 ok(totalKills > 0, 'nobody killed anything');
 ok(maxDepth > 0, 'nobody entered the dungeon');
+// 2e. The bot's aim. It used to shoot in the keypad direction nearest the monster, which only
+// lines up with a monster on the hero's row, column or diagonal: anything else was shot past,
+// arrow after arrow, until the quiver was empty. An Archer's arrows and a Mage's bolts must land
+// on a monster at every offset, and the bot must not fire at one it cannot reach.
+{
+  const arena = (g: Game): void => {
+    const w = 41, h = 31, lv = createLevel(w, h, 8);
+    lv.depth = 3;
+    // Floor throughout, with a strip of unremembered rock on the right so the level still has
+    // ground to explore and the bot stays to fight rather than heading for the stairs.
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { lv.tiles[y * w + x] = T.FLOOR; if (x < w - 4) lv.flags[y * w + x] |= 1 | 2; }
+    g.level = lv;
+    g.flow = null; g.noise = null; g.scent = null; g.scentStamp = 0; g.flowDirty = true;
+    g.player.chp = g.player.mhp = 9999;
+    g.player.x = 20; g.player.y = 15;
+  };
+  // Where each shot went, from the fx the renderer would draw. The mold never moves, so a shot
+  // that landed is one whose path crosses its grid: an arrow or bolt stops there (the killing
+  // shot included) and a Magic Missile that rolled a beam carries on through.
+  const shots = (g: Game, kind: 'missile' | 'bolt', at: { x: number; y: number }): { fired: number; landed: number } => {
+    let fired = 0, landed = 0;
+    for (const f of g.fx) {
+      if (f.type !== kind) continue;
+      fired++;
+      if (f.path.some(q => q.x === at.x && q.y === at.y)) landed++;
+    }
+    return { fired, landed };
+  };
+  const offsets: [number, number][] = [[5, 0], [5, 2], [6, 3], [2, 5], [-4, 3], [-3, -6]];
+  for (const [cls, kind, mana] of [['archer', 'missile', false], ['mage', 'bolt', true]] as const) {
+    for (const [dx, dy] of offsets) {
+      const g = createGame('Aim', 'human', cls, 'male', 1234);
+      resetAutoplay();
+      arena(g);
+      if (mana) { g.player.msp = g.player.csp = 99; study(g); }
+      const at = { x: 20 + dx, y: 15 + dy };
+      const m = createMonster(g, 'grey_mold', at.x, at.y, false, g.level)!;
+      m.sleep = 0;
+      passTurn(g); // a turn passes, so the mold is seen
+      let fired = 0, landed = 0;
+      for (let step = 0; step < 12 && g.level.monsters.includes(m); step++) {
+        g.fx.length = 0;
+        autoplayStep(g, step);
+        const r = shots(g, kind, at); fired += r.fired; landed += r.landed;
+      }
+      ok(fired > 0, `autoplay ${cls} never shot at a grey mold at offset ${dx},${dy}`);
+      ok(landed === fired, `autoplay ${cls} at offset ${dx},${dy}: ${fired - landed} of ${fired} shots flew past the mold`);
+    }
+  }
+  // Behind a wall the mold is out of reach, and a bot that shoots anyway is wasting arrows.
+  {
+    const g = createGame('Aim', 'human', 'archer', 'male', 1234);
+    resetAutoplay();
+    arena(g);
+    const m = createMonster(g, 'grey_mold', 26, 17, false, g.level)!;
+    m.sleep = 0; m.visible = true; m.detected = true;
+    for (let y = 14; y <= 18; y++) g.level.tiles[y * g.level.w + 24] = T.GRANITE;
+    const before = g.player.quiver.reduce((n, q) => n + q.number, 0);
+    for (let step = 0; step < 6; step++) autoplayStep(g, step);
+    ok(g.player.quiver.reduce((n, q) => n + q.number, 0) === before, 'autoplay shot at a mold it could not reach through a wall');
+  }
+  console.log(`aim: an archer and a mage hit a mold at ${offsets.length} offsets, and hold fire through a wall`);
+}
+
 // 3. Autoplay: the bot the `=` menu (and ctrl+A) turns on, playing honestly with no cheats.
 {
   let botDeaths = 0, botDepth = 0, botKills = 0, botGold = 0;
