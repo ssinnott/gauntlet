@@ -140,6 +140,14 @@ function recallScroll(g: Game): Item | null {
   if (g.options.ironman || p.timed.recall || p.timed.blind || p.timed.confused) return null;
   return findItem(g, it => kindOf(it).tval === 'scroll' && known(g, it) && hasEffect(kindOf(it).effect, 'recall'));
 }
+/**
+ * Whether resting would do anything at all. Below the weak mark the game cancels a rest the turn
+ * it starts (commands.restStep), so a hungry hero that keeps asking to rest only burns the turn
+ * over and over -- it starved on the first floor, at full gold, with the town up one staircase,
+ * because resting came before walking and the rest never happened. Hungry, it should be moving.
+ */
+function canRest(g: Game): boolean { return g.player.food >= FOOD_WEAK; }
+
 /** A proper meal; a hero getting weak from hunger will take a scrap of anything that is not a mushroom. */
 function foodItem(g: Game): Item | null {
   const least = g.player.food < FOOD_WEAK ? 1 : 500;
@@ -1099,12 +1107,13 @@ function decide(g: Game, step: number): void {
   // What the neighbourhood would cost to clear, against what the hero can spare. The clock
   // ticks before the fighting does, or a breeding pit would hold the bot on one grid for ever.
   const budget = p.chp - p.mhp * MARGIN;
-  const overmatched = close.reduce((s, m) => s + fightCost(g, m), 0) > budget;
+  const overmatched = close.length > 0 && close.reduce((s, m) => s + fightCost(g, m), 0) > budget;
   const swarm = awake.length > 4;
   // Fleeing means the level has stopped being worth fighting for: breeders, a crowd, something
   // it cannot beat, or something it cannot see. It heads for the stairs and hits only what is in
   // the way or would die in one blow.
-  const fleeing = !town && (breedersSeen || swarm || overmatched || unseen > 0 || hunted > 0);
+  const spent = p.chp < p.mhp * MARGIN;
+  const fleeing = !town && (breedersSeen || swarm || overmatched || spent || unseen > 0 || hunted > 0);
   // Which way out. Too deep for its level (a trap door, say), or out of potions with the town
   // close above, and it climbs; otherwise it dives only as far as its level warrants.
   const tooDeep = lv.depth > depthFor(p.lev);
@@ -1143,7 +1152,7 @@ function decide(g: Game, step: number): void {
   }
   const more = open || rubble || treasure;
   const staying = town || (!!more && !fleeing && !wantUp && age < (swarm ? SWARM_GIVE_UP : GIVE_UP) && !(down && age > LOOK_ROUND));
-  const takeDown = fleeing || mayDive || g.options.ironman;
+  const takeDown = mayDive || g.options.ironman || (fleeing && !wantUp);
   const takeUp = !g.options.ironman && (fleeing || wantUp || !mayDive);
   const exit = town || staying ? null : exitStairs(g, takeDown && !(fleeing && hurt && upKnown), takeUp);
   // Where backing away should lean: the way out if it has one, else whatever is left to look at.
@@ -1178,7 +1187,7 @@ function decide(g: Game, step: number): void {
     } else if (awake.length) {
       // Something is coming, and there is no resting with it in view: put ground between them.
       if (stepAway(g, awake, goal)) return;
-    } else if (hurt) { C.rest(g, -1); C.restStep(g); return; }
+    } else if (hurt && canRest(g)) { C.rest(g, -1); C.restStep(g); return; }
   }
   // Blind or confused: a hero in either state cannot cast, cannot read its way out, and cannot
   // see what is coming. Neither wears off any faster for being walked around, so it is cured
@@ -1300,7 +1309,7 @@ function decide(g: Game, step: number): void {
 
   // 4. Off this level, when it is finished, dull or dangerous -- but not on a sliver of health,
   //    unless something is chasing the hero down the stairs anyway.
-  if (!staying && (!hurt || fleeing)) {
+  if (!staying && (!hurt || fleeing) && (age > 1 || awake.length)) {
     if (here === T.STAIRS_DOWN && takeDown) { C.goDown(g); return; }
     if (here === T.STAIRS_UP && takeUp) { C.goUp(g); return; }
   }
@@ -1345,7 +1354,7 @@ function decide(g: Game, step: number): void {
     // Whatever is still underfoot could not be taken and is not worth shedding for: remember that,
     // or the walk below would bring the bot straight back here.
     for (const fi of itemsAt(lv, p.x, p.y)) passed.add(fi.item.id);
-    if (!awake.length && (hurt || p.csp < p.msp / 2)) { C.rest(g, -1); C.restStep(g); return; }
+    if (!awake.length && canRest(g) && (hurt || p.csp < p.msp / 2)) { C.rest(g, -1); C.restStep(g); return; }
     // Loot the bot has seen and walked past: worth a detour while the level is still its business,
     // and a few steps even when it is on its way out.
     const loot = nearestLoot(g);
