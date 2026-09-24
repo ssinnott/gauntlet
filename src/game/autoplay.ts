@@ -147,7 +147,6 @@ function recallScroll(g: Game): Item | null {
  * because resting came before walking and the rest never happened. Hungry, it should be moving.
  */
 function canRest(g: Game): boolean { return g.player.food >= FOOD_WEAK; }
-
 /** A proper meal; a hero getting weak from hunger will take a scrap of anything that is not a mushroom. */
 function foodItem(g: Game): Item | null {
   const least = g.player.food < FOOD_WEAK ? 1 : 500;
@@ -191,7 +190,7 @@ function spellbook(g: Game): SpellDef[] {
   const p = g.player;
   if (p.timed.confused) return [];
   if (p.timed.blind && CLASS_BY_ID[p.cls]?.realm !== 'prayer') return [];
-  const key = `${p.cls}|${p.lev}|${p.learned.length}|${p.inven.length}|${p.msp}`;
+  const key = `${p.cls}|${p.lev}|${p.learned.length}|${p.msp}|${C.knownBooks(g).map(b => b.kind).join()}`;
   if (books && books.key === key) return books.list;
   const list = C.spellsAvailable(g).filter(s => p.learned.includes(s.id) && !isSong(s.id))
     .sort((a, b) => C.spellMana(g, a) - C.spellMana(g, b));
@@ -281,7 +280,7 @@ function readyDevice(g: Game, tval: 'staff' | 'rod' | 'wand', want: (k: ObjectKi
     return tval === 'rod' ? it.timeout <= 0 : it.charges > 0;
   });
 }
-/** Using a staff, or zapping a rod at something. A rod still charging is not a turn, so never offer one. */
+/** Using a staff, or zapping a rod at something; readyDevice has already ruled out a charging one. */
 function deviceAct(g: Game, it: Item, target?: Pos): Act {
   return kindOf(it).tval === 'rod' ? () => C.zap(g, it, 5, target ?? null) : () => C.useStaff(g, it, {});
 }
@@ -1117,7 +1116,6 @@ function decide(g: Game, step: number): void {
   // Which way out. Too deep for its level (a trap door, say), or out of potions with the town
   // close above, and it climbs; otherwise it dives only as far as its level warrants.
   const tooDeep = lv.depth > depthFor(p.lev);
-  const starving = p.food < FOOD_HUNGRY && !foodItem(g);
   // The pack running dry, rather than the pack already empty. The bot used to notice only when
   // the last cure was gone, so it fought the back half of every trip on an empty pack with the
   // gold for a full one in its pocket -- and a hero with no light cannot even read its way out
