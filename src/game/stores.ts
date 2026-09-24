@@ -25,7 +25,7 @@ const ALWAYS: Record<number, string[]> = {
   2: ['dagger', 'short_sword', 'sling', 'short_bow', 'iron_shot', 'arrow', 'bolt', 'main_gauche'],
   3: ['prayer_book_1', 'nature_book_1', 'potion_clw', 'scroll_blessing', 'scroll_remove_curse'],
   4: ['potion_clw', 'potion_csw', 'scroll_phase_door', 'scroll_word_of_recall', 'scroll_identify'],
-  5: ['magic_book_1', 'necro_book_1', 'wand_magic_missile', 'wand_stinking_cloud', 'staff_light', 'rod_detect_trap'],
+  5: ['magic_book_1', 'necro_book_1', 'song_book_1', 'wand_magic_missile', 'wand_stinking_cloud', 'staff_light', 'rod_detect_trap'],
   6: [], 7: [],
 };
 /** The wider list a store draws from when restocking. */
@@ -35,7 +35,7 @@ const NORMAL: Record<number, string[]> = {
   2: ['dagger', 'main_gauche', 'rapier', 'short_sword', 'sabre', 'cutlass', 'tulwar', 'broad_sword', 'long_sword', 'scimitar', 'bastard_sword', 'mace', 'war_hammer', 'morning_star', 'flail', 'lead_filled_mace', 'quarterstaff', 'spear', 'awl_pike', 'trident', 'pike', 'beaked_axe', 'broad_axe', 'battle_axe', 'lance', 'sling', 'short_bow', 'long_bow', 'light_crossbow', 'heavy_crossbow', 'iron_shot', 'rounded_pebble', 'arrow', 'bolt'],
   3: ['prayer_book_1', 'prayer_book_2', 'prayer_book_3', 'prayer_book_4', 'nature_book_1', 'nature_book_2', 'potion_clw', 'potion_csw', 'potion_ccw', 'potion_boldness', 'potion_heroism', 'potion_slow_poison', 'potion_neutralize_poison', 'scroll_blessing', 'scroll_holy_chant', 'scroll_remove_curse', 'scroll_word_of_recall', 'scroll_protection_from_evil', 'mace', 'war_hammer', 'morning_star', 'flail'],
   4: ['potion_clw', 'potion_csw', 'potion_ccw', 'potion_resist_heat', 'potion_resist_cold', 'potion_infravision', 'potion_slow_poison', 'potion_neutralize_poison', 'potion_boldness', 'potion_heroism', 'potion_berserk', 'potion_speed', 'scroll_phase_door', 'scroll_word_of_recall', 'scroll_identify', 'scroll_light', 'scroll_monster_confusion', 'scroll_magic_mapping', 'scroll_treasure_detection', 'scroll_trap_detection', 'scroll_door_stair_location', 'scroll_detect_invisible', 'scroll_recharging', 'scroll_enchant_weapon_to_hit', 'scroll_enchant_weapon_to_dam', 'scroll_enchant_armour', 'scroll_satisfy_hunger', 'scroll_remove_curse', 'scroll_deep_descent', 'scroll_teleport'],
-  5: ['magic_book_1', 'magic_book_2', 'magic_book_3', 'magic_book_4', 'necro_book_1', 'necro_book_2', 'ring_protection', 'ring_resist_fire', 'ring_resist_cold', 'ring_feather_falling', 'ring_see_invisible', 'ring_free_action', 'amulet_slow_digestion', 'amulet_resist_acid', 'amulet_resist_lightning', 'wand_magic_missile', 'wand_stinking_cloud', 'staff_light', 'staff_detect_evil', 'staff_mapping', 'staff_teleportation', 'staff_cure_light_wounds', 'rod_treasure_location', 'rod_detect_trap', 'rod_detect_door', 'rod_illumination'],
+  5: ['magic_book_1', 'magic_book_2', 'magic_book_3', 'magic_book_4', 'necro_book_1', 'necro_book_2', 'song_book_1', 'song_book_2', 'ring_protection', 'ring_resist_fire', 'ring_resist_cold', 'ring_feather_falling', 'ring_see_invisible', 'ring_free_action', 'amulet_slow_digestion', 'amulet_resist_acid', 'amulet_resist_lightning', 'wand_magic_missile', 'wand_stinking_cloud', 'staff_light', 'staff_detect_evil', 'staff_mapping', 'staff_teleportation', 'staff_cure_light_wounds', 'rod_treasure_location', 'rod_detect_trap', 'rod_detect_door', 'rod_illumination'],
   6: [], 7: [],
 };
 const STORE_TURNS = 1000;

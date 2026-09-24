@@ -42,8 +42,9 @@ const SHOPPING: [string, number][] = [['ration', 5], ['potion_clw', 6], ['scroll
 const RECALL = 'scroll_word_of_recall';
 function shoppingList(g: Game): [string, number][] {
   const p = g.player;
-  if (g.options.ironman || (depthFor(p.lev) <= RESTOCK_DEPTH && p.maxDepth <= RESTOCK_DEPTH)) return SHOPPING;
-  return [...SHOPPING, [RECALL, 2]];
+  const books = wantedBooks(g);
+  if (g.options.ironman || (depthFor(p.lev) <= RESTOCK_DEPTH && p.maxDepth <= RESTOCK_DEPTH)) return [...SHOPPING, ...books];
+  return [...SHOPPING, [RECALL, 2], ...books];
 }
 /** At or above this depth it walks back up to town for potions; below it, it reads its way up. */
 const RESTOCK_DEPTH = 3;
@@ -216,6 +217,54 @@ function reserveMana(g: Game): number {
   if (mend && !healingPotion(g)) n += C.spellMana(g, mend);
   return Math.min(n, Math.floor(p.msp / 2));
 }
+/** The conditions that stop a hero acting at all; a cure for one of these is worth a spell slot. */
+const BLOCKERS: Timed[] = ['blind', 'confused', 'afraid', 'poisoned'];
+/**
+ * Which spell to learn next. The bot used to take whatever came first in the book, which is how
+ * a druid's first prayer was Remove Hunger -- leaving a level-one druid with nothing to fight
+ * with at all -- and how every mage spent its second pick on Detect Monsters, which the bot
+ * never casts. Order them by what the bot actually does with a spell instead: something to kill
+ * with, something to mend with, something to run with, then the tricks, then the cures.
+ */
+function studyChoice(g: Game): string | undefined {
+  const p = g.player;
+  const cands = C.spellsAvailable(g).filter(s => !p.learned.includes(s.id) && C.spellLevel(g, s) <= p.lev);
+  if (!cands.length) return undefined;
+  const rank = (s: SpellDef): number =>
+    effectDamage(s.effect) > 0 || s.effect.kind === 'crush' ? 0
+      : hasEffect(s.effect, 'heal') ? 1
+      : hasEffect(s.effect, 'teleport') ? 2
+      : DISABLE.includes(s.effect.kind) ? 3
+      : CROWD.includes(s.effect.kind) ? 4
+      : BLOCKERS.some(t => curesTimed(s.effect, t)) ? 5 : 6;
+  // Cheapest first within a rank: a hero has to be able to pay for what it learns.
+  return [...cands].sort((a, b) => rank(a) - rank(b) || C.spellMana(g, a) - C.spellMana(g, b))[0].id;
+}
+/** The store that sells the hero's own kind of book, or -1 for a hero with no realm. */
+function bookStore(g: Game): number {
+  const realm = CLASS_BY_ID[g.player.cls]?.realm;
+  return !realm ? -1 : realm === 'prayer' || realm === 'nature' ? 3 : 5;
+}
+/**
+ * The books the hero ought to be carrying. Its first one above all: fire and acid burn books, and
+ * a caster that has lost its own casts nothing whatever -- the bot used to walk on with an empty
+ * spell list and never think to buy another. Then the next book up, but only once it is owed a
+ * spell and carries nothing that could teach it one.
+ */
+function wantedBooks(g: Game): [string, number][] {
+  const p = g.player, realm = CLASS_BY_ID[p.cls]?.realm;
+  if (!realm) return [];
+  const owned = C.knownBooks(g).map(b => b.kind);
+  if (!owned.length) return [[`${realm}_book_1`, 1]];
+  if (C.newSpellCount(g) <= 0) return [];
+  if (C.spellsAvailable(g).some(s => !p.learned.includes(s.id) && C.spellLevel(g, s) <= p.lev)) return [];
+  for (const s of C.classSpells(g)) {
+    if (p.learned.includes(s.id) || C.spellLevel(g, s) > p.lev || owned.includes(s.book)) continue;
+    return [[s.book, 1]];
+  }
+  return [];
+}
+
 /** A staff, wand or rod the hero could use now: one it knows, with a charge left or its rod cooled. */
 function readyDevice(g: Game, tval: 'staff' | 'rod' | 'wand', want: (k: ObjectKind) => boolean): Item | null {
   return findItem(g, it => {
@@ -903,9 +952,13 @@ export function autoShop(g: Game): void {
 /** Which store still sells something the bot is short of, or would buy what it is lugging about? */
 function wantedStore(g: Game): number {
   const short = shoppingList(g).filter(([id, n]) => countKind(g, id) < n).map(w => w[0]);
+  const bs = bookStore(g);
+  // A caster with no book of its own is not a caster at all: that comes before food and cures.
+  if (bs >= 0 && !shopped.has(bs) && !C.knownBooks(g).length && g.player.gold >= 30) return bs;
   if (short.length && g.player.gold >= 50) {
     if (!shopped.has(0) && short.some(id => id === 'ration' || id === 'flask_oil' || id === 'torch' || id === RECALL)) return 0;
     if (!shopped.has(4) && (short.includes('potion_clw') || short.includes('scroll_phase_door'))) return 4;
+    if (bs >= 0 && !shopped.has(bs) && short.some(id => id.includes('_book_'))) return bs;
   }
   // Nothing to buy, or nothing it can afford yet. An armful of loot is gold the hero has not
   // picked up, and gold is what the next armful of cures is bought with -- so take it to whoever
@@ -1063,7 +1116,8 @@ function decide(g: Game, step: number): void {
   // walk is the dangerous part.
   const lowOnKit = countKind(g, 'potion_clw') <= 1 || !foodItem(g) || (lightLeft(g) <= 0 && !lightFix(g))
     || (countKind(g, 'scroll_phase_door') === 0 && countKind(g, 'flask_oil') <= 2);
-  const restock = p.gold >= 60 && lowOnKit;
+  const bookless = !!CLASS_BY_ID[p.cls]?.realm && !C.knownBooks(g).length;
+  const restock = (p.gold >= 60 && lowOnKit) || (bookless && p.gold >= 30);
   const needTown = lv.depth <= RESTOCK_DEPTH && restock;
   // A word already spoken is a trip home booked: no walking up the stairs as well.
   const wantUp = !town && !g.options.ironman && !p.timed.recall && (tooDeep || needTown);
@@ -1277,7 +1331,7 @@ function decide(g: Game, step: number): void {
 
   // 6. Housekeeping, only when nothing is breathing down the hero's neck.
   if (!close.length && !unseen) {
-    if (C.newSpellCount(g) > 0 && C.study(g)) return;
+    if (C.newSpellCount(g) > 0) { const learn = studyChoice(g); if (learn && C.study(g, learn)) return; }
     // A light growing faint is topped up now, not once it is out and something is coming.
     if (lightLeft(g) < LIGHT_LOW) { const lit = lightFix(g); if (lit) { lit(); return; } }
     // A hero with one ring on and a bare finger should put the other one on, so ask for the slot
