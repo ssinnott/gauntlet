@@ -75,12 +75,14 @@ function canReach(g: Game, m: Monster, range = 20): boolean {
 }
 /**
  * The closest awake monster the bot can see and shoot at. One that would come to it first; then
- * one that never will, which is target practice from two grids away.
+ * one that never will, which is target practice from two grids away. Never a breeder: there is
+ * always another behind it, and each is a blow's work when it arrives, not an arrow's or a spell's.
  */
 function nearestTarget(g: Game): Monster | null {
   const p = g.player;
   let best: Monster | null = null, bd = 1e9;
   for (const m of visibleMonsters(g)) {
+    if (hasMFlag(raceOf(m), 'MULTIPLY')) continue;
     const d = distance(p.x, p.y, m.x, m.y);
     const rank = d + (hasMFlag(raceOf(m), 'NEVER_MOVE') ? 100 : 0);
     if (m.sleep === 0 && !m.afraid && rank < bd && d > 1 && canReach(g, m)) { bd = rank; best = m; }
@@ -515,8 +517,47 @@ function fightCost(g: Game, m: Monster, nextTo?: boolean): number {
   if (dpt <= 0) return Infinity;
   return Math.ceil(m.hp / dpt) * threatOf(g, m, nextTo);
 }
-/** Would the hero still have its margin left after killing this? */
-function worth(g: Game, m: Monster, nextTo?: boolean): boolean { return fightCost(g, m, nextTo) <= g.player.chp - g.player.mhp * MARGIN; }
+/**
+ * Hit points the hero stakes on taking the monster on: the whole fight, as fightCost has it. A
+ * thing that never moves is another matter: the hero can step out of its reach whenever it
+ * likes, rest, and come back, so only the next couple of exchanges are at stake. Held to the
+ * whole-fight rule, a grey mold was more than a first-level warrior could spare, so it stood
+ * across its corridor all level and the hero paced up to it and away.
+ */
+function stake(g: Game, m: Monster, nextTo?: boolean): number {
+  if (!hasMFlag(raceOf(m), 'NEVER_MOVE')) return fightCost(g, m, nextTo);
+  return Math.max(meleeOf(g, m), bestRanged(g, m)?.dam ?? 0) > 0 ? threatOf(g, m, nextTo) * 2 : Infinity;
+}
+/** Would the hero still have its margin left after that? */
+function worth(g: Game, m: Monster, nextTo?: boolean): boolean { return stake(g, m, nextTo) <= g.player.chp - g.player.mhp * MARGIN; }
+/** A paralysing touch the hero has no free action against: held still beside it, it is held again the moment it can move. */
+function paralyses(g: Game, m: Monster): boolean {
+  return !g.bonuses.flags.has('FREE_ACT') && raceOf(m).blows.some(bl => bl.effect === 'PARALYZE');
+}
+/**
+ * Whether backing away from these gets the hero anywhere: they are slower than it, or never move
+ * at all, or the stairs are a few steps off. From anything as quick it is a step back, a step
+ * after it, and the same fight a grid further on -- six in ten of the bot's retreats used to end
+ * with it fighting the thing it had backed away from all the same.
+ */
+function canBackOff(g: Game, from: Monster[], exit: Pos | null): boolean {
+  const p = g.player;
+  if (exit && distance(p.x, p.y, exit.x, exit.y) <= 5) return true;
+  return from.every(m => hasMFlag(raceOf(m), 'NEVER_MOVE') || paceOf(g, m) < 1);
+}
+/**
+ * Not worth a flask or a charge: a fight the hero's blade settles for a third of what it can
+ * spare. The bot threw oil at white icky things, ran short, and walked back to town for more.
+ */
+function trifling(g: Game, m: Monster): boolean {
+  const p = g.player, melee = meleeOf(g, m);
+  return melee > 0 && Math.ceil(m.hp / melee) * threatOf(g, m, true) <= (p.chp - p.mhp * MARGIN) / 3;
+}
+/** Danger taken away per turn spent on the monster: what it does each turn over the turns to kill it. */
+function relief(g: Game, m: Monster): number {
+  const dpt = Math.max(meleeOf(g, m), bestRanged(g, m)?.dam ?? 0);
+  return dpt > 0 ? threatOf(g, m) / Math.ceil(m.hp / dpt) : 0;
+}
 /** Likely to die from one turn of the hero's best attack. */
 function oneHit(g: Game, m: Monster): boolean { return Math.max(meleeOf(g, m), bestRanged(g, m)?.dam ?? 0) >= m.hp; }
 /** Hit the monster with whatever does the most: a blade when it is as good as anything, else a spell, a shot or a flask. */
@@ -547,7 +588,12 @@ function healSpell(g: Game): SpellDef | null {
 }
 
 // -----------------------------------------------------------------------------------------
-// Exploring: the nearest remembered grid that still has unseen ground beside it.
+// Exploring, the way a player does it: pick a way and keep to it. The bot used to walk to
+// whichever unseen grid was nearest, and in a dark room or at a junction the nearest one is
+// behind the hero as often as in front of it, so it turned round every few steps and crossed the
+// same floor again and again. Now it keeps a bearing -- the way it has been going -- and the
+// frontier it set out for: a corridor is followed to its end and a room is crossed to its far
+// door, and only when the way it is going runs out does it turn round for what it passed.
 
 /**
  * Grids the hero should not set foot on this turn: every monster in view it cannot afford to
@@ -555,27 +601,123 @@ function healSpell(g: Game): SpellDef | null {
  * the corridor is walked round, or the corridor is given up, but it is never walked into.
  */
 let hazard = new Set<number>();
+/**
+ * Grids next to a rooted thing the hero would fight but has no reason to brush past: a mold gets a
+ * blow at anything that walks by. Walked round when there is room, and walked through (fighting it
+ * on the way) when it is standing in the only corridor.
+ */
+let nuisance = new Set<number>();
+/** The grids of those rooted things themselves: a way on may run through one, fighting it. */
+let fightable = new Set<number>();
 function markHazards(g: Game): void {
-  hazard = new Set();
-  const w = g.level.w;
+  hazard = new Set(); nuisance = new Set(); fightable = new Set();
+  const lv = g.level, w = lv.w;
+  const ring = (to: Set<number>, x: number, y: number) => { for (let d = 1; d <= 9; d++) to.add((y + DIR_DY[d]) * w + x + DIR_DX[d]); };
+  // A rooted thing seen gone from its grid is dead: nothing else ever moves it.
+  for (const i of [...rooted.keys()]) if ((lv.flags[i] & F.SEEN) && !seenMonsterAt(g, i % w, Math.floor(i / w))) rooted.delete(i);
   for (const m of visibleMonsters(g, 12)) {
-    if (m.sleep > 0 || worth(g, m, true)) continue;
-    for (let d = 1; d <= 9; d++) hazard.add((m.y + DIR_DY[d]) * w + m.x + DIR_DX[d]);
+    if (hasMFlag(raceOf(m), 'NEVER_MOVE')) { rooted.set(m.y * w + m.x, m); continue; }
+    // A paralyser is given a wide berth asleep or awake: one touch and the hero stands there until it lets go.
+    if (paralyses(g, m) || (m.sleep === 0 && !worth(g, m, true))) ring(hazard, m.x, m.y);
   }
+  // The rooted ones, in view or not: a floating eye need never let go of a hero it has paralysed,
+  // and one the hero cannot beat is never walked past; one it can is walked wide of when there is room.
+  for (const m of rooted.values()) {
+    if (paralyses(g, m) || !worth(g, m, true)) { ring(hazard, m.x, m.y); continue; }
+    ring(nuisance, m.x, m.y);
+    fightable.add(m.y * w + m.x);
+  }
+}
+/**
+ * The things that never move, by grid, kept after they drop out of sight. A mold in a dark
+ * corridor is only seen from two grids away, and the bot, which forgot it the moment it was out
+ * of view, chose one way while it could see the mold and the other while it could not: it stood
+ * between the two, a step each way, for two thousand turns.
+ */
+let rooted = new Map<number, Monster>();
+
+/** The way the hero has been exploring: its recent steps, averaged, so its length is how steady that way has been. */
+let bearing = { x: 0, y: 0 };
+/** Fold one step of exploring into the bearing: a few steps round a corner turn it, one sidestep does not. */
+function steer(dx: number, dy: number): void {
+  const len = Math.hypot(dx, dy);
+  if (!len) return;
+  bearing = { x: bearing.x * 0.65 + dx / len * 0.35, y: bearing.y * 0.65 + dy / len * 0.35 };
+}
+/** The frontier grid the hero set out for, held until it is reached, seen to be nothing, or cut off. */
+let frontier: Pos | null = null;
+/** The monster the hero is waiting for, and how far off it was: waiting only pays while it is coming. */
+let awaiting: { id: number; d: number } | null = null;
+/** Set when the travel path is a walk to the frontier: that is re-planned every step, not followed blind. */
+let scouting = false;
+/** What was left of that walk: kept while it still leads to the same frontier and nothing now stands on it. */
+let route: Pos[] | null = null;
+/** Set by explore(): this turn's step was one of exploring, so it counts toward the bearing. */
+let exploring = false;
+/** Steps a frontier straight behind the hero costs over one straight ahead: the price of turning round. */
+const TURN_COST = 16;
+/** Steps a frontier on the far side of the hero from the unseen part of the level costs. */
+const PULL_COST = 6;
+/** What each unseen grid round a frontier is worth, in steps, up to GAIN_CAP of them: an open end beats a missed corner. */
+const GAIN_EACH = 0.5, GAIN_CAP = 12;
+/** How much cheaper another frontier has to be before the hero gives up the one it set out for. */
+const SWITCH = 6;
+/** Steps the hero will add to a walk to keep out of a mold's reach, rather than fight its way past. */
+const DETOUR = 8;
+/** Unseen grids within two of (x, y): how much a walk there could show. */
+function unseenNear(g: Game, x: number, y: number): number {
+  const lv = g.level;
+  let n = 0;
+  for (let dy = -2; dy <= 2; dy++) for (let dx = -2; dx <= 2; dx++) {
+    const nx = x + dx, ny = y + dy;
+    if (inBounds(lv, nx, ny) && !(flagAt(lv, nx, ny) & F.MARK) && !probed.has(ny * lv.w + nx)) n++;
+  }
+  return n;
+}
+/**
+ * The way to the part of the level the hero has not seen, full strength while that is well off
+ * to one side. This is what picks a direction on arrival -- a hero that comes down by the east
+ * wall sets off west -- and which way to turn at a dead end.
+ */
+function unexplored(g: Game): { x: number; y: number } {
+  const lv = g.level, p = g.player;
+  let sx = 0, sy = 0, n = 0;
+  for (let y = 1; y < lv.h - 1; y++) for (let x = 1; x < lv.w - 1; x++) if (!(lv.flags[y * lv.w + x] & F.MARK)) { sx += x; sy += y; n++; }
+  if (!n) return { x: 0, y: 0 };
+  const dx = sx / n - p.x, dy = sy / n - p.y, len = Math.hypot(dx, dy);
+  if (len < 1) return { x: 0, y: 0 };
+  const k = Math.min(1, len / 16) / len;
+  return { x: dx * k, y: dy * k };
+}
+/** The way from the hero to a grid, at full strength. */
+function toward(p: Pos, to: Pos): { x: number; y: number } {
+  const dx = to.x - p.x, dy = to.y - p.y, len = Math.hypot(dx, dy);
+  return len ? { x: dx / len, y: dy / len } : { x: 0, y: 0 };
+}
+/**
+ * What walking to a frontier costs, in steps: the walk, turning away from the bearing, turning
+ * away from the unseen part of the level, less what it could show.
+ */
+function frontierCost(g: Game, x: number, y: number, steps: number, pull: { x: number; y: number }): number {
+  const p = g.player;
+  const vx = x - p.x, vy = y - p.y, len = Math.hypot(vx, vy) || 1;
+  const turn = (1 - (bearing.x * vx + bearing.y * vy) / len) / 2;
+  const away = (1 - (pull.x * vx + pull.y * vy) / len) / 2;
+  return steps + TURN_COST * turn + PULL_COST * away - GAIN_EACH * Math.min(GAIN_CAP, unseenNear(g, x, y));
 }
 /** A monster the hero knows is standing there. */
 function seenMonsterAt(g: Game, x: number, y: number): Monster | null {
   const m = monsterAt(g.level, x, y);
   return m && (m.visible || m.detected) ? m : null;
 }
+/** A grid the hero has never seen, has not already walked into, and has nothing it fears standing over. */
+function unknownAt(g: Game, x: number, y: number): boolean {
+  if (!inBounds(g.level, x, y)) return false;
+  const i = y * g.level.w + x;
+  return !probed.has(i) && !hazard.has(i) && !(g.level.flags[i] & F.MARK);
+}
 function unknownNeighbour(g: Game, x: number, y: number): number {
-  for (let d = 1; d <= 9; d++) {
-    if (d === 5) continue;
-    const nx = x + DIR_DX[d], ny = y + DIR_DY[d];
-    if (!inBounds(g.level, nx, ny)) continue;
-    if (probed.has(ny * g.level.w + nx) || hazard.has(ny * g.level.w + nx)) continue;
-    if (!(flagAt(g.level, nx, ny) & F.MARK)) return d;
-  }
+  for (let d = 1; d <= 9; d++) if (d !== 5 && unknownAt(g, x + DIR_DX[d], y + DIR_DY[d])) return d;
   return 0;
 }
 
@@ -594,20 +736,31 @@ const DIG_PATIENCE = 60;
 /** A grid worth digging, the walkable grid to dig it from, and the walk to get there. */
 type DigSite = { dig: Pos; from: Pos; steps: number };
 /**
- * One breadth-first walk over remembered, walkable grids, closest first: the nearest grid with
- * unseen ground beside it, the nearest rubble with unseen ground behind it (a blocked corridor), and
- * the nearest vein showing treasure. A bare streamer leads nowhere but rock, so it is not counted.
- * Grids a monster it cannot beat is standing over are no way on, so the walk does not spread there.
+ * One breadth-first walk over remembered, walkable grids: the frontier to explore next, the
+ * nearest rubble with unseen ground behind it (a blocked corridor), and the nearest vein showing
+ * treasure. A bare streamer leads nowhere but rock, so it is not counted. Grids a monster it
+ * cannot beat is standing over are no way on, so the walk does not spread there.
+ *
+ * The frontier is the cheapest by frontierCost, and the one the hero is already walking to stays
+ * chosen until another is cheaper by SWITCH: a nearer one turning up behind it as it walks is not
+ * enough to turn it round, and two about as good as each other cannot take turns at being best.
+ * A hero on its way out with the stairs in sight but no way to them yet is `lure`d their way.
  */
-function survey(g: Game): { open: Pos | null; openSteps: number; rubble: DigSite | null; treasure: DigSite | null } {
+function survey(g: Game, lure: Pos | null = null): { open: Pos | null; openSteps: number; rubble: DigSite | null; treasure: DigSite | null } {
   const lv = g.level, p = g.player, w = lv.w;
   const seen = new Uint8Array(lv.w * lv.h);
   const qx: number[] = [p.x], qy: number[] = [p.y], qs: number[] = [0];
   seen[p.y * w + p.x] = 1;
-  let open: Pos | null = null, openSteps = 0, rubble: DigSite | null = null, treasure: DigSite | null = null;
-  for (let head = 0; head < qx.length && !(open && rubble && treasure); head++) {
+  const pull = lure ? toward(p, lure) : unexplored(g);
+  let open: Pos | null = null, openSteps = 0, openCost = Infinity, rubble: DigSite | null = null, treasure: DigSite | null = null;
+  let kept: Pos | null = null, keptSteps = 0, keptCost = Infinity;
+  for (let head = 0; head < qx.length; head++) {
     const x = qx[head], y = qy[head], steps = qs[head];
-    if (!open && (x !== p.x || y !== p.y) && unknownNeighbour(g, x, y)) { open = { x, y }; openSteps = steps; }
+    if ((x !== p.x || y !== p.y) && unknownNeighbour(g, x, y)) {
+      const cost = frontierCost(g, x, y, steps, pull);
+      if (cost < openCost) { open = { x, y }; openSteps = steps; openCost = cost; }
+      if (frontier && frontier.x === x && frontier.y === y) { kept = frontier; keptSteps = steps; keptCost = cost; }
+    }
     for (let d = 1; d <= 9; d++) {
       if (d === 5) continue;
       const nx = x + DIR_DX[d], ny = y + DIR_DY[d], i = ny * w + nx;
@@ -626,6 +779,8 @@ function survey(g: Game): { open: Pos | null; openSteps: number; rubble: DigSite
       qx.push(nx); qy.push(ny); qs.push(steps + 1);
     }
   }
+  if (kept && (steady || keptCost <= openCost + SWITCH)) { open = kept; openSteps = keptSteps; }
+  frontier = open;
   return { open, openSteps, rubble, treasure };
 }
 /** Start on a grid beside the hero; the turn is spent, and the next steps keep at it. */
@@ -659,7 +814,7 @@ function nearestTile(g: Game, match: (t: number) => boolean): Pos | null {
  * grid one it cannot beat has covered: the way to a shop must not run into the veteran dozing in
  * the road, nor the way on through the mold in the corridor.
  */
-function pathAround(g: Game, x1: number, y1: number): Pos[] | null {
+function pathAround(g: Game, x1: number, y1: number, avoid: Set<number> | null = null, through: Set<number> | null = null): Pos[] | null {
   const lv = g.level, w = lv.w, h = lv.h, p = g.player;
   if (!inBounds(lv, x1, y1)) return null;
   const prev = new Int32Array(w * h).fill(-1);
@@ -676,7 +831,7 @@ function pathAround(g: Game, x1: number, y1: number): Pos[] | null {
       if (prev[i] !== -1) continue;
       const t = tileAt(lv, nx, ny), goal = nx === x1 && ny === y1;
       if (!goal && !((flagAt(lv, nx, ny) & F.MARK) && (isPassable(t) || t === T.DOOR_CLOSED))) continue;
-      if (!goal && (t === T.TRAP || hazard.has(i) || seenMonsterAt(g, nx, ny))) continue;
+      if (!goal && (t === T.TRAP || hazard.has(i) || avoid?.has(i) || ((seenMonsterAt(g, nx, ny) || rooted.has(i)) && !through?.has(i)))) continue;
       prev[i] = y * w + x;
       if (goal) { found = true; break; }
       qx.push(nx); qy.push(ny);
@@ -688,15 +843,21 @@ function pathAround(g: Game, x1: number, y1: number): Pos[] | null {
   return path.reverse();
 }
 /**
- * Walk toward a spot, round whatever is in the way. Without a remembered path to somewhere near
- * it shoves one step that way instead -- but only into ground it can actually enter, since
- * bumping a permanent wall costs no turn and would spin, and never toward something far off,
- * since a shove that ends at a wall and a walk back to try again is a loop.
+ * Walk toward a spot, round whatever is in the way, and wide of a mold's reach when there is room
+ * to be. Without a remembered path to somewhere near it shoves one step that way instead -- but
+ * only into ground it can actually enter, since bumping a permanent wall costs no turn and would
+ * spin, and never toward something far off, since a shove that ends at a wall and a walk back to
+ * try again is a loop.
  */
 function headFor(g: Game, x: number, y: number, shove = true): boolean {
   const p = g.player;
   if (x === p.x && y === p.y) return false;
-  const path = pathAround(g, x, y);
+  // Wide of a mold when that costs a few steps; through it, fighting, when it is the way on. The
+  // long way round a grey mold in a corridor took a warrior out of sight of it, where the short
+  // way looked clear, and back into sight of it, where it did not.
+  const wide = nuisance.size ? pathAround(g, x, y, nuisance) : null;
+  const plain = pathAround(g, x, y, null, fightable);
+  const path = wide && (!plain || wide.length <= plain.length + DETOUR) ? wide : plain;
   if (path) { g.travel = path; C.travelStep(g); return true; }
   if (C.travelTo(g, x, y)) { C.travelStep(g); return true; }
   if (!shove || distance(p.x, p.y, x, y) > 8) return false;
@@ -707,10 +868,21 @@ function headFor(g: Game, x: number, y: number, shove = true): boolean {
   if (monsterAt(g.level, nx, ny) || isPassable(t) || t === T.DOOR_CLOSED || isShop(t)) { C.moveDir(g, d); return true; }
   return false;
 }
+/** The unseen grid beside the hero that lies most nearly the way it is going, or 0. */
+function probeDir(g: Game): number {
+  const p = g.player;
+  let best = 0, bd = -Infinity;
+  for (let d = 1; d <= 9; d++) {
+    if (d === 5 || !unknownAt(g, p.x + DIR_DX[d], p.y + DIR_DY[d])) continue;
+    const ahead = (DIR_DX[d] * bearing.x + DIR_DY[d] * bearing.y) / Math.hypot(DIR_DX[d], DIR_DY[d]);
+    if (ahead > bd) { bd = ahead; best = d; }
+  }
+  return best;
+}
 /** Open ground the bot has not walked on yet, or a probe into the dark beside it. */
 function explore(g: Game, open: Pos | null): boolean {
   const p = g.player;
-  const d = unknownNeighbour(g, p.x, p.y);
+  const d = probeDir(g);
   if (d) {
     const nx = p.x + DIR_DX[d], ny = p.y + DIR_DY[d];
     const t = tileAt(g.level, nx, ny);
@@ -718,19 +890,35 @@ function explore(g: Game, open: Pos | null): boolean {
     // but the town's permanent walls are never remembered, so note the grid and never poke it twice.
     probed.add(ny * g.level.w + nx);
     C.moveDir(g, d);
+    exploring = true;
     if (isPassable(t) || t === T.DOOR_CLOSED) return true;
     // Bumping rubble or a vein tunnels into it, which is a turn: whether to keep at it is decided next step.
     if (diggable(t)) { g.repeating = null; return true; }
   }
-  if (open && headFor(g, open.x, open.y)) return true;
-  return false;
+  if (!open) return false;
+  const end = route && route[route.length - 1];
+  if (end && end.x === open.x && end.y === open.y && clearRoute(g, route!)) { g.travel = route; C.travelStep(g); }
+  else if (!headFor(g, open.x, open.y)) return false;
+  scouting = exploring = true;
+  return true;
+}
+/** A route still safe to walk: it starts beside the hero, and nothing it would step round now stands on it. */
+function clearRoute(g: Game, path: Pos[]): boolean {
+  const p = g.player, lv = g.level;
+  if (Math.max(Math.abs(path[0].x - p.x), Math.abs(path[0].y - p.y)) !== 1) return false;
+  return path.every(q => {
+    const i = q.y * lv.w + q.x, t = tileAt(lv, q.x, q.y);
+    return (isPassable(t) || t === T.DOOR_CLOSED) && t !== T.TRAP && !hazard.has(i) && !nuisance.has(i) && !rooted.has(i) && !seenMonsterAt(g, q.x, q.y);
+  });
 }
 /**
  * Step onto the neighbouring grid that leaves the foes furthest behind, leaning toward `goal`.
  * False when there is no such grid, when the step would still leave something in reach (a
- * free hit for it), or when something next to the hero is faster than it can walk.
+ * free hit for it), or when something next to the hero is faster than it can walk. `onward`
+ * steps only where it is no further from the goal: a hero on its way to the stairs that backs
+ * away from the worms between it and them has only to walk up to them again.
  */
-function stepAway(g: Game, from: Monster[], goal: Pos | null): boolean {
+function stepAway(g: Game, from: Monster[], goal: Pos | null, onward = false): boolean {
   const p = g.player, lv = g.level;
   if (!from.length) return false;
   if (from.some(m => isAdjacent(g, m) && paceOf(g, m) > 1)) return false;
@@ -746,6 +934,7 @@ function stepAway(g: Game, from: Monster[], goal: Pos | null): boolean {
     if (!inBounds(lv, nx, ny) || !(flagAt(lv, nx, ny) & (F.MARK | F.SEEN))) continue;
     const t = tileAt(lv, nx, ny);
     if (!isPassable(t) || t === T.TRAP || hazard.has(ny * lv.w + nx) || seenMonsterAt(g, nx, ny)) continue;
+    if (onward && goal && distance(nx, ny, goal.x, goal.y) > distance(p.x, p.y, goal.x, goal.y)) continue;
     const s = score(nx, ny);
     if (s > bs) { bs = s; best = d; bestNear = Math.min(...from.map(m => distance(nx, ny, m.x, m.y))); }
   }
@@ -984,13 +1173,23 @@ function wantedStore(g: Game): number {
 
 /**
  * The bot's memory of the level it is on: how long it has been here (a breeding pit or a level
- * whose last corner it cannot reach must not hold it for ever), whether it has seen anything
- * breed, and what its hit points were a turn ago (something unseen may be chewing on it).
+ * whose last corner it cannot reach must not hold it for ever), the breeders it has met, and what
+ * its hit points were a turn ago (something unseen may be chewing on it).
  */
 let levelKey = '';
 let stepsOnLevel = 0;
-let breedersSeen = false;
 let lastHp = 0;
+/** Every breeder the hero has laid eyes on here, by monster id: how many it has had to deal with. */
+let breedersMet = new Set<number>();
+/**
+ * The breeders have got away from the hero: a crowd of them in view at once, or so many met that
+ * killing them plainly is not keeping up. One mouse is a mouse -- the bot used to give a level up
+ * the moment it saw a breeder, and a weak one is three hit points that die to a single blow --
+ * but a floor that is filling up is not worth exploring, and once it is given up it stays given up.
+ */
+let infested = false;
+/** Breeders in view at once, or met on the level, that make it infested. */
+const SWARMING = 4, OVERRUN = 12;
 /** Turns left of treating an attacker the hero cannot see as real. */
 let unseen = 0;
 /**
@@ -999,6 +1198,12 @@ let unseen = 0;
  * be left rather than explored around. Long enough to walk the length of a level to the stairs.
  */
 let hunted = 0;
+/**
+ * Turns left of knowing the neighbourhood is more than the hero can take on: a crowd, or more
+ * than it can afford close by. Worked out afresh each turn, a jackal stepping over the edge of
+ * reach and back again had the hero turning to run and turning to fight on alternate turns.
+ */
+let beset = 0;
 /** Stores already visited on this trip to town: a shop it cannot afford is not worth a second look. */
 let shopped = new Set<number>();
 /** Grids the bot has already walked into once; a wall it cannot remember is not worth a second try. */
@@ -1011,18 +1216,40 @@ let junked = new Set<number>();
 let dig: { x: number; y: number; turns: number; forced: boolean } | null = null;
 /** Grids the bot dug at for too long, or could not get beside: not worth another try. */
 let hopeless = new Set<number>();
+/**
+ * The level is finished with: explored, looked round, or out of time. That does not change back.
+ * The bot used to decide it afresh every turn, and anything that tipped it -- a monster stepping
+ * out of view, a corridor opening up -- sent the hero back to exploring from the foot of the
+ * stairs it had just walked to, and then back to the stairs.
+ */
+let done = false;
+/**
+ * The grids the hero last stood on. Two good reasons pulling opposite ways, each winning the
+ * moment the hero steps toward the other -- loot one way and the frontier the other, with a
+ * frightened jackal at the edge of reach deciding which -- and the hero steps back and forth for
+ * the rest of the level. However it came about, it sees that it is doing it, and for a while it
+ * stops listening to second thoughts: no turning back for loot or treasure, no backing off, no
+ * stepping aside to meet something or to hold a corridor mouth, no better frontier -- just on.
+ */
+let trail: number[] = [];
+let steady = 0;
+/** Forget the level being explored: where the hero was going, and what it had seen there. */
+function forgetLevel(): void {
+  shopped = new Set(); probed = new Set(); passed = new Set(); junked = new Set(); dig = null; hopeless = new Set();
+  rooted = new Map(); bearing = { x: 0, y: 0 }; frontier = null; scouting = false; route = null; awaiting = null; done = false;
+  breedersMet = new Set(); infested = false; trail = []; steady = 0;
+}
 /** Forget the current level (a new hero, or a save loaded over this one). */
 export function resetAutoplay(): void {
-  levelKey = ''; stepsOnLevel = 0; breedersSeen = false; lastHp = 0; unseen = 0; hunted = 0;
-  shopped = new Set(); probed = new Set(); passed = new Set(); junked = new Set(); hazard = new Set();
-  dig = null; hopeless = new Set(); idle = 0; books = null; keepMana = 0;
+  levelKey = ''; stepsOnLevel = 0; lastHp = 0; unseen = 0; hunted = 0; beset = 0;
+  forgetLevel(); hazard = new Set(); nuisance = new Set(); fightable = new Set(); idle = 0; books = null; keepMana = 0;
 }
 /** Bot turns spent on the level the hero is standing on. */
 function levelAge(g: Game): number {
   const key = `${g.player.name}|${g.level.depth}|${g.stats.levelsVisited}`;
   if (key !== levelKey) {
-    levelKey = key; stepsOnLevel = 0; breedersSeen = false; lastHp = g.player.chp; unseen = 0; hunted = 0;
-    shopped = new Set(); probed = new Set(); passed = new Set(); junked = new Set(); dig = null; hopeless = new Set();
+    levelKey = key; stepsOnLevel = 0; lastHp = g.player.chp; unseen = 0; hunted = 0; beset = 0;
+    forgetLevel();
   }
   return ++stepsOnLevel;
 }
@@ -1034,7 +1261,6 @@ const TOWN_PATIENCE = 400;
 /** A look round, but not a survey: a hundred-by-sixty level has corners not worth the turns. */
 const LOOK_ROUND = 200;
 const GIVE_UP = 500;
-const SWARM_GIVE_UP = 150;
 /** The deepest floor a hero of this level should be walking about on: Angband's rule of thumb, half the level and a bit. */
 function depthFor(lev: number): number { return lev < 3 ? 1 : lev < 10 ? Math.floor(lev / 2) + 1 : lev - 4; }
 /** The nearest known staircase of the kinds the bot is willing to take, or null. */
@@ -1060,7 +1286,15 @@ let idle = 0;
 export function autoplayStep(g: Game, step: number): void {
   const p = g.player;
   const turn = g.turn, x = p.x, y = p.y, depth = g.level.depth;
+  exploring = false;
   decide(g, step);
+  if (exploring && g.level.depth === depth) steer(p.x - x, p.y - y);
+  if (g.level.depth === depth && (p.x !== x || p.y !== y)) {
+    trail.push(p.y * g.level.w + p.x);
+    if (trail.length > 6) trail.shift();
+    const [a, b] = trail;
+    if (trail.length === 6 && trail.every((t, i) => t === (i % 2 ? b : a))) { steady = 20; trail = []; }
+  }
   // Some actions are free: bumping a wall, a probe into rock, an order the game refused. Free is
   // fine once or twice, but a bot that keeps choosing one is stuck, and only the clock moving
   // (fear fading, a monster stepping aside, a door giving) will change its mind.
@@ -1075,6 +1309,7 @@ function decide(g: Game, step: number): void {
   if (p.timed.paralyzed || p.timed.stun > 100) { C.passTurn(g); return; }
 
   const age = levelAge(g);
+  if (steady) steady--;
   // What the hero will not spend on attacking, settled before anything sizes up a fight: every
   // estimate below (and bestRanged with it) is made on the mana the bot is actually willing to use.
   keepMana = reserveMana(g);
@@ -1089,16 +1324,25 @@ function decide(g: Game, step: number): void {
   const bleeding = p.timed.poisoned > 0 || p.timed.cut > 0 || p.food < FOOD_WEAK;
   if (p.chp < lastHp && !awake.length && !bleeding) unseen = 4; else if (unseen) unseen--;
   lastHp = p.chp;
-  if (threats.some(m => hasMFlag(raceOf(m), 'MULTIPLY'))) breedersSeen = true;
+  const breeding = threats.filter(m => hasMFlag(raceOf(m), 'MULTIPLY'));
+  for (const m of breeding) breedersMet.add(m.id);
+  if (!town && (breeding.length >= SWARMING || breedersMet.size >= OVERRUN)) infested = true;
   // Something awake and mobile that the hero cannot kill: it will follow, and a level with one
   // on it is not explorable any more, whatever happens to be out of sight this turn.
   if (!town && awake.some(m => !hasMFlag(raceOf(m), 'NEVER_MOVE') && !worth(g, m, true))) hunted = 150;
   else if (hunted) hunted--;
   markHazards(g);
 
-  // Finish what is already running, unless something turned up.
+  // Finish what is already running, unless something turned up. A walk to the frontier is not
+  // finished but re-planned: every step shows the hero something, and what it shows (loot, the
+  // stairs it is looking for, the frontier turning out to be a corner) is worth acting on now.
+  // The route itself is kept while it is still clear (see explore): planned afresh every step, a
+  // way that depended on whether some monster happened to be in view flipped with it, and the
+  // hero stepped back and forth between the two.
   if (g.resting) { if (awake.length || unseen) g.resting = 0; else { C.restStep(g); return; } }
-  if (g.travel) { if (close.length) g.travel = null; else { C.travelStep(g); return; } }
+  route = scouting ? g.travel : null;
+  if (g.travel) { if (close.length || scouting) g.travel = null; else { C.travelStep(g); return; } }
+  scouting = false;
   if (g.running) { if (awake.length) g.running = null; else { C.runStep(g); return; } }
   // The bot paces its own tunnelling (below); a repeat left over from the player is not its business.
   g.repeating = null;
@@ -1106,13 +1350,14 @@ function decide(g: Game, step: number): void {
   // What the neighbourhood would cost to clear, against what the hero can spare. The clock
   // ticks before the fighting does, or a breeding pit would hold the bot on one grid for ever.
   const budget = p.chp - p.mhp * MARGIN;
-  const overmatched = close.length > 0 && close.reduce((s, m) => s + fightCost(g, m), 0) > budget;
+  const overmatched = close.length > 0 && close.reduce((s, m) => s + stake(g, m), 0) > budget;
   const swarm = awake.length > 4;
-  // Fleeing means the level has stopped being worth fighting for: breeders, a crowd, something
-  // it cannot beat, or something it cannot see. It heads for the stairs and hits only what is in
-  // the way or would die in one blow.
+  if (!town && (overmatched || swarm)) beset = 20; else if (beset) beset--;
+  // Fleeing means the level has stopped being worth fighting for: breeders out of hand, a crowd,
+  // something it cannot beat, or something it cannot see. It heads for the stairs and hits only
+  // what is in the way or would die in one blow.
   const spent = p.chp < p.mhp * MARGIN;
-  const fleeing = !town && (breedersSeen || swarm || overmatched || spent || unseen > 0 || hunted > 0);
+  const fleeing = !town && (infested || beset > 0 || spent || unseen > 0 || hunted > 0);
   // Which way out. Too deep for its level (a trap door, say), or out of potions with the town
   // close above, and it climbs; otherwise it dives only as far as its level warrants.
   const tooDeep = lv.depth > depthFor(p.lev);
@@ -1136,23 +1381,46 @@ function decide(g: Game, step: number): void {
   // an ironman hero.
   const down = town ? null : nearestTile(g, t => t === T.STAIRS_DOWN);
   const upKnown = town || g.options.ironman ? null : nearestTile(g, t => t === T.STAIRS_UP);
-  // Explore while there is ground left to cover -- but once the way down is known, a look round
-  // is enough; the last corner of the level is not worth the turns, and a swarm even less.
-  let { open, openSteps, rubble, treasure } = survey(g);
-  // Nothing left to reach and no staircase on the map. The grids the bot steps around are the
-  // likeliest reason: on a crowded floor, eight grids apiece for every monster it cannot beat
-  // walls the level off, and a hero that cannot reach new ground cannot find the way off either
-  // -- it stands in the middle of the floor until something kills it. So look again without
-  // them. A way on past a mold is worth more than a level the bot has shut itself out of.
-  if (!town && !open && !rubble && !treasure && !down && !upKnown) {
+  // On its way out with a staircase in sight but no known way to it, the search for one leans its way.
+  const lure = town || !(done || fleeing || wantUp) ? null
+    : exitStairs(g, mayDive || g.options.ironman || (fleeing && !wantUp), !g.options.ironman && (fleeing || wantUp || !mayDive));
+  let { open, openSteps, rubble, treasure } = survey(g, lure);
+  // Nothing left to reach: the level is finished, or something the hero will not walk past is
+  // standing in the way. The grids it steps around are the likeliest reason -- on a crowded
+  // floor, eight grids apiece for every monster it cannot beat wall the level off -- so look
+  // again without them. Shut out with a staircase on the map, it leaves (shooting the thing on
+  // its way if it can, see below); with none, it goes past after all, since a hero that cannot
+  // reach new ground cannot find the way off either, and stands in the middle of the floor until
+  // something kills it. A way on past a mold is worth more than a level it has shut itself out of.
+  let blocked = false;
+  if (!town && !open && !rubble && !treasure && hazard.size) {
+    const avoided = hazard;
     hazard = new Set();
-    ({ open, openSteps, rubble, treasure } = survey(g));
+    const past = survey(g, lure);
+    if (!(past.open || past.rubble || past.treasure)) hazard = avoided;
+    else if (down || upKnown) { hazard = avoided; blocked = true; }
+    else ({ open, openSteps, rubble, treasure } = past);
   }
   const more = open || rubble || treasure;
-  const staying = town || (!!more && !fleeing && !wantUp && age < (swarm ? SWARM_GIVE_UP : GIVE_UP) && !(down && age > LOOK_ROUND));
-  const takeDown = mayDive || g.options.ironman || (fleeing && !wantUp);
-  const takeUp = !g.options.ironman && (fleeing || wantUp || !mayDive);
-  const exit = town || staying ? null : exitStairs(g, takeDown && !(fleeing && hurt && upKnown), takeUp);
+  // Explore while there is ground left to cover -- but once the way on is known, a look round is
+  // enough; the last corner of the level is not worth the turns, and a swarm even less. The way
+  // on is the staircase the hero would actually leave by: down while its level allows, else up.
+  // A down staircase is no reason to stop looking for the up one, and it was the bot's undoing:
+  // a hero finished with the first floor, too green for the second, walked to the down stairs it
+  // knew, would not take them, went to look for the up stairs, and came back, for thousands of turns.
+  const onward = town ? null : exitStairs(g, mayDive || g.options.ironman, !g.options.ironman && (wantUp || !mayDive));
+  if (!town && ((!more && !blocked) || age >= GIVE_UP || (onward && age > LOOK_ROUND))) done = true;
+  const staying = town || (!done && !blocked && !fleeing && !wantUp);
+  let takeDown = mayDive || g.options.ironman || (fleeing && !wantUp);
+  let takeUp = !g.options.ironman && (fleeing || wantUp || !mayDive);
+  let exit = town || staying ? null : exitStairs(g, takeDown && !(fleeing && hurt && upKnown), takeUp);
+  // Leaving, with no staircase of the kind it wants on the map: it goes on exploring until it
+  // finds one. Only with nothing left to explore, or twice its patience spent, does it settle
+  // for any staircase at all -- down and straight back up is a new level, which is what it wanted.
+  if (!town && !staying && !exit && (!more || age >= GIVE_UP * 2)) {
+    takeDown = true; takeUp = !g.options.ironman;
+    exit = exitStairs(g, true, takeUp);
+  }
   // Where backing away should lean: the way out if it has one, else whatever is left to look at.
   const goal: Pos | null = exit || open || rubble?.dig || treasure?.dig || null;
 
@@ -1231,20 +1499,24 @@ function decide(g: Game, step: number): void {
 
   // 2. Whatever is in arm's reach. A thing it cannot afford to trade blows with is backed away
   //    from while backing away works; cornered, it reads its way out or fights after all.
-  if (adjacent.length) {
-    const easy = adjacent.filter(m => oneHit(g, m));
-    const menace = adjacent.some(m => !worth(g, m));
+  //    Overrun by breeders, it does not stop for the ones at its side -- there is always another,
+  //    and a blackguard stood swatting fruit flies, one that would die to every blow, until they
+  //    killed it -- but pushes on for the stairs, and swats the ones in its way (see step 7).
+  const reach = infested ? adjacent.filter(m => !hasMFlag(raceOf(m), 'MULTIPLY')) : adjacent;
+  if (reach.length) {
+    const easy = reach.filter(m => oneHit(g, m));
+    const menace = reach.some(m => !worth(g, m) || paralyses(g, m));
     if (p.timed.afraid) {
       if (stepAway(g, close, goal)) return;
       const out = escapeAct(g);
       if (out) { out(); return; }
       const cure = cureAct(g, 'afraid');
       if (cure) { cure(); return; }
-      const away = fleeDir(g, dirOf(adjacent[0].x - p.x, adjacent[0].y - p.y));
+      const away = fleeDir(g, dirOf(reach[0].x - p.x, reach[0].y - p.y));
       if (away) { C.moveDir(g, away); return; }
       // Cornered: too afraid to swing, nowhere to run. Shoot it if it can be seen, else cower and
       // let the fear wear off -- a turn has to pass for that.
-      const shot = bestRanged(g, adjacent[0]);
+      const shot = bestRanged(g, reach[0]);
       if (shot) { shot.go(); return; }
       C.passTurn(g); return;
     }
@@ -1255,14 +1527,20 @@ function decide(g: Game, step: number): void {
       // Send the thing it cannot beat away, or put it to sleep. That is a caster's answer to a
       // fight it would lose, and it beats a step back from something faster than the hero is.
       if (menace) {
-        const bad = adjacent.find(mm => !worth(g, mm));
+        const bad = reach.find(mm => !worth(g, mm) || paralyses(g, mm));
         const off = bad ? disableAct(g, bad) : null;
         if (off) { off(); return; }
       }
-      if (stepAway(g, close, goal)) return;
+      // Backing off, only when it gets the hero somewhere (canBackOff); from something as quick as
+      // it, the fight comes to it anyway, and better here than cornered with less to fight it on.
+      if (!steady && canBackOff(g, close, exit) && stepAway(g, close, goal)) return;
       if (menace) { const out = escapeAct(g); if (out) { out(); return; } }
     }
-    const pick = easy[0] || adjacent.reduce((a, b) => fightCost(g, b) < fightCost(g, a) ? b : a);
+    // With something it cannot beat at its side, the blow goes where it takes the most danger
+    // away: the hero that shot the fruit fly beside it because the fly would die was bitten to
+    // death by Grip while it did.
+    const pick = menace ? reach.reduce((a, b) => relief(g, b) > relief(g, a) ? b : a)
+      : easy[0] || reach.reduce((a, b) => fightCost(g, b) < fightCost(g, a) ? b : a);
     if (attack(g, pick)) return;
   }
   // Something asleep beside the hero is free hits, if it is a fight the hero would pick awake.
@@ -1306,8 +1584,8 @@ function decide(g: Game, step: number): void {
   }
 
   // 4. Off this level, when it is finished, dull or dangerous -- but not on a sliver of health,
-  //    unless something is chasing the hero down the stairs anyway.
-  if (!staying && (!hurt || fleeing) && (age > 1 || awake.length)) {
+  //    unless something is chasing the hero down the stairs anyway, or it is too hungry to rest.
+  if (!staying && (!hurt || fleeing || !canRest(g)) && (age > 1 || awake.length)) {
     if (here === T.STAIRS_DOWN && takeDown) { C.goDown(g); return; }
     if (here === T.STAIRS_UP && takeUp) { C.goUp(g); return; }
   }
@@ -1315,23 +1593,28 @@ function decide(g: Game, step: number): void {
   // 5. Shoot what is coming while it is still coming: every shot before it arrives is free, and
   //    the thing it could not face hand to hand may never arrive. A pack in the open is met at a
   //    corridor mouth instead, where they come one at a time. Not at breeders (a bottomless
-  //    supply) and not when the hero should be leaving anyway.
-  const pack = foes(g, 6);
-  if (!fleeing && pack.length >= 2 && holdCorridor(g, pack)) return;
+  //    supply, see nearestTarget) and not when the hero should be leaving anyway. Flasks and
+  //    charges are kept for what is worth them: a thing that never moves is target practice for
+  //    arrows and spells alone, unless it is standing between the hero and the rest of the level,
+  //    and so is anything the hero's blade would settle cheaply.
+  // A pack of worm masses is not met at a corridor mouth: nothing it can outwalk is.
+  const pack = foes(g, 6).filter(m => paceOf(g, m) >= 1);
+  if (!fleeing && !steady && pack.length >= 2 && holdCorridor(g, pack)) return;
   const target = nearestTarget(g);
-  if (target && !breedersSeen && !unseen && !swarm && (worth(g, target) || overmatched)) {
-    const shot = bestRanged(g, target, hasMFlag(raceOf(target), 'NEVER_MOVE'));
+  if (target && !infested && !unseen && !swarm && (worth(g, target) || overmatched)) {
+    const shot = bestRanged(g, target, (hasMFlag(raceOf(target), 'NEVER_MOVE') && !blocked) || trifling(g, target));
     if (shot) { shot.go(); return; }
   }
   // Something awake that the hero cannot beat, coming for it. A trick takes it out of the fight
-  // whatever its speed; and when it is faster than the hero, walking away from it only buys it
-  // free blows in the back, so while it is still crossing the room the hero puts shots into it.
-  // A hunter like Grip kills more of the bot's heroes than anything else in the dungeon, and a
-  // hero with a wand, a flask or a bolt to its name is not helpless against one.
-  if (target && !breedersSeen && !unseen && !swarm && !worth(g, target) && !hasMFlag(raceOf(target), 'NEVER_MOVE')) {
+  // whatever its speed; and when it is as quick as the hero or quicker, walking away from it only
+  // brings it along (or buys it free blows in the back), so while it is still crossing the room
+  // the hero puts shots into it -- unless the stairs are a few steps off. A hunter like Grip
+  // kills more of the bot's heroes than anything else in the dungeon, and a hero with a wand, a
+  // flask or a bolt to its name is not helpless against one.
+  if (target && !infested && !unseen && !swarm && !worth(g, target) && !hasMFlag(raceOf(target), 'NEVER_MOVE')) {
     const off = disableAct(g, target);
     if (off) { off(); return; }
-    if (paceOf(g, target) > 1) { const shot = bestRanged(g, target); if (shot) { shot.go(); return; } }
+    if (!canBackOff(g, [target], exit)) { const shot = bestRanged(g, target); if (shot) { shot.go(); return; } }
   }
   // A crowd it cannot meet at a corridor mouth: one word over the lot of them.
   if (swarm && close.length >= 3) { const off = crowdAct(g); if (off) { off(); return; } }
@@ -1354,26 +1637,44 @@ function decide(g: Game, step: number): void {
     for (const fi of itemsAt(lv, p.x, p.y)) passed.add(fi.item.id);
     if (!awake.length && canRest(g) && (hurt || p.csp < p.msp / 2)) { C.rest(g, -1); C.restStep(g); return; }
     // Loot the bot has seen and walked past: worth a detour while the level is still its business,
-    // and a few steps even when it is on its way out.
-    const loot = nearestLoot(g);
+    // and a few steps even when it is on its way out -- but not with something hunting it.
+    const loot = fleeing || steady ? null : nearestLoot(g);
     if (loot && (staying || distance(p.x, p.y, loot.x, loot.y) <= 6)) {
       if (headFor(g, loot.x, loot.y)) return;
       passed.add(loot.item.id);
     }
     // A vein showing treasure is loot too, at the price of the digging.
-    if (staying && treasure && goDig(g, treasure)) return;
+    if (staying && !steady && treasure && goDig(g, treasure)) return;
     if (staying && step % 31 === 30) { C.searchAround(g); return; }
   }
 
-  // 7. Move: on into the dark, through what blocks it, or off this level.
-  if (exit && headFor(g, exit.x, exit.y)) return;
-  if (!staying && down && headFor(g, down.x, down.y)) return;
-  if (!staying && close.length && stepAway(g, close, goal)) return;
+  // 7. Move. Something it means to fight is on its way: meet it. Wandering on to explore or to
+  //    loot only drags it along behind, hands it the first blow, and turned the hero round every
+  //    time the thing stepped in and out of reach -- off for the loot, back for the frontier. While
+  //    it is coming the hero waits, and swings first; one that is not coming, or that fights from a
+  //    distance, it goes to.
+  const coming = staying && !steady ? close.find(m => !hasMFlag(raceOf(m), 'NEVER_MOVE') && !m.afraid && worth(g, m)) : undefined;
+  if (coming) {
+    const d = distance(p.x, p.y, coming.x, coming.y), nearing = awaiting?.id === coming.id && d < awaiting.d;
+    awaiting = { id: coming.id, d };
+    if (nearing && !raceOf(coming).spells?.length) { C.passTurn(g); return; }
+    if (headFor(g, coming.x, coming.y)) return;
+  } else awaiting = null;
+  // On into the dark, through what blocks it, or off this level. Standing on the way out and not
+  // taking it -- too hurt, with something in view that will not let it rest, or only just arrived
+  // -- it waits there: a hero that wanders off to explore only walks back.
+  if (exit && exit.x === p.x && exit.y === p.y) { C.passTurn(g); return; }
+  // With no known way to the stairs, a shove toward them walked into a dead end, the frontier led
+  // back out of it, and the next shove walked in again: while there is ground left to explore, the
+  // way to them is found by exploring.
+  if (exit && headFor(g, exit.x, exit.y, !more)) return;
+  // On the way out, it backs off only from what it should not fight -- not from a snake it can
+  // walk past, which it did a step at a time, each time the snake came in and out of view.
+  if (!staying && !steady && (overmatched || close.some(m => !worth(g, m))) && canBackOff(g, close, exit) && stepAway(g, close, goal, true)) return;
   // Rubble across the way on is cleared when that is quicker than walking round to the next unseen corner.
   if (rubble && (!open || rubble.steps + digTurns(g, T.RUBBLE) < openSteps) && goDig(g, rubble)) return;
   if (explore(g, open)) return;
   if (rubble && goDig(g, rubble)) return;
-  if (down && headFor(g, down.x, down.y)) return;
   // Walled in: dig at the softest neighbour, or feel around for a secret door.
   if (step % 3 === 0) { C.searchAround(g); return; }
   let soft = 0, softTurns = 1e9;
