@@ -566,19 +566,94 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
       ok(landed === fired, `autoplay ${cls} at offset ${dx},${dy}: ${fired - landed} of ${fired} shots flew past the mold`);
     }
   }
-  // Behind a wall the mold is out of reach, and a bot that shoots anyway is wasting arrows.
+  // Behind a wall the mold is out of reach, and a bot that shoots anyway is wasting arrows. It may
+  // walk round the end of the wall and shoot from there -- the mold is target practice -- but not
+  // from behind it, and every arrow it looses has to land.
   {
     const g = createGame('Aim', 'human', 'archer', 'male', 1234);
     resetAutoplay();
     arena(g);
-    const m = createMonster(g, 'grey_mold', 26, 17, false, g.level)!;
+    const at = { x: 26, y: 17 };
+    const m = createMonster(g, 'grey_mold', at.x, at.y, false, g.level)!;
     m.sleep = 0; m.visible = true; m.detected = true;
     for (let y = 14; y <= 18; y++) g.level.tiles[y * g.level.w + 24] = T.GRANITE;
     const before = g.player.quiver.reduce((n, q) => n + q.number, 0);
-    for (let step = 0; step < 6; step++) autoplayStep(g, step);
+    g.fx.length = 0;
+    autoplayStep(g, 0);
     ok(g.player.quiver.reduce((n, q) => n + q.number, 0) === before, 'autoplay shot at a mold it could not reach through a wall');
+    for (let step = 1; step < 6; step++) autoplayStep(g, step);
+    const r = shots(g, 'missile', at);
+    ok(r.landed === r.fired, `autoplay loosed ${r.fired - r.landed} of ${r.fired} arrows at a mold behind a wall`);
   }
   console.log(`aim: an archer and a mage hit a mold at ${offsets.length} offsets, and hold fire through a wall`);
+}
+// 2f. The bot's way off a level. It used to walk to the down staircase it knew about when it had
+// no intention of taking it -- too green for the next floor, or on its way home to restock --
+// stand on it, go and look for the up stairs, and come straight back, for thousands of turns.
+// Here the hero wants the town (out of cures, with gold to buy more) and knows only a down
+// staircase; the up one is past a dark corridor, in a dark room. It has to go and find it.
+{
+  const g = createGame('Stairs', 'human', 'warrior', 'male', 4321);
+  resetAutoplay();
+  const w = 61, h = 21, lv = createLevel(w, h, 1);
+  lv.depth = 1;
+  const floor = (x: number, y: number, lit: boolean) => { lv.tiles[y * w + x] = T.FLOOR; if (lit) lv.flags[y * w + x] |= 1 | 2; };
+  for (let y = 5; y <= 15; y++) for (let x = 2; x <= 18; x++) floor(x, y, true);
+  for (let x = 19; x <= 38; x++) floor(x, 10, false);
+  for (let y = 3; y <= 17; y++) for (let x = 39; x <= 58; x++) floor(x, y, false);
+  lv.tiles[10 * w + 5] = T.STAIRS_DOWN;
+  lv.tiles[10 * w + 55] = T.STAIRS_UP;
+  g.level = lv;
+  g.flow = null; g.noise = null; g.scent = null; g.scentStamp = 0; g.flowDirty = true;
+  g.player.x = 10; g.player.y = 10;
+  g.player.inven = g.player.inven.filter(it => it.kind !== 'potion_clw');
+  g.player.gold = 500;
+  passTurn(g);
+  let onDown = 0, climbed = false, step = 0;
+  for (; step < 400 && !climbed && !g.player.dead; step++) {
+    const was = tileAt(g.level, g.player.x, g.player.y);
+    autoplayStep(g, step);
+    if (g.levelChange) { climbed = g.levelChange.by === 'up'; break; }
+    if (tileAt(g.level, g.player.x, g.player.y) === T.STAIRS_DOWN && was !== T.STAIRS_DOWN) onDown++;
+  }
+  ok(climbed, `autoplay wanting the town never found the up staircase in ${step} steps`);
+  ok(onDown === 0, `autoplay walked onto a down staircase it would not take ${onDown} times`);
+  console.log(`stairs: a hero bound for town ignores the down staircase and finds the up one in ${step} steps`);
+}
+// 2g. Things that never move, across the only corridor on. A grey mold used to hold a first-level
+// warrior there for good: too dear to fight by the whole-fight rule, so the hero walked up to it
+// and away again all level. It can be walked away from whenever the hero likes, so now it is
+// fought, backed off from to rest, and got past. A floating eye's gaze paralyses, and a hero held
+// beside one is held again the moment it can move: it is shot from a distance, never stood beside.
+{
+  const runs: string[] = [];
+  for (const [race, cls] of [['grey_mold', 'warrior'], ['floating_eye', 'archer']] as const) {
+    const g = createGame('Rooted', 'human', cls, 'male', 777);
+    resetAutoplay();
+    const w = 71, h = 21, lv = createLevel(w, h, 1);
+    lv.depth = 1;
+    const floor = (x: number, y: number, lit: boolean) => { lv.tiles[y * w + x] = T.FLOOR; if (lit) lv.flags[y * w + x] |= 1 | 2; };
+    for (let y = 6; y <= 14; y++) for (let x = 2; x <= 14; x++) floor(x, y, true);
+    for (let x = 15; x <= 40; x++) floor(x, 10, false);
+    for (let y = 4; y <= 16; y++) for (let x = 41; x <= 68; x++) floor(x, y, false);
+    g.level = lv;
+    g.flow = null; g.noise = null; g.scent = null; g.scentStamp = 0; g.flowDirty = true;
+    g.player.x = 8; g.player.y = 10;
+    const m = createMonster(g, race, 25, 10, false, lv)!;
+    m.sleep = 0;
+    passTurn(g);
+    let past = -1, beside = 0, step = 0;
+    for (; step < 300 && past < 0 && !g.player.dead && !g.levelChange; step++) {
+      autoplayStep(g, step);
+      if (g.level.monsters.includes(m) && Math.max(Math.abs(g.player.x - m.x), Math.abs(g.player.y - m.y)) <= 1) beside++;
+      if (g.player.x > 40) past = step;
+    }
+    ok(past >= 0, `autoplay ${cls} never got past a ${race} across the corridor in ${step} steps`);
+    ok(!g.level.monsters.includes(m), `autoplay ${cls} got past a ${race} without killing it`);
+    if (race === 'floating_eye') ok(beside === 0, `autoplay ${cls} stood beside a floating eye for ${beside} turns`);
+    runs.push(`${cls} past a ${race} in ${past} steps`);
+  }
+  console.log(`rooted: ${runs.join(', ')}`);
 }
 
 // 3. Autoplay: the bot the `=` menu (and ctrl+A) turns on, playing honestly with no cheats.
@@ -593,11 +668,21 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
     try { g = createGame('Bot' + seed, race.id, cls.id, seed % 2 ? 'female' : 'male', seed * 104729); }
     catch (e) { failures++; console.log(`  FAIL: autoplay createGame seed ${seed}: ${(e as Error).stack}`); continue; }
     let step = 0, idle = 0, worstIdle = 0;
+    // How often the hero walked off each staircase on the level without taking it. Crossing one
+    // in a corridor now and then is nothing; the old stairs-and-back pacing did it hundreds of times.
+    let walkedOff = new Map<number, number>(), worstPacing = 0, level = g.stats.levelsVisited;
     try {
       for (step = 0; step < TURNS && !g.player.dead; step++) {
         const turn = g.turn, x = g.player.x, y = g.player.y, depth = g.level.depth;
+        const stairs = tileAt(g.level, x, y) === T.STAIRS_DOWN || tileAt(g.level, x, y) === T.STAIRS_UP;
         autoplayStep(g, step);
         if (g.levelChange) enterLevel(g, g.levelChange.depth, g.levelChange.by);
+        if (g.stats.levelsVisited !== level) { level = g.stats.levelsVisited; walkedOff = new Map(); }
+        else if (stairs && depth > 0 && (g.player.x !== x || g.player.y !== y)) {
+          const n = (walkedOff.get(y * g.level.w + x) || 0) + 1;
+          walkedOff.set(y * g.level.w + x, n);
+          worstPacing = Math.max(worstPacing, n);
+        }
         // A bot that neither moves nor spends a turn is bumping a wall; a few in a row is a probe,
         // dozens is a hero stuck for good (fear that never fades, a corner it cannot leave).
         idle = g.turn === turn && g.player.x === x && g.player.y === y && g.level.depth === depth ? idle + 1 : 0;
@@ -605,6 +690,7 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
         if (step % 25 === 0) check(g, `autoplay seed ${seed} step ${step}`);
       }
       ok(worstIdle < 20, `autoplay seed ${seed}: the bot spent ${worstIdle} steps in a row on one grid without a turn passing; last: ${g.msg.list.slice(-4).map(m => m.text).join(' | ')}`);
+      ok(worstPacing < 10, `autoplay seed ${seed}: the bot walked off the same staircase ${worstPacing} times on one level without taking it`);
     } catch (e) {
       failures++;
       console.log(`  FAIL: autoplay seed ${seed} (${cls.id}) crashed at step ${step} depth ${g.level.depth}: ${(e as Error).stack}`);
