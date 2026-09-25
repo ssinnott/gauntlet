@@ -1434,8 +1434,11 @@ function decide(g: Game, step: number): void {
     // something taking eight a turn it buys nothing at all and the hero has stood still for it.
     // Three cures poured into a full-ish hero while a dog chews on it is how the bot used to
     // die: what it needed was to not be standing there. Anything taking half the hero's maximum
-    // in a turn outdrinks any potion whatever the headroom.
-    const outdrunk = adjacent.length > 0 && (incoming * 2 >= p.mhp || incoming >= (p.mhp - p.chp) * 0.75);
+    // in a turn outdrinks any potion whatever the headroom. So does a crowd: `incoming` is an
+    // average, and three or more hands swinging independently miss it far more than a single
+    // attacker does -- a pit of Novice warriors chipped away by the mean estimate every turn and
+    // then took a hero from near-full to dead in two, because the average never saw that turn coming.
+    const outdrunk = adjacent.length > 0 && (incoming * 2 >= p.mhp || incoming >= (p.mhp - p.chp) * 0.75 || adjacent.length >= 3);
     if (!outdrunk && mend) { mend(); return; }
     if (close.length || unseen) {
       // Stairs are the oldest escape in the game, and the bot stands on some often enough.
@@ -1534,7 +1537,11 @@ function decide(g: Game, step: number): void {
       // Backing off, only when it gets the hero somewhere (canBackOff); from something as quick as
       // it, the fight comes to it anyway, and better here than cornered with less to fight it on.
       if (!steady && canBackOff(g, close, exit) && stepAway(g, close, goal)) return;
-      if (menace) { const out = escapeAct(g); if (out) { out(); return; } }
+      // `menace` is a per-monster question, so a pit of several things each affordable on its own
+      // never trips it, and backing off is nothing against a crowd that matches the hero's pace on
+      // every side of it. `overmatched` is the aggregate answer -- what the whole crowd costs, not
+      // any one of them -- and it is what a phase door or a word of recall is for.
+      if (menace || overmatched) { const out = escapeAct(g); if (out) { out(); return; } }
     }
     // With something it cannot beat at its side, the blow goes where it takes the most danger
     // away: the hero that shot the fruit fly beside it because the fly would die was bitten to
