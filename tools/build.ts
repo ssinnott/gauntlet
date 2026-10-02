@@ -1,13 +1,23 @@
 // Bundle src/main.ts into a self-contained dist/index.html that can be opened from disk or served
-// anywhere (GitHub Pages included). Same shape as game-engine/tools/build.ts.
+// anywhere (GitHub Pages included). Same shape as game-engine/tools/build.ts. Beside it go the files
+// that let a phone install the page and play it offline (tools/pwa.ts); the page runs without them.
 import { build } from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { appFiles } from './pwa.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OUT_DIR = path.join(ROOT, 'dist');
 fs.mkdirSync(OUT_DIR, { recursive: true });
+
+// Only the published page registers the service worker. Under the dev server it would answer a
+// reload with the code from before an edit whenever the server was slow or stopped.
+const REGISTER = `<script>
+  if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+    navigator.serviceWorker.register('sw.js').catch(function (e) { console.warn('no offline copy: ' + e); });
+  }
+</script>`;
 
 const result = await build({
   entryPoints: [path.join(ROOT, 'src', 'main.ts')],
@@ -20,6 +30,8 @@ const js = out.text.replace(/<\/script/gi, '<\\/script');
 let html = fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
 const tagRe = /<script[^>]*type=["']module["'][^>]*src=["'][^"']*main\.ts["'][^>]*>\s*<\/script>/i;
 if (!tagRe.test(html)) throw new Error('index.html: could not find <script type="module" src="src/main.ts"> to inline');
-html = html.replace(tagRe, () => `<script>\n${js}\n</script>`);
+html = html.replace(tagRe, () => `<script>\n${js}\n</script>\n${REGISTER}`);
 fs.writeFileSync(path.join(OUT_DIR, 'index.html'), html);
-console.log(`built dist/index.html (${(html.length / 1024).toFixed(0)} KB)`);
+const files = appFiles(html);
+for (const [name, f] of files) fs.writeFileSync(path.join(OUT_DIR, name), f.body);
+console.log(`built dist/index.html (${(html.length / 1024).toFixed(0)} KB) and ${[...files.keys()].join(', ')}`);

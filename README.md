@@ -13,6 +13,10 @@ there are no asset files. The hero plays itself: a keyboard, a mouse or a thumb 
 **[Play it here](https://ssinnott.github.io/gauntlet/)** -- `.github/workflows/pages.yml` typechecks,
 runs the simulator and publishes `dist/index.html` to GitHub Pages on every push to `main`.
 
+**Install it on a phone** from that page: on an iPhone, Safari's Share button, then *Add to Home
+Screen*; on Android, Chrome's menu, then *Install app* (or *Add to Home screen*). It gets an icon,
+opens full screen (held in landscape on Android), and plays offline once it has been opened online.
+
 Strict TypeScript on the vanilla canvas, no runtime dependencies, nothing compiled during
 development. The engine (`src/lib/`) is [ssinnott/game-engine](https://github.com/ssinnott/game-engine),
 vendored with `git subtree` exactly as that repo's `docs/VENDORING.md` prescribes.
@@ -21,7 +25,7 @@ vendored with `git subtree` exactly as that repo's `docs/VENDORING.md` prescribe
 npm install
 npm run dev        # http://localhost:8080  (esbuild transforms each .ts on request; just reload)
 npm run check      # typecheck + headless simulator + browser smoke test
-npm run build      # dist/index.html, one self-contained file
+npm run build      # dist/index.html, one self-contained file, plus what a phone installs it with
 ```
 
 ## Playing
@@ -69,7 +73,9 @@ ever ignored and artifacts never are, and `ctrl+O` reveals what is being left be
 
 On a phone, touch anywhere: buttons for the screens appear (the inventory, look, the map, the
 hero, knowledge, options, the ignore settings and help), and the menus get a navigation bar. The
-`touchControls` option forces them on with a mouse.
+`touchControls` option forces them on with a mouse. The game saves the moment it leaves the
+screen, because a phone closes a game in the background without warning. On an iPhone the
+installed game keeps its own saves, apart from Safari's.
 
 The bot shops, walks into the dungeon, and explores it the way a player does --
 it picks a direction and keeps to it, following a corridor to its end and crossing a room to its far
@@ -180,6 +186,7 @@ src/ui/                  everything that draws, and everything that touches the 
   screens2.ts            knowledge browser, recall, options, high scores, locate, the birth screen
 src/lib/                 the vendored engine (do not edit here; fix upstream and subtree pull)
 tools/                   dev server, bundler, headless simulator (fuzz + autoplay), browser smoke test, hero contact sheet
+  pwa.ts                 what a phone installs from: the manifest, the icons (drawn, not stored) and the offline worker
 ```
 
 ## Checks
@@ -197,7 +204,8 @@ tools/                   dev server, bundler, headless simulator (fuzz + autopla
   instead), takes it into the dungeon, opens the inventory, saves to IndexedDB and loads it back,
   exercises the touch controls, draws the hero contact sheet and asserts that no two race/class
   combinations render identically, and asserts the canvas has real content and the page raised no
-  errors. It leaves screenshots in `dist/`.
+  errors. It also checks that Chromium would install the page and that, once the service worker has
+  seen the game, the game starts with the server stopped. It leaves screenshots in `dist/`.
 
 The determinism check is the strict one: the simulator plays a fixed script from a fixed seed
 twice and requires the two saves to be identical byte for byte, then does it again across a save

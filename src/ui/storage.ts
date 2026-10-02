@@ -77,6 +77,18 @@ function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequ
 /** True when IndexedDB is actually usable; the fallback is in play otherwise. */
 export async function storageReady(): Promise<boolean> { return (await openDb()) !== null; }
 
+/**
+ * Ask for the saves to be spared when the device runs short of space: without this they are "best
+ * effort", the first thing a browser clears. Only the installed game asks. A browser tab has not
+ * earned it, and Firefox would put the question to the player.
+ */
+export function keepSavesSafe(): void {
+  try {
+    if (!matchMedia('(display-mode: fullscreen), (display-mode: standalone)').matches) return;
+    navigator.storage.persist().catch(() => { /* refused: they stay best effort */ });
+  } catch { /* no storage manager in this browser */ }
+}
+
 // ---------------------------------------------------------------------------------------------
 // The localStorage fallback
 

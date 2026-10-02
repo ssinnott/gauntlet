@@ -15,7 +15,7 @@ import { tileAt } from './game/level.ts';
 import { autoplayStep, resetAutoplay } from './game/autoplay.ts';
 import { Input, type KeyEvent, type PointerEvent2 } from './ui/input.ts';
 import { TouchPad } from './ui/touch.ts';
-import { type SaveMeta, type SaveRecord, listSaves, readSave, writeSave, deleteSave, migrateLegacySave, newSlotId } from './ui/storage.ts';
+import { type SaveMeta, type SaveRecord, listSaves, readSave, writeSave, deleteSave, migrateLegacySave, newSlotId, keepSavesSafe } from './ui/storage.ts';
 import { MapRenderer } from './ui/render.ts';
 import { drawHud, drawMessageBar, drawBanner } from './ui/hud.ts';
 import { buildHero, syncHero } from './ui/hero.ts';
@@ -67,6 +67,10 @@ class App implements Ui2 {
   constructor() {
     this.input = new Input(this.canvasApi.canvas, (x, y) => this.canvasApi.toInternal(x, y));
     setAutosaveHook(g => { if (this.started && g === this.g && !g.player.dead) this.save(); });
+    // A phone closes a game it has sent to the background without a word, so save as it leaves the
+    // screen rather than trust the minute's autosave to have caught the last of it.
+    document.addEventListener('visibilitychange', () => { if (document.hidden && this.started && !this.g.player.dead) this.save(); });
+    keepSavesSafe();
     try { this.scores = JSON.parse(localStorage.getItem(SCORES_KEY) || '[]'); } catch { this.scores = []; }
     // A save from the single-key version becomes the first slot, once.
     migrateLegacySave(json => {
