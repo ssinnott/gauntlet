@@ -228,11 +228,25 @@ const buttonKeys = await page.evaluate(() => {
   };
 });
 
+// The title screen offers CONTINUE with a summary of the latest hero, and continuing hands that
+// hero straight to the bot.
+await page.evaluate(() => (window as any).__game.api.app.quitToTitle());
+await page.waitForTimeout(300);
+await page.screenshot({ path: path.join(OUT, 'smoke-title-continue.png') });
+const continued = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  const title = app.overlays[app.overlays.length - 1];
+  const rows = title.rows(app).map((r: any) => r.id);
+  app.handleKeyPublic({ key: 'c', shift: false, ctrl: false, alt: false, code: '' });
+  await new Promise(r => setTimeout(r, 600));
+  return { rows, started: app.started, name: app.g?.player?.name, autoplay: !!app.g?.options?.autoplay };
+});
+
 // The saved-heroes screen itself renders.
 await page.evaluate(() => {
   const app = (window as any).__game.api.app;
   app.quitToTitle();
-  app.handleKeyPublic({ key: 'c', shift: false, ctrl: false, alt: false, code: '' });
+  app.handleKeyPublic({ key: 's', shift: false, ctrl: false, alt: false, code: '' });
 });
 await page.waitForTimeout(300);
 await page.screenshot({ path: path.join(OUT, 'smoke-saves.png') });
@@ -252,6 +266,29 @@ const sheets = { male: await drawHeroSheet(page, { scale: 2, sex: 'male' }), fem
 fs.writeFileSync(path.join(OUT, 'smoke-heroes.png'), Buffer.from(sheets.male.png.split(',')[1], 'base64'));
 const heroDupes = [...duplicateHeroes(sheets.male.hashes).map(d => 'male ' + d), ...duplicateHeroes(sheets.female.hashes).map(d => 'female ' + d)];
 const heroCombos = sheets.male.races * sheets.male.classes;
+
+// Death is not the end: the hero falls, and a moment later wakes in the town naked, keeping its
+// level, with the bot still playing it.
+const respawn = await page.evaluate(() => {
+  const api = (window as any).__game.api, app = api.app, g = api.game;
+  g.options.autoplay = true;
+  const lev = g.player.lev, gold = g.player.gold;
+  g.player.dead = true; g.player.deathCause = 'a smoke test';
+  // The fall stays on screen for a moment; the state is read the frame the hero wakes, before the
+  // bot has had a turn to go shopping.
+  for (let i = 0; i < 200 && g.player.dead; i++) api.step();
+  const p = g.player;
+  return { dead: p.dead, depth: p.depth, deaths: p.deaths, naked: !p.equip.weapon && !p.equip.body && p.inven.length === 0, lev: p.lev === lev, gold: p.gold >= gold - 50, full: p.chp === p.mhp, autoplay: g.options.autoplay, deathScreen: app.overlays.length > 0 };
+});
+
+// NEW GAME lets chance build the hero and hands it to the bot at once.
+const fresh = await page.evaluate(async () => {
+  const app = (window as any).__game.api.app;
+  app.quitToTitle();
+  app.handleKeyPublic({ key: 'n', shift: false, ctrl: false, alt: false, code: '' });
+  await new Promise(r => setTimeout(r, 200));
+  return { started: app.started, overlays: app.overlays.length, autoplay: !!app.g.options.autoplay, depth: app.g.player.depth, name: app.g.player.name };
+});
 
 // A second hero made through the full birth API with point-bought stats and birth options.
 await page.evaluate(() => (window as any).__game.api.newGame2('Smoke2', 'ent', 'necromancer', 'female', { stats: { STR: 12, INT: 17, WIS: 10, DEX: 10, CON: 12, CHR: 10 }, options: { ironman: true, smartMonsters: true }, history: 'Grown in a test.' }));
@@ -294,5 +331,9 @@ ok(autoState.on || autoState.dead, 'autoplay stayed on while the bot played');
 ok(autoStopped, 'a key press took control back from autoplay');
 ok(heroCombos === 187 && heroDupes.length === 0, `every race and class combination has distinct art (${heroCombos} combinations x 2 sexes${heroDupes.length ? '; same: ' + heroDupes.slice(0, 5).join(', ') + (heroDupes.length > 5 ? ` and ${heroDupes.length - 5} more` : '') : ''})`);
 ok(state3.cls === 'necromancer' && state3.ironman === true && state3.int >= 17 && state3.hp > 0, `birth with point-buy and birth options works (${JSON.stringify(state3)})`);
+ok(continued.rows[0] === 'continue' && continued.started && continued.name === 'Smoke' && continued.autoplay, `CONTINUE heads the title screen and resumes the latest hero with the bot playing (${JSON.stringify(continued)})`);
+ok(!respawn.dead && respawn.depth === 0 && respawn.deaths === 1 && respawn.naked && respawn.lev && respawn.gold && respawn.full && respawn.autoplay && !respawn.deathScreen,
+  `a hero that dies wakes in the town naked, keeping its level and gold, and the bot plays on (${JSON.stringify(respawn)})`);
+ok(fresh.started && fresh.overlays === 0 && fresh.autoplay && fresh.depth === 0 && !!fresh.name, `NEW GAME starts a random hero with the bot playing (${JSON.stringify(fresh)})`);
 console.log(bad ? '\nSMOKE FAILED' : '\nSMOKE OK: the game runs in a browser with no build step. Screenshots in dist/.');
 process.exit(bad ? 1 : 0);

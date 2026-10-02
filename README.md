@@ -26,6 +26,21 @@ npm run build      # dist/index.html, one self-contained file
 
 ## Playing
 
+**The hero plays itself.** NEW GAME on the title screen lets chance build a hero -- race, bloodline,
+class, path, stats, name and history -- and hands it straight to the autoplay bot (below). CONTINUE
+heads the title screen whenever a hero is saved, with a summary of it underneath (level, where it
+is, how deep it has been, gold, kills and deaths), and picks it back up the same way. Any key takes
+control back, and `ctrl+A` hands it over again. BUILD A HERO is the full birth screen, for choosing
+everything yourself; SAVED HEROES lists every hero kept in the browser.
+
+**Death is a setback, not the end.** A hero who dies wakes in the town -- at dawn, if it fell in the
+night -- naked and with an empty pack: equipment, quiver, potions, scrolls and books are gone. Its
+level, experience, stats (drained ones restored), spells, gold, the deepest level it reached and
+everything it has learnt about flavours and monsters are kept, and the bot, if it was playing, goes
+on playing. A hero who dies with less than 100 gold (the least a new hero starts with) is given the
+difference by the temple, enough for a torch and a blade. Only retiring (`Q`) ends a hero's story,
+and that is what puts it in the Hall of Heroes.
+
 Arrows, the numpad or `hjklyubn` move; hold a key to keep walking, `Shift` runs. Walking into
 things does the obvious: monsters are attacked, doors opened (a key from your pouch unlocks a
 locked one, otherwise you pick it), rubble and mineral veins are dug, a shop door enters the shop.
@@ -59,8 +74,8 @@ reveals what is being left behind.
 On a phone, touch anywhere: a thumb pad and three pages of command buttons appear, and the menus
 get a navigation bar. The `touchControls` option forces them on with a mouse.
 
-`ctrl+A` (or the **Autoplay** game option under `=`) hands the hero to a bot: it shops for rations,
-Cure Light Wounds and Phase Door, walks into the dungeon, and explores it the way a player does --
+`ctrl+A` (or the **Autoplay** game option under `=`) hands the hero to a bot: it shops, walks into
+the dungeon, and explores it the way a player does --
 it picks a direction and keeps to it, following a corridor to its end and crossing a room to its far
 door before it turns back for what it passed. It digs through rubble in its way and veins that show
 treasure, throws oil and fires arrows at what comes, rests when it is safe, drinks when it is not,
@@ -73,8 +88,24 @@ rest between, a floating eye is shot from a distance and never stood beside, and
 mouse on it is still worth exploring until the mice have overrun it. Out of cures too far down for
 the stairs home to be worth the walk, it reads a Word of Recall, shops, and reads the second one to
 be dropped back where it left off. It plays with the same commands you have and knows only what you
-know -- no revealed map, no free healing -- so it dies like anyone else, just not on the first floor
-every time. Any key takes control back.
+know -- no revealed map, no free healing, no peeking at what an unknown flavour really is -- so it
+dies like anyone else, then wakes in the town, re-equips and goes back down. Any key takes control
+back.
+
+The bot uses its pack the way a player does. It tries unknown potions, scrolls, staffs and rods
+when it is quiet and healthy enough to take the worst the flavour could turn out to be (never one
+that could be a Potion of Death at that depth), and points unknown wands at something weak. It
+drinks the Potions of Strength it finds and reads the Scrolls of Enchant Weapon, reads Identify on
+rings, amulets and gear that feels good, Magic Mapping and Door/Stair Location on a new level, and
+Remove Curse when something cursed is stuck on it; it drinks Heroism, Berserk Strength or Speed and
+reads Blessing before a fight that matters, chooses the cure that fits the wound, and throws out
+and ignores what it has learnt is rubbish. It wears whatever makes it stronger by its whole measure
+-- blows, armour, speed, hit points, mana, resistances, worked out as the game works them out --
+judging unidentified gear by its kind and its feel, and never putting on anything that feels
+cursed. In town it sells everything it does not need at whichever shop buys it, then buys what it
+is short of, most urgent first: a light, a meal, a weapon, cures, armour, escapes, its books, the
+rest of the kit, and upgrades from the armoury and the weaponsmith when there is gold to spare --
+keeping back enough to buy the essentials again after a death.
 
 Birth also asks for a **bloodline** and a **path**. A bloodline is one of three sub-races, and is
 small: a point of one stat for a point of another, plus one perk. A path is one of three
@@ -92,8 +123,8 @@ points), a short history, and the birth options: connected
 stairs, ironman, no selling, smart monsters, persistent levels and random artifacts. Persistent
 levels do not sit still while you are away -- things wander, things arrive, and the generators keep
 generating. Random artifacts roll a fresh set of 121 from the game seed instead of the famous ones.
-RANDOM HERO on the title screen (or `*` anywhere on the birth screen) skips the questions: chance
-picks the race, class, sex, stats, name and history and the game begins.
+NEW GAME on the title screen (or `*` anywhere on the birth screen) skips the questions: chance
+picks the race, class, sex, stats, name and history and the game begins, with the bot playing.
 Smart monsters no longer read your equipment: they learn what you resist by watching their attacks
 fail, and forget it when you die. Monster memory (what each race does, what it resists, how many
 you have killed) carries over between heroes; several heroes can be saved at once and are listed on
@@ -131,6 +162,7 @@ src/game/                pure game logic: no DOM anywhere below here
   lore.ts                monster memory; recall.ts writes it up; dump.ts the character dump
   options.ts             birth and game options; scores.ts the Hall of Heroes
   autoplay.ts            the bot behind the Autoplay option (shared with the headless simulator)
+  autoplayKit.ts         the bot's kit: what it tries, drinks, reads, wears, sells and buys
   gen/vaults.ts          hand-drawn lesser and greater vaults in Angband's vault.txt glyphs
   data/                  monsters (510), objects (435 kinds, 112 egos, 121 artifacts), spells (203 in five realms), races, classes
   data/subraces.ts       51 bloodlines, three per race: a stat tweak and one small perk

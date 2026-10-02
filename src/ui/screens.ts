@@ -25,7 +25,8 @@ import { distance } from '../game/util.ts';
 import { createPlayer } from '../game/player.ts';
 import { makeItem } from '../game/items.ts';
 import { buildHero, drawHero, type HeroSprite } from './hero.ts';
-import { BirthScreen2, HighScoresOverlay, RecallOverlay, SaveSlotsOverlay, type Ui2 } from './screens2.ts';
+import { BirthScreen2, HighScoresOverlay, RecallOverlay, SaveSlotsOverlay, slotSummary, type Ui2 } from './screens2.ts';
+import type { SaveMeta } from './storage.ts';
 import { chestTrapName, realmWords } from '../game/commands.ts';
 import { wrapText } from '../game/recall.ts';
 import { characterDump } from '../game/dump.ts';
@@ -504,6 +505,7 @@ export class CharSheet implements Overlay {
     L(x + 300, ly, 'FOOD', foodState(p.food)); ly += 11;
     L(x + 300, ly, 'MAX DEPTH', p.maxDepth ? `${p.maxDepth * 50} FT` : 'TOWN'); ly += 11;
     L(x + 300, ly, 'KILLS', String(p.kills)); ly += 11;
+    L(x + 300, ly, 'DEATHS', String(p.deaths || 0), p.deaths ? '#ff8080' : TEXT); ly += 11;
     L(x + 300, ly, 'SCORE', String(score(g)), GOLD); ly += 11;
     ly = y + 84;
     const sk = b.skills;
@@ -596,6 +598,7 @@ const HELP = [
   'TOUCH: tap anywhere on a phone for a thumb pad and command buttons; menus get a navigation bar.',
   'Before you dive: a lantern, flasks of oil, Cure Light Wounds, Phase Door, and rations.',
   'AUTOPLAY (ctrl+A, or the option in =) hands the hero to a bot that shops, explores, fights and dives. Any key takes it back.',
+  'DEATH is a setback, not the end: you wake in the town naked with an empty pack, but keep your level, spells and gold (at least 100).',
 ];
 export class HelpOverlay implements Overlay {
   draw(ctx: CanvasRenderingContext2D): void {
@@ -666,12 +669,37 @@ export class LookMode implements Overlay {
 // ---------------------------------------------------------------------------------------------
 // Title, birth and death
 
-/** How many lines the title menu has (NEW GAME, RANDOM HERO, CONTINUE, HALL OF HEROES, IMPORT SAVE, HELP). */
-const TITLE_ITEMS = 6;
+/** A line of the title menu: what it does, what it says, its shortcut keys, and where it sits. */
+type TitleChoice = 'continue' | 'new' | 'custom' | 'saves' | 'hall' | 'import' | 'help';
+interface TitleRow { id: TitleChoice; label: string; keys: string; y: number; h: number }
+const TITLE_TOP = 222, TITLE_ROW = 22, TITLE_CARD = 40;
 
+/**
+ * The title screen. The game is meant to be left playing itself, so the two lines that matter are
+ * CONTINUE -- the latest hero, summed up underneath so you can see how it is getting on, handed
+ * straight back to the bot -- and NEW GAME, which lets chance build a hero and sets the bot to
+ * playing it at once. A hero built by hand is still a line further down, and so is the list of
+ * every saved hero.
+ */
 export class TitleScreen implements Overlay {
   opaque = true;
   sel = 0;
+  /** The latest hero's sprite for the CONTINUE card, built once per slot. */
+  private card: { id: string; sprite: HeroSprite } | null = null;
+  private latest(ui: Ui): SaveMeta | null { return (ui as Ui2).slots?.find(s => !s.dead) ?? null; }
+  rows(ui: Ui): TitleRow[] {
+    const out: TitleRow[] = [];
+    let y = TITLE_TOP;
+    const add = (id: TitleChoice, label: string, keys: string, h = TITLE_ROW) => { out.push({ id, label, keys, y, h }); y += h; };
+    if (this.latest(ui)) add('continue', 'CONTINUE', 'cC', TITLE_ROW + TITLE_CARD);
+    add('new', 'NEW GAME', 'nNrR*');
+    add('custom', 'BUILD A HERO', 'bB');
+    if ((ui as Ui2).slots?.length) add('saves', 'SAVED HEROES', 'sS');
+    add('hall', 'HALL OF HEROES', 'hH');
+    add('import', 'IMPORT SAVE', 'iI');
+    add('help', 'HELP', '?');
+    return out;
+  }
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
     ctx.fillStyle = '#0b0a10'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     // A parade of monsters along the bottom.
@@ -680,38 +708,67 @@ export class TitleScreen implements Overlay {
       const px = 60 + i * 76 + Math.sin(ui.frame / 40 + i) * 4;
       drawMonsterSprite(ctx, kinds[i], px, VIEW_H - 70, { color: ['#7a9a3a', '#b0c0e0', '#e04040', '#c03060', '#e8e8e0', '#6a9a5a', '#5a4a4a', '#c0a080', '#e0e0ff', '#8080c0', '#c08040', '#40a060'][i], color2: '#ffd040', size: 1.6, phase: (ui.frame / 120 + i * 0.1) % 1, facing: i % 2 ? -1 : 1 });
     }
-    drawTextOutlined(ctx, 'GAUNTLET', VIEW_W / 2, 70, { size: 7, color: '#ffd040', align: 'center', outline: '#3a1c00', thickness: 3 });
-    drawTextOutlined(ctx, 'OF ANGBAND', VIEW_W / 2, 140, { size: 4, color: '#e04040', align: 'center', outline: '#2a0a10', thickness: 2 });
-    drawText(ctx, 'A PROCEDURAL DUNGEON OF PITS, WYRMS AND GENERATORS', VIEW_W / 2, 190, { size: 1, color: '#8a869a', align: 'center' });
-    const items = [['NEW GAME', true], ['RANDOM HERO', true], ['CONTINUE', ui.hasSave()], ['HALL OF HEROES', true], ['IMPORT SAVE', true], ['HELP', true]] as [string, boolean][];
-    for (let i = 0; i < items.length; i++) {
-      const [t, ok] = items[i];
-      drawText(ctx, (this.sel === i ? '> ' : '  ') + t, VIEW_W / 2, 232 + i * 22, { size: 2, color: !ok ? '#4a4656' : this.sel === i ? HI : TEXT, align: 'center' });
+    drawTextOutlined(ctx, 'GAUNTLET', VIEW_W / 2, 64, { size: 7, color: '#ffd040', align: 'center', outline: '#3a1c00', thickness: 3 });
+    drawTextOutlined(ctx, 'OF ANGBAND', VIEW_W / 2, 134, { size: 4, color: '#e04040', align: 'center', outline: '#2a0a10', thickness: 2 });
+    drawText(ctx, 'A PROCEDURAL DUNGEON OF PITS, WYRMS AND GENERATORS', VIEW_W / 2, 184, { size: 1, color: '#8a869a', align: 'center' });
+    const rows = this.rows(ui);
+    if (this.sel >= rows.length) this.sel = 0;
+    rows.forEach((r, i) => {
+      drawText(ctx, (this.sel === i ? '> ' : '  ') + r.label, VIEW_W / 2, r.y, { size: 2, color: this.sel === i ? HI : TEXT, align: 'center' });
+      if (r.id === 'continue') this.drawCard(ctx, ui, r.y + TITLE_ROW - 2);
+    });
+    const last = rows[rows.length - 1];
+    drawText(ctx, 'ARROWS + ENTER    THE HERO PLAYS ITSELF: ANY KEY TAKES OVER    WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, last.y + last.h + 6, { size: 1, color: '#5a5666', align: 'center' });
+  }
+  /** Who the latest hero is and how far it has got, with the hero itself standing beside it. */
+  private drawCard(ctx: CanvasRenderingContext2D, ui: Ui, y: number): void {
+    const s = this.latest(ui);
+    if (!s) return;
+    const [who, how] = slotSummary(s, Date.now());
+    const w = Math.max(measureText(who, 1), measureText(how, 1)) + 72, x = Math.round((VIEW_W - w) / 2);
+    rrect(ctx, x, y, w, TITLE_CARD - 6, 4, '#16131f', '#3a3450', 1);
+    drawText(ctx, who, x + 52, y + 7, { size: 1, color: '#ffe8a0' });
+    drawText(ctx, how, x + 52, y + 19, { size: 1, color: DIM });
+    if (!this.card || this.card.id !== s.id) {
+      try { this.card = { id: s.id, sprite: buildHero(createPlayer(s.name, s.race, s.cls, s.sex || 'male', undefined, s.subrace, s.subclass)) }; }
+      catch { this.card = null; }
     }
-    drawText(ctx, 'ARROWS + ENTER      WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, 232 + items.length * 22 + 8, { size: 1, color: '#5a5666', align: 'center' });
+    if (this.card) {
+      ctx.save();
+      ctx.translate(x + 26, y + TITLE_CARD - 10);
+      ctx.scale(1.1, 1.1);
+      drawHero(ctx, this.card.sprite, 0, 0, 1);
+      ctx.restore();
+    }
   }
   key(e: KeyEvent, ui: Ui): boolean {
-    if (e.key === 'ArrowDown' || e.key === 'j') this.sel = (this.sel + 1) % TITLE_ITEMS;
-    else if (e.key === 'ArrowUp' || e.key === 'k') this.sel = (this.sel + TITLE_ITEMS - 1) % TITLE_ITEMS;
-    else if (e.key === 'Enter' || e.key === ' ') this.choose(ui);
-    else if (e.key === 'n' || e.key === 'N') { this.sel = 0; this.choose(ui); }
-    else if (e.key === 'r' || e.key === 'R' || e.key === '*') { this.sel = 1; this.choose(ui); }
-    else if (e.key === 'c' || e.key === 'C') { this.sel = 2; this.choose(ui); }
-    else if (e.key === 'h' || e.key === 'H') { this.sel = 3; this.choose(ui); }
-    else if (e.key === '?') ui.push(new HelpOverlay());
+    const rows = this.rows(ui);
+    if (e.key === 'ArrowDown' || e.key === 'j') this.sel = (this.sel + 1) % rows.length;
+    else if (e.key === 'ArrowUp' || e.key === 'k') this.sel = (this.sel + rows.length - 1) % rows.length;
+    else if (e.key === 'Enter' || e.key === ' ') this.choose(ui, rows[this.sel]?.id);
+    else {
+      const i = rows.findIndex(r => r.keys.includes(e.key));
+      if (i >= 0) { this.sel = i; this.choose(ui, rows[i].id); }
+    }
     return true;
   }
-  choose(ui: Ui): void {
-    if (this.sel === 0) ui.push(new BirthScreen2());
-    else if (this.sel === 1) { const b = new BirthScreen2(); ui.push(b); b.randomStart(ui); } // chance picks everything and the game begins
-    else if (this.sel === 2) ui.push(new SaveSlotsOverlay());
-    else if (this.sel === 3) ui.push(new HighScoresOverlay());
-    else if (this.sel === 4) (ui as Ui2).importSave();
-    else ui.push(new HelpOverlay());
+  choose(ui: Ui, id: TitleChoice | undefined): void {
+    const u = ui as Ui2;
+    switch (id) {
+      case 'continue': { const s = this.latest(ui); if (s) u.loadSlot(s.id, true); break; }
+      // Chance picks everything, the game begins, and the bot takes the hero (see BirthScreen2.start).
+      case 'new': { const b = new BirthScreen2(); ui.push(b); b.randomStart(ui); break; }
+      case 'custom': ui.push(new BirthScreen2()); break;
+      case 'saves': ui.push(new SaveSlotsOverlay()); break;
+      case 'hall': ui.push(new HighScoresOverlay()); break;
+      case 'import': u.importSave(); break;
+      case 'help': ui.push(new HelpOverlay()); break;
+    }
   }
   click(x: number, y: number, ui: Ui): boolean {
-    const i = Math.floor((y - 226) / 22);
-    if (i >= 0 && i < TITLE_ITEMS && Math.abs(x - VIEW_W / 2) < 140) { this.sel = i; this.choose(ui); }
+    const rows = this.rows(ui);
+    const i = rows.findIndex(r => y >= r.y - 6 && y < r.y - 6 + r.h);
+    if (i >= 0 && Math.abs(x - VIEW_W / 2) < (rows[i].id === 'continue' ? 330 : 140)) { this.sel = i; this.choose(ui, rows[i].id); }
     return true;
   }
 }
@@ -816,11 +873,14 @@ export class DeathScreen implements Overlay {
     const g = ui.g, p = g.player;
     const w = 520, h = 300, x = (VIEW_W - w) / 2, y = (VIEW_H - h) / 2;
     box(ctx, x, y, w, h);
-    drawTextOutlined(ctx, g.totalWinner ? 'YOU ARE VICTORIOUS' : 'RIP', x + w / 2, y + 16, { size: 4, color: g.totalWinner ? GOLD : '#ff4040', align: 'center', outline: '#120c14', thickness: 2 });
+    // Death no longer ends a hero (they wake in the town), so this screen is reached by retiring.
+    const retired = p.deathCause === 'retirement';
+    drawTextOutlined(ctx, g.totalWinner ? 'YOU ARE VICTORIOUS' : retired ? 'RETIRED' : 'RIP', x + w / 2, y + 16, { size: 4, color: g.totalWinner ? GOLD : retired ? HI : '#ff4040', align: 'center', outline: '#120c14', thickness: 2 });
+    const deaths = p.deaths || 0;
     const lines = [
       `${p.name.toUpperCase()} THE ${title(p).toUpperCase()}`,
       `${RACE_BY_ID[p.race].name.toUpperCase()} ${CLASS_BY_ID[p.cls].name.toUpperCase()}, LEVEL ${p.lev}`,
-      g.totalWinner ? 'BANISHED THE LORD OF DARKNESS AND RETIRED IN GLORY' : `KILLED BY ${p.deathCause.toUpperCase()}`,
+      g.totalWinner ? 'BANISHED THE LORD OF DARKNESS AND RETIRED IN GLORY' : retired ? `HUNG UP THE SWORD AFTER ${deaths} DEATH${deaths === 1 ? '' : 'S'}` : `KILLED BY ${p.deathCause.toUpperCase()}`,
       p.depth === 0 ? 'IN THE TOWN' : `ON DUNGEON LEVEL ${p.depth} (${p.depth * 50} FT)`,
       '',
       `${p.kills} KILLS    ${p.gold} GOLD    ${p.maxExp} EXP    DEEPEST ${p.maxDepth * 50} FT`,

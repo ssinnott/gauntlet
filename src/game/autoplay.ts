@@ -8,19 +8,27 @@
 // does to the monster, and so how many hit points killing the thing would cost. Anything dearer
 // than it can spare is shot at from a distance, walked round or left behind on the stairs, which
 // is what keeps a first-level hero alive on the first floor.
+//
+// What it does with things -- trying unknown flavours, drinking and reading the right one at the
+// right time, wearing what is better, selling what it does not need and buying what it does --
+// lives in autoplayKit.ts.
 import { FOOD_HUNGRY, FOOD_WEAK, INVEN_MAX, QUIVER_SLOTS } from '../constants.ts';
-import { T, F, DIR_DX, DIR_DY, dirOf, isPassable, isShop, type BlowEffect, type Item, type FloorItem, type Monster, type ObjectKind, type Pos, type SlotName, type Effect, type SpellDef, type Timed } from './types.ts';
+import { T, F, DIR_DX, DIR_DY, dirOf, isPassable, isShop, type BlowEffect, type Item, type FloorItem, type Monster, type ObjectKind, type Pos, type Effect, type SpellDef, type Timed } from './types.ts';
 import { tileAt, flagAt, monsterAt, itemsAt, inBounds, projectPath } from './level.ts';
-import { kindOf, isKnown, isAmmo, isWearable, wieldSlot, itemName, itemDice, itemFlags, canStack, getNextItemId, setNextItemId } from './items.ts';
+import { kindOf, isAmmo, itemDice, itemFlags, canStack } from './items.ts';
 import { isIgnored, itemQuality, alwaysPickUp } from './ignore.ts';
 import { CLASS_BY_ID } from './data/classes.ts';
 import { isSong } from './data/songs.ts';
-import { maintainStore, storeBuy, storeSell, storeWants, buyPrice, sellPrice } from './stores.ts';
-import { refreshBonuses } from './effectsCore.ts';
 import { raceOf, hasMFlag, energyGain, monsterSpeed } from './monster.ts';
-import { meleeSkill, bowSkill } from './player.ts';
+import { meleeSkill, bowSkill, hasQuirk } from './player.ts';
 import { castsFromHealth } from './quirks.ts';
 import { randint0, distance } from './util.ts';
+import {
+  type Act, hasEffect, known, findItem, countKind, curesTimed, avgDice, hitChance, effectDamage, roleOf, ownBook, canRead,
+  sampleAct, aimTestAct, choreAct, detectAct, junkAct, healPotion, healCount, escapeItem, buffAct, manaAct, crowdItem, massAct,
+  mealItem, gearAct, gearGain, noteCarried, forgetCarried, storesWorthVisiting, shopVisit, useAct, haulValue,
+  homeDepth, RESTOCK_DEPTH, DISABLE_ONE, DISABLE_ALL,
+} from './autoplayKit.ts';
 import * as C from './commands.ts';
 import type { Game } from './state.ts';
 
@@ -30,24 +38,6 @@ const PANIC = 0.45;
 const HURT = 0.7;
 /** The share of maximum hit points the bot means to still have when a fight it picked is over. */
 const MARGIN = 0.3;
-/** Gold kept back when shopping, so there is always something for a potion. */
-const RESERVE = 20;
-/** What the bot likes to leave town with. */
-const SHOPPING: [string, number][] = [['ration', 5], ['potion_clw', 6], ['scroll_phase_door', 4], ['flask_oil', 15], ['torch', 3]];
-/**
- * The way home, and the way back down. It is never sold, but it costs what a young hero's whole
- * quiver of cures costs, so it is only bought once the hero is going deep enough for the walk
- * home to be worth more than another potion -- by its own level, before it needs one.
- */
-const RECALL = 'scroll_word_of_recall';
-function shoppingList(g: Game): [string, number][] {
-  const p = g.player;
-  const books = wantedBooks(g);
-  if (g.options.ironman || (depthFor(p.lev) <= RESTOCK_DEPTH && p.maxDepth <= RESTOCK_DEPTH)) return [...SHOPPING, ...books];
-  return [...SHOPPING, [RECALL, 2], ...books];
-}
-/** At or above this depth it walks back up to town for potions; below it, it reads its way up. */
-const RESTOCK_DEPTH = 3;
 
 // -----------------------------------------------------------------------------------------
 // Looking around
@@ -114,33 +104,11 @@ function fleeDir(g: Game, from: number): number {
   }
   return best;
 }
-function hasEffect(e: Effect | undefined, kind: Effect['kind']): boolean {
-  if (!e) return false;
-  if (e.kind === kind) return true;
-  return e.kind === 'seq' && e.effects.some(s => hasEffect(s, kind));
-}
-/** Items the bot understands: unknown flavours are never drunk blind. */
-function known(g: Game, it: Item): boolean { return isKnown(it, g.flavors); }
-function findItem(g: Game, pred: (it: Item) => boolean): Item | null {
-  for (const it of g.player.inven) if (pred(it)) return it;
-  return null;
-}
-function countKind(g: Game, kindId: string): number {
-  let n = 0;
-  for (const it of [...g.player.inven, ...g.player.quiver]) if (it.kind === kindId) n += it.number;
-  return n;
-}
-function healingPotion(g: Game): Item | null {
-  return findItem(g, it => kindOf(it).tval === 'potion' && known(g, it) && hasEffect(kindOf(it).effect, 'heal'));
-}
-function escapeScroll(g: Game): Item | null {
-  return findItem(g, it => kindOf(it).tval === 'scroll' && known(g, it) && hasEffect(kindOf(it).effect, 'teleport') && !g.player.timed.blind && !g.player.timed.confused);
-}
-/** A Word of Recall the hero could read now. Reading one while its word is already spoken cancels it. */
+/** A Word of Recall the hero could read (or a Rod of Recall it could zap) now. Using one while its word is already spoken cancels it. */
 function recallScroll(g: Game): Item | null {
   const p = g.player;
   if (g.options.ironman || p.timed.recall || p.timed.blind || p.timed.confused) return null;
-  return findItem(g, it => kindOf(it).tval === 'scroll' && known(g, it) && hasEffect(kindOf(it).effect, 'recall'));
+  return findItem(g, it => known(g, it) && hasEffect(kindOf(it).effect, 'recall') && (kindOf(it).tval === 'scroll' ? canRead(g) : kindOf(it).tval === 'rod' && it.timeout <= 0));
 }
 /**
  * Whether resting would do anything at all. Below the weak mark the game cancels a rest the turn
@@ -149,20 +117,12 @@ function recallScroll(g: Game): Item | null {
  * because resting came before walking and the rest never happened. Hungry, it should be moving.
  */
 function canRest(g: Game): boolean { return g.player.food >= FOOD_WEAK; }
-/** A proper meal; a hero getting weak from hunger will take a scrap of anything that is not a mushroom. */
-function foodItem(g: Game): Item | null {
-  const least = g.player.food < FOOD_WEAK ? 1 : 500;
-  return findItem(g, it => { const k = kindOf(it); return k.tval === 'food' && (k.pval || 0) >= least && !k.id.startsWith('mushroom_'); });
-}
 
 // -----------------------------------------------------------------------------------------
-// The rest of the kit: spells, staves, rods and the potions that are not cures for wounds. A
-// caster that only ever throws its biggest bolt runs dry and dies with a Phase Door it never
-// spoke, so this decides what the hero can pay for, what it holds back, and which trick answers
-// whatever is standing over it.
+// Spells, staves and rods. A caster that only ever throws its biggest bolt runs dry and dies with
+// a Phase Door it never spoke, so this decides what the hero can pay for, what it holds back, and
+// which trick answers whatever is standing over it.
 
-/** Something the bot has decided to do, handed back so the caller can choose to spend the turn. */
-type Act = () => void;
 /**
  * What the hero may spend on a spell right now. A blood mage holds no mana at all and pays in
  * hit points, so its pool is its own life: a quarter of it for an attack, and down to the last
@@ -173,13 +133,6 @@ function spendable(g: Game, urgent = false): number {
   if (!castsFromHealth(p)) return p.csp;
   if (urgent) return Math.max(0, p.chp - 1);
   return Math.max(0, Math.min(p.chp - Math.ceil(p.mhp * PANIC), Math.ceil(p.mhp / 4)));
-}
-/** Does this effect clear a condition the hero is under? */
-function curesTimed(e: Effect | undefined, t: Timed): boolean {
-  if (!e) return false;
-  if (e.kind === 'seq') return e.effects.some(x => curesTimed(x, t));
-  if (e.kind === 'heal' || e.kind === 'cure') return (e.cure || []).includes(t);
-  return e.kind === 'timed' && e.effect === t && !!e.clear;
 }
 /**
  * The spells the hero could get off this turn, cheapest first. Blind and confused are filtered
@@ -221,9 +174,9 @@ function reserveMana(g: Game): number {
   if (castsFromHealth(p) || !p.msp) return 0;
   let n = 0;
   const out = cheapestSpell(g, s => hasEffect(s.effect, 'teleport'));
-  if (out && !escapeScroll(g)) n += C.spellMana(g, out);
+  if (out && !escapeItem(g, false)) n += C.spellMana(g, out);
   const mend = cheapestSpell(g, s => hasEffect(s.effect, 'heal'));
-  if (mend && !healingPotion(g)) n += C.spellMana(g, mend);
+  if (mend && !healCount(g)) n += C.spellMana(g, mend);
   return Math.min(n, Math.floor(p.msp / 2));
 }
 /** The conditions that stop a hero acting at all; a cure for one of these is worth a spell slot. */
@@ -243,35 +196,11 @@ function studyChoice(g: Game): string | undefined {
     effectDamage(s.effect) > 0 || s.effect.kind === 'crush' ? 0
       : hasEffect(s.effect, 'heal') ? 1
       : hasEffect(s.effect, 'teleport') ? 2
-      : DISABLE.includes(s.effect.kind) ? 3
-      : CROWD.includes(s.effect.kind) ? 4
+      : DISABLE_ONE.includes(s.effect.kind) ? 3
+      : DISABLE_ALL.includes(s.effect.kind) ? 4
       : BLOCKERS.some(t => curesTimed(s.effect, t)) ? 5 : 6;
   // Cheapest first within a rank: a hero has to be able to pay for what it learns.
   return [...cands].sort((a, b) => rank(a) - rank(b) || C.spellMana(g, a) - C.spellMana(g, b))[0].id;
-}
-/** The store that sells the hero's own kind of book, or -1 for a hero with no realm. */
-function bookStore(g: Game): number {
-  const realm = CLASS_BY_ID[g.player.cls]?.realm;
-  return !realm ? -1 : realm === 'prayer' || realm === 'nature' ? 3 : 5;
-}
-/**
- * The books the hero ought to be carrying. Its first one above all: fire and acid burn books, and
- * a caster that has lost its own casts nothing whatever -- the bot used to walk on with an empty
- * spell list and never think to buy another. Then the next book up, but only once it is owed a
- * spell and carries nothing that could teach it one.
- */
-function wantedBooks(g: Game): [string, number][] {
-  const p = g.player, realm = CLASS_BY_ID[p.cls]?.realm;
-  if (!realm) return [];
-  const owned = C.knownBooks(g).map(b => b.kind);
-  if (!owned.length) return [[`${realm}_book_1`, 1]];
-  if (C.newSpellCount(g) <= 0) return [];
-  if (C.spellsAvailable(g).some(s => !p.learned.includes(s.id) && C.spellLevel(g, s) <= p.lev)) return [];
-  for (const s of C.classSpells(g)) {
-    if (p.learned.includes(s.id) || C.spellLevel(g, s) > p.lev || owned.includes(s.book)) continue;
-    return [[s.book, 1]];
-  }
-  return [];
 }
 
 /** A staff, wand or rod the hero could use now: one it knows, with a charge left or its rod cooled. */
@@ -317,17 +246,19 @@ function lightFix(g: Game): Act | null {
 /** Fuel below this and the bot tops up while it is quiet: the game warns at 100 and 50. */
 const LIGHT_LOW = 500;
 
-/** A potion the hero knows will clear a condition. */
+/** A potion (or mushroom) the hero knows will clear a condition. */
 function curePotion(g: Game, t: Timed): Item | null {
-  return findItem(g, it => kindOf(it).tval === 'potion' && known(g, it) && curesTimed(kindOf(it).effect, t));
+  return findItem(g, it => (kindOf(it).tval === 'potion' || kindOf(it).tval === 'food') && known(g, it) && curesTimed(kindOf(it).effect, t));
 }
 /**
  * Out of here: a scroll first, since paper is cheaper than the mana a caster still needs, then a
  * word, then a staff or rod -- which is also the only one of the three a blinded hero can use.
+ * `far` is for the things a Phase Door only delays: something faster than the hero, or more of
+ * them than it can fight, wants Teleportation or the next level.
  */
-function escapeAct(g: Game): Act | null {
-  const scroll = escapeScroll(g);
-  if (scroll) return () => C.read(g, scroll, {});
+function escapeAct(g: Game, far = false): Act | null {
+  const scroll = escapeItem(g, far);
+  if (scroll) return useAct(g, scroll);
   const spell = pickSpell(g, s => hasEffect(s.effect, 'teleport'), spendable(g, true), 45);
   if (spell) return () => C.cast(g, spell, {});
   for (const tval of ['staff', 'rod'] as const) {
@@ -336,10 +267,13 @@ function escapeAct(g: Game): Act | null {
   }
   return null;
 }
-/** Hit points back: a potion, a prayer, or a staff of curing. */
-function healAct(g: Game): Act | null {
-  const potion = healingPotion(g);
-  if (potion) return () => C.quaff(g, potion);
+/**
+ * Hit points back: the right potion (see healPotion), a prayer, or a staff of curing. `dire` is a
+ * hero one more turn from death, who wants the strongest cure it has.
+ */
+function healAct(g: Game, dire = false): Act | null {
+  const potion = healPotion(g, dire);
+  if (potion) return () => C.quaff(g, potion.it);
   const spell = healSpell(g);
   if (spell) return () => C.cast(g, spell, {});
   for (const tval of ['staff', 'rod'] as const) {
@@ -353,7 +287,7 @@ function cureAct(g: Game, t: Timed): Act | null {
   const spell = pickSpell(g, s => curesTimed(s.effect, t), spendable(g, true), 40);
   if (spell) return () => C.cast(g, spell, {});
   const potion = curePotion(g, t);
-  if (potion) return () => C.quaff(g, potion);
+  if (potion) return useAct(g, potion);
   for (const tval of ['staff', 'rod'] as const) {
     const dev = readyDevice(g, tval, k => curesTimed(k.effect, t));
     if (dev) return deviceAct(g, dev);
@@ -364,7 +298,6 @@ function cureAct(g: Game, t: Timed): Act | null {
  * Taking one monster out of the fight, best trick first. This is what a hero with six hit points
  * has instead of a sword: the thing it cannot kill is sent away, put to sleep or frightened off.
  */
-const DISABLE: Effect['kind'][] = ['teleport_other', 'sleep_monster', 'scare_monster', 'confuse_monster', 'slow_monster'];
 function disableAct(g: Game, m: Monster): Act | null {
   const p = g.player, r = raceOf(m);
   if (!canReach(g, m)) return null;
@@ -380,7 +313,7 @@ function disableAct(g: Game, m: Monster): Act | null {
     if (kind === 'confuse_monster') return !hasMFlag(r, 'NO_CONF');
     return !hasMFlag(r, 'UNIQUE');
   };
-  for (const kind of DISABLE) {
+  for (const kind of DISABLE_ONE) {
     if (!lands(kind)) continue;
     const spell = pickSpell(g, s => s.effect.kind === kind, spendable(g, true), 45);
     if (spell) return () => C.cast(g, spell, { dir: 5, target });
@@ -391,27 +324,25 @@ function disableAct(g: Game, m: Monster): Act | null {
   }
   return null;
 }
-/** The same for a room full of them: one word over the whole crowd. */
-const CROWD: Effect['kind'][] = ['sleep_monsters', 'scare_monsters', 'confuse_monsters', 'slow_monsters'];
+/** The same for a room full of them: one word over the whole crowd, from the book, a staff or a scroll. */
 function crowdAct(g: Game): Act | null {
-  for (const kind of CROWD) {
+  for (const kind of DISABLE_ALL) {
     const spell = pickSpell(g, s => s.effect.kind === kind, spendable(g, true), 45);
     if (spell) return () => C.cast(g, spell, {});
-    const staff = readyDevice(g, 'staff', k => k.effect?.kind === kind);
-    if (staff) return () => C.useStaff(g, staff, {});
   }
-  return null;
+  const it = crowdItem(g);
+  return it ? useAct(g, it) : null;
+}
+/** A blessing from the hero's own book (Bless, Heroism, a resistance) when it is one the fight wants. */
+function buffSpell(g: Game, t: Timed): Act | null {
+  const s = pickSpell(g, sp => sp.effect.kind !== 'seq' ? sp.effect.kind === 'timed' && sp.effect.effect === t && !sp.effect.clear
+    : sp.effect.effects.some(e => e.kind === 'timed' && e.effect === t && !e.clear), Math.max(0, spendable(g) - keepMana), 30);
+  return s ? () => C.cast(g, s, {}) : null;
 }
 
 // -----------------------------------------------------------------------------------------
 // Sizing up a fight: averages only, from the dice and the to-hit rolls of combat.ts.
 
-/** The chance an attack of skill `chance` lands on armour `ac`, as testHit and the monster blows roll it. */
-function hitChance(chance: number, ac: number): number {
-  if (chance <= 0) return 0.05;
-  return 0.05 + 0.9 * Math.max(0, 1 - Math.floor(ac * 3 / 4) / chance);
-}
-const avgDice = (d: [number, number] | undefined): number => d ? d[0] * (d[1] + 1) / 2 : 0;
 /** combat.ts's blow power for the effects that differ much from a plain hit. */
 const BLOW_POWER: Partial<Record<BlowEffect, number>> = { HURT: 60, SHATTER: 60, UN_BONUS: 20, DISENCHANT: 20, UN_POWER: 15 };
 /** How many turns the monster gets for each of the hero's. */
@@ -439,17 +370,6 @@ function meleeOf(g: Game, m: Monster): number {
   const w = p.equip.weapon;
   const dam = (w ? avgDice(itemDice(w)) + w.toDam : 1) + b.toDam;
   return b.blows * hitChance(meleeSkill(p, b), r.ac) * Math.max(0, dam);
-}
-/** The damage a bolt, ball or drain does on average; anything else is not an attack. */
-function effectDamage(e: Effect | undefined): number {
-  if (!e) return 0;
-  switch (e.kind) {
-    case 'seq': return e.effects.reduce((s, x) => s + effectDamage(x), 0);
-    case 'bolt': return avgDice(e.dice) + (e.base || 0);
-    case 'ball': return e.dam + avgDice(e.dice);
-    case 'breath': case 'burst': case 'drain_life': case 'vampiric': return e.dam;
-    default: return 0;
-  }
 }
 interface Shot { dam: number; cost: number; go: () => void; }
 /**
@@ -868,6 +788,43 @@ function headFor(g: Game, x: number, y: number, shove = true): boolean {
   if (monsterAt(g.level, nx, ny) || isPassable(t) || t === T.DOOR_CLOSED || isShop(t)) { C.moveDir(g, d); return true; }
   return false;
 }
+/**
+ * Walk toward a spot in the town across ground the hero has not seen. At night only the shop doors
+ * are lit, so there is no remembered way to them at all, and the bot -- which walks remembered
+ * ground -- gave every shop up and went back down the stairs, then came straight back up for the
+ * potions it had not bought, all night long. The town is open grass and road, so unseen ground is
+ * taken to be walkable until a wall or a tree says otherwise (a bump costs no turn, and the grid
+ * is not tried twice).
+ */
+function townWalk(g: Game, x1: number, y1: number): boolean {
+  const lv = g.level, w = lv.w, p = g.player, from = p.y * w + p.x, goal = y1 * w + x1;
+  if (from === goal || !inBounds(lv, x1, y1)) return false;
+  const prev = new Int32Array(w * lv.h).fill(-1);
+  const q = [from];
+  prev[from] = from;
+  for (let head = 0; head < q.length && prev[goal] < 0; head++) {
+    const i = q[head], x = i % w, y = (i - x) / w;
+    for (let d = 1; d <= 9; d++) {
+      if (d === 5) continue;
+      const nx = x + DIR_DX[d], ny = y + DIR_DY[d], j = ny * w + nx;
+      if (!inBounds(lv, nx, ny) || prev[j] >= 0) continue;
+      if (j !== goal) {
+        const seen = (flagAt(lv, nx, ny) & F.MARK) !== 0;
+        if (seen ? !isPassable(tileAt(lv, nx, ny)) : probed.has(j)) continue;
+        if (hazard.has(j) || seenMonsterAt(g, nx, ny)) continue;
+      }
+      prev[j] = i;
+      q.push(j);
+    }
+  }
+  if (prev[goal] < 0) return false;
+  let step = goal;
+  while (prev[step] !== from) step = prev[step];
+  const sx = step % w, sy = (step - sx) / w;
+  if (!(flagAt(lv, sx, sy) & F.MARK)) probed.add(step);
+  C.moveDir(g, dirOf(sx - p.x, sy - p.y));
+  return true;
+}
 /** The unseen grid beside the hero that lies most nearly the way it is going, or 0. */
 function probeDir(g: Game): number {
   const p = g.player;
@@ -982,49 +939,42 @@ function holdCorridor(g: Game, pack: Monster[]): boolean {
 // -----------------------------------------------------------------------------------------
 // Loot: the nearest remembered item worth the walk.
 
-/** The empty slot a piece of gear would go into, minding the hero's second ring finger. */
-function emptySlot(g: Game, k: ObjectKind): SlotName | null {
-  const slot = wieldSlot(k), p = g.player;
-  if (!slot) return null;
-  if (slot === 'ring1' && p.equip.ring1) return p.equip.ring2 ? null : 'ring2';
-  return p.equip[slot] ? null : slot;
-}
-/** Is this a book of the hero's own realm? Another realm's is so much weight. */
-function ownBook(g: Game, k: ObjectKind): boolean {
-  const realm = CLASS_BY_ID[g.player.cls]?.realm;
-  return !!realm && k.tval === `${realm}_book`;
-}
 // How much the bot wants to keep a thing, worst to best. This is an order, not a price: it only
 // decides what goes over the side when the pack is full and something better is underfoot.
-const KEEP_JUNK = 0;     // cursed or broken gear: weight, and nothing else
+const KEEP_JUNK = 0;     // cursed or broken gear, learnt rubbish: weight, and nothing else
 const KEEP_DULL = 15;    // known and ordinary: a spare robe, a read scroll's twin
 const KEEP_SPARE = 30;   // an unknown flavour -- a lottery ticket, and it sells
-const KEEP_DEVICE = 45;  // wands, staves, rods: the bot fights with these
-const KEEP_GEAR = 60;    // armour and weapons it could wear or swap to
+const KEEP_DEVICE = 45;  // wands, staves, rods and the fighting draughts: the bot fights with these
+const KEEP_GEAR = 60;    // armour and weapons it means to wear
 const KEEP_KIT = 90;     // food, cures, escapes, oil, light, its own spellbooks
-const KEEP_PRIZE = 100;  // artifacts, egos, anything the hero marked to keep
+const KEEP_PRIZE = 100;  // artifacts, egos, anything the hero marked to keep, and what it will drink or read soon
 /** What the pack is worth holding on to, by the bot's lights. */
 function keepValue(g: Game, it: Item): number {
   const k = kindOf(it);
   if (it.artifact || alwaysPickUp(it)) return KEEP_PRIZE;
   const q = itemQuality(it);
   if (q === 'special' || q === 'excellent') return KEEP_PRIZE;
-  // A caster that throws its own spellbook away cannot cast again: that is never junk.
-  if (ownBook(g, k)) return KEEP_PRIZE;
-  if (k.tval === 'flask') return KEEP_KIT;
-  if (k.tval === 'light' && countKind(g, it.kind) <= 4) return KEEP_KIT;
-  if (k.tval === 'food' && (k.pval || 0) >= 500) return KEEP_KIT;
-  if (k.tval === 'potion' && known(g, it) && hasEffect(k.effect, 'heal')) return KEEP_KIT;
-  // The escapes, and the way home: a Word of Recall thrown away to make room for a rusty dagger
-  // is a walk up a dozen staircases to buy the next one.
-  if (k.tval === 'scroll' && known(g, it) && (hasEffect(k.effect, 'teleport') || hasEffect(k.effect, 'recall'))) return KEEP_KIT;
-  if (isWearable(k)) {
-    if (q === 'worthless') return KEEP_JUNK;
-    if (emptySlot(g, k)) return KEEP_GEAR;
-    return q === 'good' ? KEEP_GEAR : KEEP_DULL;
+  switch (roleOf(g, it)) {
+    // A caster that throws its own spellbook away cannot cast again: that is never junk.
+    case 'book': return ownBook(g, k) ? KEEP_PRIZE : KEEP_DULL;
+    // The escapes, and the way home: a Word of Recall thrown away to make room for a rusty dagger
+    // is a walk up a dozen staircases to buy the next one.
+    case 'heal': case 'escape': case 'recall': case 'fuel': return KEEP_KIT;
+    case 'food': return (k.pval || 0) >= 500 ? KEEP_KIT : KEEP_DULL;
+    case 'light': return countKind(g, it.kind) <= 4 ? KEEP_KIT : KEEP_DULL;
+    case 'boon': case 'acquire': case 'enchant': return KEEP_PRIZE;
+    case 'buff': case 'cure': case 'identify': case 'restore': case 'uncurse': case 'mana': case 'attack': case 'control': case 'mass': return KEEP_DEVICE;
+    case 'detect': case 'recharge': case 'ammo': return KEEP_SPARE;
+    case 'unknown': return KEEP_SPARE;
+    case 'junk': return KEEP_JUNK;
+    case 'gear': {
+      if (q === 'worthless') return KEEP_JUNK;
+      const gain = gearGain(g, it);
+      if (gain && gain.gain > 0.02) return KEEP_GEAR;
+      return q === 'good' || !known(g, it) ? KEEP_SPARE : KEEP_DULL;
+    }
+    default: return KEEP_DULL;
   }
-  if (k.tval === 'wand' || k.tval === 'staff' || k.tval === 'rod') return KEEP_DEVICE;
-  return known(g, it) ? KEEP_DULL : KEEP_SPARE;
 }
 /** The thing the bot would throw away first, or null when the pack holds nothing spare. */
 function junkInPack(g: Game): Item | null {
@@ -1091,79 +1041,30 @@ function shedForLoot(g: Game): boolean {
 }
 
 // -----------------------------------------------------------------------------------------
-// Shopping
+// Shopping: autoplayKit.ts decides what to buy and sell; here the bot walks to the shops.
 
-/**
- * Loot the bot is willing to part with: not its kit, not its own books, not gear it is using.
- * The walk to a shop and the selling itself ask the same question, so they ask it here.
- */
-function wouldSell(g: Game, it: Item): boolean {
-  const k = kindOf(it), p = g.player;
-  if (k.tval === 'gold') return false;
-  if (SHOPPING.some(w => w[0] === it.kind) || it.kind === RECALL || k.tval === 'food' || k.tval.endsWith('book')) return false;
-  if (isWearable(k) && !p.equip[wieldSlot(k) || 'weapon']) return false;
-  return true;
-}
-/** What a store would pay for everything in the pack the bot would hand over. */
-function sellableAt(g: Game, type: number): number {
-  const s = g.stores[type];
-  if (!s) return 0;
-  let n = 0;
-  for (const it of g.player.inven) if (wouldSell(g, it) && storeWants(s, it)) n += sellPrice(g, s, it) * it.number;
-  return n;
-}
-/** Gold in the pack worth crossing the town for; below this the walk costs more than it pays. */
-const SELL_WORTH = 40;
-
-/** Buy the supplies on the list, sell what the store wants and the bot will not use. */
-export function autoShop(g: Game): void {
+/** One visit to the shop the hero is standing in (see shopVisit), and it is crossed off this trip's list. */
+function autoShop(g: Game): void {
   const s = g.stores[g.inStore];
-  const p = g.player;
-  maintainStore(g, s);
-  for (const it of [...p.inven]) {
-    if (p.gold > 5000) break;
-    if (!storeWants(s, it) || !wouldSell(g, it)) continue;
-    if (sellPrice(g, s, it) <= 0) continue;
-    const sold = C.removeFromInventory(g, it, it.number);
-    storeSell(g, s, sold, sold.number);
-    refreshBonuses(g);
-  }
-  for (const [kindId, want] of shoppingList(g)) {
-    while (countKind(g, kindId) < want) {
-      const stock = s.stock.find(it => it.kind === kindId);
-      if (!stock) break;
-      const price = buyPrice(g, s, stock);
-      if (price > p.gold - RESERVE) break;
-      const bought = storeBuy(g, s, stock, 1);
-      if (!bought) break;
-      bought.id = getNextItemId(); setNextItemId(bought.id + 1);
-      if (!C.addToInventory(g, bought)) break;
-      g.msg.add(`You bought ${itemName(bought, g.flavors)} for ${price} gold.`, '#ffd040');
-    }
-  }
-  refreshBonuses(g);
+  shopVisit(g, s);
   shopped.add(s.type);
   g.inStore = -1;
 }
-/** Which store still sells something the bot is short of, or would buy what it is lugging about? */
+/**
+ * The nearest shop still worth the walk on this trip: one selling something the hero needs and
+ * can afford, or buying something it is carrying for sale -- at any price. The bot used to call at
+ * a shop only when the loot it would take was worth forty gold, so broken daggers, robes and the
+ * flavours it never learnt rode about in the pack for good.
+ */
 function wantedStore(g: Game): number {
-  const short = shoppingList(g).filter(([id, n]) => countKind(g, id) < n).map(w => w[0]);
-  const bs = bookStore(g);
-  // A caster with no book of its own is not a caster at all: that comes before food and cures.
-  if (bs >= 0 && !shopped.has(bs) && !C.knownBooks(g).length && g.player.gold >= 30) return bs;
-  if (short.length && g.player.gold >= 50) {
-    if (!shopped.has(0) && short.some(id => id === 'ration' || id === 'flask_oil' || id === 'torch' || id === RECALL)) return 0;
-    if (!shopped.has(4) && (short.includes('potion_clw') || short.includes('scroll_phase_door'))) return 4;
-    if (bs >= 0 && !shopped.has(bs) && short.some(id => id.includes('_book_'))) return bs;
-  }
-  // Nothing to buy, or nothing it can afford yet. An armful of loot is gold the hero has not
-  // picked up, and gold is what the next armful of cures is bought with -- so take it to whoever
-  // pays the most for it. A visit sells first and buys with the proceeds, so one trip does both.
-  let best = -1, bv = SELL_WORTH;
-  for (let type = 0; type <= 5; type++) {
+  const want = storesWorthVisiting(g);
+  const p = g.player;
+  let best = -1, bd = Infinity;
+  for (const type of want) {
     if (shopped.has(type)) continue;
-    const v = sellableAt(g, type);
-    if (v > bv) { bv = v; best = type; }
+    const door = nearestTile(g, t => isShop(t) && t - T.SHOP_0 === type);
+    const d = door ? distance(p.x, p.y, door.x, door.y) : 1000;
+    if (d < bd) { bd = d; best = type; }
   }
   return best;
 }
@@ -1233,16 +1134,27 @@ let done = false;
  */
 let trail: number[] = [];
 let steady = 0;
+/** The kinds of detection already used on this level: a map is read once. */
+let detected = new Set<string>();
+/**
+ * The last trip to town: when it ended, the gold the hero left with, and whether it still left
+ * short of cures. A hero that went home for potions and came back without them -- the shop was out,
+ * or it could not reach the door -- does not turn straight round to try again: it used to go up
+ * and down the first staircase hundreds of times in a night. `dark` is a trip that left with the
+ * price of a torch and still no light, so the shop was out of them or the hero never got there.
+ */
+let townTrip = { turn: -1e9, gold: 0, short: false, dark: false };
 /** Forget the level being explored: where the hero was going, and what it had seen there. */
 function forgetLevel(): void {
   shopped = new Set(); probed = new Set(); passed = new Set(); junked = new Set(); dig = null; hopeless = new Set();
   rooted = new Map(); bearing = { x: 0, y: 0 }; frontier = null; scouting = false; route = null; awaiting = null; done = false;
-  breedersMet = new Set(); infested = false; trail = []; steady = 0;
+  breedersMet = new Set(); infested = false; trail = []; steady = 0; detected = new Set();
 }
 /** Forget the current level (a new hero, or a save loaded over this one). */
 export function resetAutoplay(): void {
-  levelKey = ''; stepsOnLevel = 0; lastHp = 0; unseen = 0; hunted = 0; beset = 0;
+  levelKey = ''; stepsOnLevel = 0; lastHp = 0; unseen = 0; hunted = 0; beset = 0; townTrip = { turn: -1e9, gold: 0, short: false, dark: false };
   forgetLevel(); hazard = new Set(); nuisance = new Set(); fightable = new Set(); idle = 0; books = null; keepMana = 0;
+  forgetCarried();
 }
 /** Bot turns spent on the level the hero is standing on. */
 function levelAge(g: Game): number {
@@ -1255,14 +1167,14 @@ function levelAge(g: Game): number {
 }
 /**
  * Turns spent shopping before the town has had its share of the hero's life. Long enough to walk
- * an unmapped town and find both shops, which is the first thing any hero does.
+ * an unmapped town and call at every shop, which is what a hero who has just woken there naked does.
  */
-const TOWN_PATIENCE = 400;
+const TOWN_PATIENCE = 700;
+/** Enough gold for a torch at any shopkeeper's prices. */
+const TORCH_GOLD = 5;
 /** A look round, but not a survey: a hundred-by-sixty level has corners not worth the turns. */
 const LOOK_ROUND = 200;
 const GIVE_UP = 500;
-/** The deepest floor a hero of this level should be walking about on: Angband's rule of thumb, half the level and a bit. */
-function depthFor(lev: number): number { return lev < 3 ? 1 : lev < 10 ? Math.floor(lev / 2) + 1 : lev - 4; }
 /** The nearest known staircase of the kinds the bot is willing to take, or null. */
 function exitStairs(g: Game, down: boolean, up: boolean): Pos | null {
   const p = g.player;
@@ -1287,6 +1199,7 @@ export function autoplayStep(g: Game, step: number): void {
   const p = g.player;
   const turn = g.turn, x = p.x, y = p.y, depth = g.level.depth;
   exploring = false;
+  noteCarried(g);
   decide(g, step);
   if (exploring && g.level.depth === depth) steer(p.x - x, p.y - y);
   if (g.level.depth === depth && (p.x !== x || p.y !== y)) {
@@ -1360,20 +1273,35 @@ function decide(g: Game, step: number): void {
   const fleeing = !town && (infested || beset > 0 || spent || unseen > 0 || hunted > 0);
   // Which way out. Too deep for its level (a trap door, say), or out of potions with the town
   // close above, and it climbs; otherwise it dives only as far as its level warrants.
-  const tooDeep = lv.depth > depthFor(p.lev);
+  const home = homeDepth(g);
+  const tooDeep = lv.depth > home;
   // The pack running dry, rather than the pack already empty. The bot used to notice only when
   // the last cure was gone, so it fought the back half of every trip on an empty pack with the
   // gold for a full one in its pocket -- and a hero with no light cannot even read its way out
   // of trouble. One of each is the mark: enough left to walk home on, not so little that the
   // walk is the dangerous part.
-  const lowOnKit = countKind(g, 'potion_clw') <= 1 || !foodItem(g) || (lightLeft(g) <= 0 && !lightFix(g))
+  const lowOnKit = healCount(g) <= 1 || !mealItem(g) || (lightLeft(g) <= 0 && !lightFix(g))
     || (countKind(g, 'scroll_phase_door') === 0 && countKind(g, 'flask_oil') <= 2);
   const bookless = !!CLASS_BY_ID[p.cls]?.realm && !C.knownBooks(g).length;
-  const restock = (p.gold >= 60 && lowOnKit) || (bookless && p.gold >= 30);
-  const needTown = lv.depth <= RESTOCK_DEPTH && restock;
+  // No weapon or no armour -- a hero who woke in the town naked and could not afford both -- goes
+  // back for them as soon as the dungeon has paid for them.
+  const naked = (!p.equip.weapon && !hasQuirk(p, 'bear_hands')) || !p.equip.body;
+  // A pack too full to pick up the next ring, of things a shop would pay well for: the gold for the
+  // next set of cures is in it. Shallow, the walk is cheap; deep, it costs two Words of Recall.
+  const laden = p.inven.length >= INVEN_MAX - 1 && haulValue(g) >= (lv.depth <= RESTOCK_DEPTH ? 100 : 500);
+  const restock = (p.gold >= 60 && lowOnKit) || (bookless && p.gold >= 30) || (naked && p.gold >= 80) || laden;
+  // A trip home that came back still short does not turn straight round for another, unless time
+  // has passed (the shops restock) or the purse has grown.
+  const tripFailed = townTrip.short && g.turn - townTrip.turn < 3000 && p.gold < townTrip.gold + 150;
+  // No light at all -- the last torch burnt out, or a cutpurse had the price of the next one --
+  // and the few coins one costs in hand: that is worth the walk home before anything else is, and
+  // the general store always has torches.
+  const dark = lightLeft(g) <= 0 && !lightFix(g);
+  const torchTrip = dark && p.gold >= TORCH_GOLD && !(townTrip.dark && g.turn - townTrip.turn < 3000);
+  const needTown = lv.depth <= RESTOCK_DEPTH && ((restock && !tripFailed) || torchTrip);
   // A word already spoken is a trip home booked: no walking up the stairs as well.
   const wantUp = !town && !g.options.ironman && !p.timed.recall && (tooDeep || needTown);
-  const mayDive = !wantUp && lv.depth + 1 <= depthFor(p.lev);
+  const mayDive = !wantUp && lv.depth + 1 <= home;
   const hurt = p.chp < p.mhp * HURT;
   // The stairs the bot knows about, and whether there is anything left to walk to. A hurt hero
   // on the run climbs, since a fresh level one floor up is gentler than one floor down; one in
@@ -1401,7 +1329,11 @@ function decide(g: Game, step: number): void {
     else if (down || upKnown) { hazard = avoided; blocked = true; }
     else ({ open, openSteps, rubble, treasure } = past);
   }
-  const more = open || rubble || treasure;
+  // In the dark the hero sees only the grid it stands on, so nothing on the map is ever a frontier;
+  // the dark beside it is still ground to cover, felt for a step at a time (see explore). Without
+  // this a hero with no light took the staircase it arrived on straight back up, and came straight
+  // back down, for as long as it had no light.
+  const more = open || rubble || treasure || (!town && unknownNeighbour(g, p.x, p.y) > 0);
   // Explore while there is ground left to cover -- but once the way on is known, a look round is
   // enough; the last corner of the level is not worth the turns, and a swarm even less. The way
   // on is the staircase the hero would actually leave by: down while its level allows, else up.
@@ -1428,7 +1360,10 @@ function decide(g: Game, step: number): void {
   const incoming = adjacent.reduce((s, m) => s + threatOf(g, m), 0);
   const panic = p.chp < p.mhp * PANIC || (incoming > 0 && hurt && p.chp <= incoming * 2 + 2);
   if (panic) {
-    const mend = healAct(g);
+    // One more turn like the last and the hero is dead: the strongest cure it has, not the thriftiest.
+    const dire = p.chp <= incoming * 2 + 2 || p.chp < p.mhp * 0.25;
+    const mend = healAct(g, dire);
+    const potion = healPotion(g, dire);
     // Whether drinking is worth the turn. A potion only gives back what the hero is missing --
     // one twenty points strong, drunk eight short of full, is eight points -- so against
     // something taking eight a turn it buys nothing at all and the hero has stood still for it.
@@ -1438,18 +1373,22 @@ function decide(g: Game, step: number): void {
     // average, and three or more hands swinging independently miss it far more than a single
     // attacker does -- a pit of Novice warriors chipped away by the mean estimate every turn and
     // then took a hero from near-full to dead in two, because the average never saw that turn coming.
-    const outdrunk = adjacent.length > 0 && (incoming * 2 >= p.mhp || incoming >= (p.mhp - p.chp) * 0.75 || adjacent.length >= 3);
+    const gives = Math.min(p.mhp - p.chp, potion ? potion.amount : p.mhp - p.chp);
+    const outdrunk = adjacent.length > 0 && (incoming * 2 >= p.mhp || incoming >= gives * 0.75 || adjacent.length >= 3);
     if (!outdrunk && mend) { mend(); return; }
     if (close.length || unseen) {
       // Stairs are the oldest escape in the game, and the bot stands on some often enough.
       if (here === T.STAIRS_DOWN) { C.goDown(g); return; }
       if (here === T.STAIRS_UP && !g.options.ironman) { C.goUp(g); return; }
-      const out = escapeAct(g);
+      // A Phase Door only puts a dozen grids between the hero and something faster than it, or a
+      // crowd: those want Teleportation, or another level.
+      const out = escapeAct(g, hunted > 0 || overmatched || adjacent.some(m => paceOf(g, m) > 1));
       if (out) { out(); return; }
       // Nothing left to run with: take the thing that is killing it out of the fight instead --
-      // one word over the crowd when it is a crowd, or the worst of them sent away.
+      // one word over the crowd when it is a crowd, or the worst of them sent away, or the scroll
+      // kept for exactly this: Banishment, *Destruction*.
       const worst = adjacent.length ? adjacent.reduce((a, b) => threatOf(g, b) > threatOf(g, a) ? b : a) : null;
-      const off = (close.length > 2 ? crowdAct(g) : null) || (worst ? disableAct(g, worst) : null);
+      const off = (close.length > 2 ? crowdAct(g) : null) || (worst ? disableAct(g, worst) : null) || massAct(g, close);
       if (off) { off(); return; }
       if (stepAway(g, close, goal)) return;
       if (mend) { mend(); return; }
@@ -1470,14 +1409,14 @@ function decide(g: Game, step: number): void {
   // able to see, and scrolls cannot be read in the dark at all.
   if (lightLeft(g) <= 0) { const lit = lightFix(g); if (lit) { lit(); return; } }
   if (p.food < FOOD_HUNGRY) {
-    const meal = foodItem(g);
-    if (meal) { C.eat(g, meal); return; }
+    const meal = mealItem(g);
+    if (meal) { useAct(g, meal)(); return; }
   }
   // Out of potions a dozen floors down, where the stairs home are a long walk through everything
   // the hero came past: speak the word instead and carry on until it takes hold.
   if (!town && lv.depth > RESTOCK_DEPTH && restock) {
     const scroll = recallScroll(g);
-    if (scroll) { C.read(g, scroll, {}); return; }
+    if (scroll) { useAct(g, scroll)(); return; }
   }
   // Hunted by something it cannot beat, and no staircase on the map to leave by. Walking is no
   // answer to a thing that is faster than the hero, and the scrolls only buy a dozen grids at a
@@ -1485,7 +1424,7 @@ function decide(g: Game, step: number): void {
   // not on, which is the whole point of going home.
   if (!town && hunted > 0 && !adjacent.length && !exitStairs(g, true, !g.options.ironman)) {
     const scroll = recallScroll(g);
-    if (scroll) { C.read(g, scroll, {}); return; }
+    if (scroll) { useAct(g, scroll)(); return; }
   }
   // A dig in progress: keep at it while nothing is coming, and give up on a grid that will not yield.
   if (dig) {
@@ -1541,13 +1480,22 @@ function decide(g: Game, step: number): void {
       // never trips it, and backing off is nothing against a crowd that matches the hero's pace on
       // every side of it. `overmatched` is the aggregate answer -- what the whole crowd costs, not
       // any one of them -- and it is what a phase door or a word of recall is for.
-      if (menace || overmatched) { const out = escapeAct(g); if (out) { out(); return; } }
+      if (menace || overmatched) { const out = escapeAct(g, overmatched || reach.some(m => paceOf(g, m) > 1)); if (out) { out(); return; } }
     }
     // With something it cannot beat at its side, the blow goes where it takes the most danger
     // away: the hero that shot the fruit fly beside it because the fly would die was bitten to
     // death by Grip while it did.
     const pick = menace ? reach.reduce((a, b) => relief(g, b) > relief(g, a) ? b : a)
       : easy[0] || reach.reduce((a, b) => fightCost(g, b) < fightCost(g, a) ? b : a);
+    // A fight that matters -- one it may lose, a crowd, a unique, or a big bite out of what it can
+    // spare -- is worth a turn's preparation before the next blow: the Potion of Heroism, the
+    // Scroll of Blessing, the Potion of Speed it was keeping for exactly this, or mana back for the
+    // spell that ends it. The bot used to carry six Potions of Heroism to its death.
+    const serious = menace || overmatched || reach.some(m => hasMFlag(raceOf(m), 'UNIQUE')) || reach.reduce((n, m) => n + stake(g, m), 0) > budget * 0.4;
+    if (serious) {
+      const boost = manaAct(g) || buffAct(g, close, { melee: meleeOf(g, pick) >= (bestRanged(g, pick)?.dam ?? 0), desperate: menace || overmatched, spell: t => buffSpell(g, t) });
+      if (boost) { boost(); return; }
+    }
     if (attack(g, pick)) return;
   }
   // Something asleep beside the hero is free hits, if it is a fight the hero would pick awake.
@@ -1559,13 +1507,29 @@ function decide(g: Game, step: number): void {
     }
   }
 
-  // 3. The town: stock up, then find the way down.
+  // 3. The town: tidy the pack, sell, stock up, then find the way down.
   if (town) {
+    townTrip = { turn: g.turn, gold: p.gold, short: lowOnKit || (naked && p.gold >= 80), dark: dark && p.gold >= TORCH_GOLD };
+    // A townsman the hero cannot beat is awake and coming: the dungeon entrance is the way out.
+    // The shopping can wait for the next visit, and a different town; a veteran chased a hero round
+    // and round the shops until it died, because nothing about running away applied in the town.
+    const bully = awake.find(m => !hasMFlag(raceOf(m), 'NEVER_MOVE') && !m.afraid && distance(p.x, p.y, m.x, m.y) <= 7 && !worth(g, m, true));
+    if (bully && !p.timed.recall) {
+      const stairs = nearestTile(g, t => t === T.STAIRS_DOWN);
+      if (stairs) {
+        if (stairs.x === p.x && stairs.y === p.y) { C.goDown(g); return; }
+        if (headFor(g, stairs.x, stairs.y) || townWalk(g, stairs.x, stairs.y)) return;
+      }
+    }
+    // Before the shops: put on what is better, read what names things, try the unknown potions,
+    // throw out the rubbish. What the shops are worth visiting for depends on all of it.
+    const chore = gearAct(g) || choreAct(g) || junkAct(g, it => junked.add(it.id)) || sampleAct(g);
+    if (chore) { chore(); return; }
     const want = wantedStore(g);
     // A shop it cannot find is not worth combing the town for while the dungeon waits.
     if (want >= 0 && age <= TOWN_PATIENCE) {
       const door = nearestTile(g, t => isShop(t) && t - T.SHOP_0 === want);
-      if (door && headFor(g, door.x, door.y, false)) return;
+      if (door && (headFor(g, door.x, door.y, false) || townWalk(g, door.x, door.y))) return;
       // A door it can see but not reach is not worth walking at; the shop is given up on.
       if (door) shopped.add(want);
       // The shop has not been found yet: no hero walks into the dungeon without potions.
@@ -1574,16 +1538,16 @@ function decide(g: Game, step: number): void {
     // Nothing more to buy, or nothing more it can reach. With what it came for in the pack and
     // floors below it has already cleared, read the word again and be dropped back where it left
     // off, rather than walking down through all of them.
-    if (countKind(g, 'potion_clw') >= 2 && foodItem(g) && p.maxDepth > RESTOCK_DEPTH && p.maxDepth <= depthFor(p.lev)) {
+    if (healCount(g) >= 2 && mealItem(g) && p.maxDepth > RESTOCK_DEPTH && p.maxDepth <= homeDepth(g)) {
       const scroll = recallScroll(g);
-      if (scroll) { C.read(g, scroll, {}); return; }
+      if (scroll) { useAct(g, scroll)(); return; }
     }
     // With the word spoken the stairs are the slow way down, and walking out now would only
     // strand the hero on the first floor when it takes hold.
     const stairs = p.timed.recall ? null : nearestTile(g, t => t === T.STAIRS_DOWN);
     if (stairs) {
       if (stairs.x === p.x && stairs.y === p.y) { C.goDown(g); return; }
-      if (headFor(g, stairs.x, stairs.y)) return;
+      if (headFor(g, stairs.x, stairs.y) || townWalk(g, stairs.x, stairs.y)) return;
     }
     if (explore(g, open)) return;
     C.passTurn(g);
@@ -1607,7 +1571,21 @@ function decide(g: Game, step: number): void {
   // A pack of worm masses is not met at a corridor mouth: nothing it can outwalk is.
   const pack = foes(g, 6).filter(m => paceOf(g, m) >= 1);
   if (!fleeing && !steady && pack.length >= 2 && holdCorridor(g, pack)) return;
+  // Something dangerous on its way that the hero will have to face -- a unique it means to fight,
+  // or a thing it cannot walk away from: the draught goes down before it arrives, not after.
+  const coming0 = close.filter(m => !hasMFlag(raceOf(m), 'NEVER_MOVE') && !isAdjacent(g, m));
+  const facing = coming0.filter(m => (hasMFlag(raceOf(m), 'UNIQUE') && worth(g, m)) || (!worth(g, m) && !canBackOff(g, [m], exit)));
+  if (facing.length && !infested) {
+    const boost = buffAct(g, close, { melee: true, desperate: facing.some(m => !worth(g, m)), spell: t => buffSpell(g, t) });
+    if (boost) { boost(); return; }
+  }
   const target = nearestTarget(g);
+  // An unknown wand or rod is learnt on something the hero's blade would settle anyway, from a
+  // distance: if it turns out to be Haste Monster, that is a fast rat, not a fast troll.
+  if (target && !infested && !unseen && !swarm && !hurt && trifling(g, target)) {
+    const test = aimTestAct(g, target);
+    if (test) { test(); return; }
+  }
   if (target && !infested && !unseen && !swarm && (worth(g, target) || overmatched)) {
     const shot = bestRanged(g, target, (hasMFlag(raceOf(target), 'NEVER_MOVE') && !blocked) || trifling(g, target));
     if (shot) { shot.go(); return; }
@@ -1631,10 +1609,6 @@ function decide(g: Game, step: number): void {
     if (C.newSpellCount(g) > 0) { const learn = studyChoice(g); if (learn && C.study(g, learn)) return; }
     // A light growing faint is topped up now, not once it is out and something is coming.
     if (lightLeft(g) < LIGHT_LOW) { const lit = lightFix(g); if (lit) { lit(); return; } }
-    // A hero with one ring on and a bare finger should put the other one on, so ask for the slot
-    // this kind would actually go into rather than the one it names.
-    const gear = findItem(g, it => { const k = kindOf(it); return isWearable(k) && !isAmmo(k) && !!emptySlot(g, k); });
-    if (gear) { C.wield(g, gear); return; }
     if (itemsAt(lv, p.x, p.y).length && C.pickupHere(g, false, false, it => junked.has(it.id))) return;
     if (shedForLoot(g)) return;
     const chest = itemsAt(lv, p.x, p.y).find(fi => kindOf(fi.item).tval === 'chest');
@@ -1642,7 +1616,15 @@ function decide(g: Game, step: number): void {
     // Whatever is still underfoot could not be taken and is not worth shedding for: remember that,
     // or the walk below would bring the bot straight back here.
     for (const fi of itemsAt(lv, p.x, p.y)) passed.add(fi.item.id);
+    // What the pack holds for the hero, a quiet turn at a time: better gear on (see gearAct -- by
+    // the hero's whole measure, and never anything that feels cursed), the potions of strength
+    // drunk, the finds named and the sword enchanted, the rubbish thrown out, and on a new level
+    // the map read before the walk.
+    const chore = gearAct(g) || choreAct(g) || junkAct(g, it => junked.add(it.id)) || (age <= 150 ? detectAct(g, detected) : null);
+    if (chore) { chore(); return; }
     if (!awake.length && canRest(g) && (hurt || p.csp < p.msp / 2)) { C.rest(g, -1); C.restStep(g); return; }
+    // An unknown flavour is tried with nothing in sight at all, asleep or awake.
+    if (!threats.length) { const test = sampleAct(g); if (test) { test(); return; } }
     // Loot the bot has seen and walked past: worth a detour while the level is still its business,
     // and a few steps even when it is on its way out -- but not with something hunting it.
     const loot = fleeing || steady ? null : nearestLoot(g);

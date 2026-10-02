@@ -176,8 +176,10 @@ export function runEffect(g: Game, e: Effect, ctx: EffectCtx = {}): boolean {
       let any = false;
       for (let i = 0; i < e.amount; i++) {
         const cur = e.what === 'tohit' ? it.toHit : e.what === 'todam' ? it.toDam : it.toAc;
+        // ENCHANT_TABLE is the chance in a thousand of FAILING at this plus (Angband's enchant()):
+        // a +0 blade always takes the first point, a +15 one never takes another.
         const chance = cur < 0 ? 0 : cur > 15 ? 1000 : ENCHANT_TABLE[cur];
-        if (randint1(1000) > chance || (it.artifact && !oneIn(2))) continue;
+        if (randint1(1000) <= chance || (it.artifact && !oneIn(2))) continue;
         if (e.what === 'tohit') it.toHit++; else if (e.what === 'todam') it.toDam++; else it.toAc++;
         any = true;
         if (it.cursed && !itemFlags(it).has('HEAVY_CURSE') && oneIn(4)) { it.cursed = false; it.flags = it.flags.filter(f => f !== 'CURSED'); g.msg.add('The curse is broken!', '#a0ffa0'); }
