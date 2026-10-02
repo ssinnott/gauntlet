@@ -772,7 +772,7 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
   }
 }
 
-// 3. Autoplay: the bot the `=` menu (and ctrl+A) turns on, playing honestly with no cheats.
+// 3. Autoplay: the bot that plays every hero in the game, playing honestly with no cheats.
 {
   let botDeaths = 0, botDepth = 0, botKills = 0, botGold = 0;
   const runs = Math.max(2, Math.min(SEEDS, 4));

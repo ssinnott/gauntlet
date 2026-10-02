@@ -103,7 +103,6 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: Game, frame: number): 
     bx += bw + 3;
   }
   y = by + 14;
-  if (g.options.autoplay) { drawText(ctx, 'AUTOPLAY (ANY KEY STOPS)', x, y, { size: 1, color: '#ffd040' }); y += 10; }
   if (p.searching) { drawText(ctx, 'SEARCHING', x, y, { size: 1, color: '#c0c0ff' }); y += 10; }
   if (g.resting) { drawText(ctx, 'RESTING', x, y, { size: 1, color: '#c0c0ff' }); y += 10; }
   // What the hero is singing, and what it costs to keep going: a bard's mana bar is a clock.
@@ -112,7 +111,7 @@ export function drawHud(ctx: CanvasRenderingContext2D, g: Game, frame: number): 
     if (!song) continue;
     drawText(ctx, shorten(`SINGING ${(SPELL_BY_ID[id]?.name || id).toUpperCase()} -${song.upkeep}`, 32), x, y, { size: 1, color: '#ffd0ff' }); y += 10;
   }
-  if (newSpellCount(g) > 0) { drawText(ctx, 'STUDY! (G)', x, y, { size: 1, color: '#a0ffa0' }); y += 10; }
+  if (newSpellCount(g) > 0) { drawText(ctx, 'STUDY!', x, y, { size: 1, color: '#a0ffa0' }); y += 10; }
   // Bottom hints.
   drawText(ctx, '? HELP   I INVEN   C SHEET', x, VIEW_H - 22, { size: 1, color: DIM });
   drawText(ctx, `TURN ${Math.floor(g.turn / 10)}`, x, VIEW_H - 12, { size: 1, color: DIM });

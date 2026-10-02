@@ -126,11 +126,11 @@ and are not listed as gaps.
   arcade voice: WARRIOR NEEDS FOOD BADLY. Both have game options, both degrade silently where the
   browser will not play along, and the game logic only ever queues string ids so `src/game/` stays
   free of the DOM.
-- **Touch controls.** A thumb pad and three pages of command buttons, appearing by themselves on
-  the first touch and forceable with an option. With an overlay open the layer becomes a navigation
-  bar instead, which is what makes the keyboard-driven menus, inventory and stores usable by touch
-  without rewriting a screen. Every button synthesises the key press the keyboard would have sent,
-  so a button can never drift out of step with the command.
+- **Touch controls.** A navigation bar under any open screen, appearing by itself on the first
+  touch and forceable with an option, which is what makes the keyboard-driven menus and the
+  inventory usable by touch without rewriting a screen. Every button synthesises the key press the
+  keyboard would have sent, so a button can never drift out of step with the command. The map
+  itself has no buttons: the hero plays itself.
 - **Saves in IndexedDB, with slots.** The whole game used to live in one localStorage key, a ~5 MB
   string quota for the origin that a deep run with persistent levels can reach, failing silently.
   Saves now go to IndexedDB under several named slots, listed on the title screen with race, class,

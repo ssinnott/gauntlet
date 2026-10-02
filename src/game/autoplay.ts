@@ -1,8 +1,8 @@
 // The autoplay bot: a hero that plays itself with exactly the commands a player has. No map
 // cheats, no free healing -- it only knows what the player knows (findPath walks remembered
 // grids), and every action goes through commands.ts, so it takes its turn like anyone else.
-// `=` toggles it as the Autoplay game option, ctrl+A does the same from the map; tools/sim.ts
-// drives the same brain headless so `npm run check` plays a few characters with it.
+// It plays every hero in the game -- main.ts gives it every turn and no key takes it over -- and
+// tools/sim.ts drives the same brain headless so `npm run check` plays a few characters with it.
 //
 // It sizes up every fight before it picks one: what the monster does to it in a turn, what it
 // does to the monster, and so how many hit points killing the thing would cost. Anything dearer

@@ -1,4 +1,4 @@
-// Headless: play several random heroes with the same bot `ctrl+A` turns on, logging every action
+// Headless: play several random heroes with the same bot the game runs, logging every action
 // (as the message log records it) turn by turn, so a run can be read back afterwards to see what
 // killed the hero or where it stalled. A hero who dies wakes in the town, as in the game, and plays
 // on; the summary counts the deaths and reports how deep and how far each hero got regardless.

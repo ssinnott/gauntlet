@@ -8,7 +8,7 @@ labyrinths, monster memory, generators that spawn monsters until you smash them,
 at the bottom, and a hero who **needs food badly**.
 
 Every sound is synthesised in the browser and the arcade narrator announces your misfortunes, so
-there are no asset files. It plays with a keyboard, a mouse or a thumb.
+there are no asset files. The hero plays itself: a keyboard, a mouse or a thumb is only for looking.
 
 **[Play it here](https://ssinnott.github.io/gauntlet/)** -- `.github/workflows/pages.yml` typechecks,
 runs the simulator and publishes `dist/index.html` to GitHub Pages on every push to `main`.
@@ -30,28 +30,32 @@ npm run build      # dist/index.html, one self-contained file, plus what a phone
 
 ## Playing
 
-**The hero plays itself.** NEW GAME on the title screen lets chance build a hero -- race, bloodline,
-class, path, stats, name and history -- and hands it straight to the autoplay bot (below). CONTINUE
-heads the title screen whenever a hero is saved, with a summary of it underneath (level, where it
-is, how deep it has been, gold, kills and deaths), and picks it back up the same way. Any key takes
-control back, and `ctrl+A` hands it over again. BUILD A HERO is the full birth screen, for choosing
-everything yourself; SAVED HEROES lists every hero kept in the browser.
+**The hero plays itself**, always. NEW GAME on the title screen lets chance build a hero -- race,
+bloodline, class, path, stats, name and history -- and the bot (below) starts playing it at once.
+CONTINUE heads the title screen whenever a hero is saved, with a summary of it underneath (level,
+where it is, how deep it has been, gold, kills and deaths), and the bot picks it back up where it
+left off. There is nothing to switch on and nothing to take over: no key or tap stops the bot.
+BUILD A HERO is the full birth screen, for choosing everything yourself; SAVED HEROES lists every
+hero kept in the browser.
 
 **Death is a setback, not the end.** A hero who dies wakes in the town -- at dawn, if it fell in the
 night -- naked and with an empty pack: equipment, quiver, potions, scrolls and books are gone. Its
 level, experience, stats (drained ones restored), spells, gold, the deepest level it reached and
-everything it has learnt about flavours and monsters are kept, and the bot, if it was playing, goes
-on playing. A hero who dies with less than 100 gold (the least a new hero starts with) is given the
-difference by the temple, enough for a torch and a blade. Only retiring (`Q`) ends a hero's story,
-and that is what puts it in the Hall of Heroes.
+everything it has learnt about flavours and monsters are kept, and the bot goes on playing. A hero
+who dies with less than 100 gold (the least a new hero starts with) is given the difference by the
+temple, enough for a torch and a blade. Only retiring (`Q`) ends a hero's story, and that is what
+puts it in the Hall of Heroes.
 
-Arrows, the numpad or `hjklyubn` move; hold a key to keep walking, `Shift` runs. Walking into
-things does the obvious: monsters are attacked, doors opened (a key from your pouch unlocks a
-locked one, otherwise you pick it), rubble and mineral veins are dug, a shop door enters the shop.
-Gold, keys and items are picked up as you step on them. `?` lists the rest; the essentials are
-`i` inventory, `e` equipment, `w` wield, `q` quaff, `r` read, `E` eat, `a` aim a wand, `u` use a
-staff, `z` zap a rod, `f` fire, `v` throw, `m`/`p` cast, `G` study, `R` rest, `<` `>` stairs,
-`C` character sheet, `M` map, `x` look, `Ctrl+S` save. Clicking the map travels there.
+The keys only look, and the bot plays on behind every screen they open: `i` inventory, `e`
+equipment, `C` the character sheet (`F` there writes a character dump), `M` the map, `x` or `l`
+look (`r` recalls the monster under the cursor), `/` recall the nearest monster, `b` browse spells,
+`~` the knowledge browser (monster memory, known objects, artifacts, egos, uniques, kills), `ctrl+P`
+the messages, `ctrl+L` scrolls the map, `ctrl+F` the level feeling, `V` the Hall of Heroes, `?`
+help. `=` holds the options, `O` the ignore settings and `ctrl+O` shows what is being ignored;
+`ctrl+S` saves, `ctrl+X` saves and goes back to the title screen, `ctrl+E` exports the save (the
+title screen imports one) and `Q` retires the hero. Right-click the map to look there, or click the
+side panel for the inventory. A key that would play -- a step, a potion, a spell, the stairs --
+does nothing.
 
 Eleven classes, drawn as the Gauntlet heroes: Warrior, Mage (Wizard), Priest (Cleric), Rogue
 (Thief), Ranger (Elf), Paladin (Valkyrie), Druid (Falconess, nature magic), Necromancer (Sorceress,
@@ -63,25 +67,17 @@ build -- a hobbit's bare feet, a kobold's snout and tail, an Ent's bark and leav
 the kit worn over it (the Gauntlet hero's colours, hat, robe, cloak, shield or pauldrons); women get
 long hair and no beard. `npm run sheet` draws them all on one contact sheet in `dist/heroes.png`.
 
-The rest of the keyset: `~` the knowledge browser (monster memory, known objects, artifacts, egos,
-uniques, kills), `/` recall the nearest monster, `=` options, `O` the ignore settings, `ctrl+O`
-shows what you are ignoring, `D` disarm (traps and chests), `c` close, `T` tunnel, `ctrl+B` or
-walking into a stuck door bashes it, `ctrl+J` jams a door with a spike, `ctrl+L` scrolls the map,
-`Enter` repeats the last command, `V` the Hall of Heroes, `C` then `F` writes a character dump,
-`ctrl+E` exports the save (the title screen imports one).
-
 Auto-pickup is on by default, so the ignore settings (`O`) are worth a look: set a quality
 threshold per kind of gear and the hero stops hoovering up rusty daggers. Nothing unidentified is
-ever ignored and artifacts never are, an item inscribed `=g` is always picked up, and `ctrl+O`
-reveals what is being left behind.
+ever ignored and artifacts never are, and `ctrl+O` reveals what is being left behind.
 
-On a phone, touch anywhere: a thumb pad and three pages of command buttons appear, and the menus
-get a navigation bar. The `touchControls` option forces them on with a mouse. The game saves the
-moment it leaves the screen, because a phone closes a game in the background without warning. On an
-iPhone the installed game keeps its own saves, apart from Safari's.
+On a phone nothing covers the map, since there is nothing to press while the hero plays: tap the
+side panel for the inventory, and the menus get a navigation bar along the bottom (the
+`touchControls` option forces it on with a mouse). The game saves the moment it leaves the screen,
+because a phone closes a game in the background without warning. On an iPhone the installed game
+keeps its own saves, apart from Safari's.
 
-`ctrl+A` (or the **Autoplay** game option under `=`) hands the hero to a bot: it shops, walks into
-the dungeon, and explores it the way a player does --
+The bot shops, walks into the dungeon, and explores it the way a player does --
 it picks a direction and keeps to it, following a corridor to its end and crossing a room to its far
 door before it turns back for what it passed. It digs through rubble in its way and veins that show
 treasure, throws oil and fires arrows at what comes, rests when it is safe, drinks when it is not,
@@ -93,10 +89,9 @@ outwalk, since anything as quick simply follows; a mold across its way is fought
 rest between, a floating eye is shot from a distance and never stood beside, and a floor with a
 mouse on it is still worth exploring until the mice have overrun it. Out of cures too far down for
 the stairs home to be worth the walk, it reads a Word of Recall, shops, and reads the second one to
-be dropped back where it left off. It plays with the same commands you have and knows only what you
-know -- no revealed map, no free healing, no peeking at what an unknown flavour really is -- so it
-dies like anyone else, then wakes in the town, re-equips and goes back down. Any key takes control
-back.
+be dropped back where it left off. It plays with the same commands a player would and knows only
+what the hero knows -- no revealed map, no free healing, no peeking at what an unknown flavour
+really is -- so it dies like anyone else, then wakes in the town, re-equips and goes back down.
 
 The bot uses its pack the way a player does. It tries unknown potions, scrolls, staffs and rods
 when it is quiet and healthy enough to take the worst the flavour could turn out to be (never one
@@ -124,8 +119,8 @@ ten. Both are shown on the character sheet and in the dump.
 
 The **Bard** sings rather than casts. A song is struck up once and keeps running while you fight,
 spending mana every turn, and it ends when the mana does, so a bard's mana bar is a clock rather
-than a purse. Sing the same song again, or press `P`, to stop. It is also the only class that
-lives on charisma.
+than a purse. Singing the same song again stops it. It is also the only class that lives on
+charisma.
 
 Birth offers rolled or point-bought stats (`X` on the point-buy screen lets chance spend the
 points), a short history, and the birth options: connected
@@ -170,7 +165,7 @@ src/game/                pure game logic: no DOM anywhere below here
   save.ts                JSON save/restore
   lore.ts                monster memory; recall.ts writes it up; dump.ts the character dump
   options.ts             birth and game options; scores.ts the Hall of Heroes
-  autoplay.ts            the bot behind the Autoplay option (shared with the headless simulator)
+  autoplay.ts            the bot that plays every hero (shared with the headless simulator)
   autoplayKit.ts         the bot's kit: what it tries, drinks, reads, wears, sells and buys
   gen/vaults.ts          hand-drawn lesser and greater vaults in Angband's vault.txt glyphs
   data/                  monsters (510), objects (435 kinds, 112 egos, 121 artifacts), spells (203 in five realms), races, classes
@@ -181,7 +176,7 @@ src/game/                pure game logic: no DOM anywhere below here
 src/ui/                  everything that draws, and everything that touches the browser
   render.ts              the 3/4 map: floors, raised walls, doors, items, monsters, effects
   audio.ts               synthesised sound effects and the arcade narrator
-  touch.ts               the on-screen thumb pad and command buttons
+  touch.ts               the touch bar under the menus
   storage.ts             saved heroes in IndexedDB, with a localStorage fallback
   sprites.ts             procedural cel-shaded monster sprites (43 families) and item icons
   hero.ts                the player as the engine's paper-doll rig: the race's body wearing the class's kit
@@ -205,7 +200,8 @@ tools/                   dev server, bundler, headless simulator (fuzz + autopla
   and checks invariants. It runs in Node with no DOM, which is the reason `src/game/` never touches
   one.
 - `smoke` — `tools/smoke.ts` loads the page in headless Chromium through the dev server, creates a
-  character, walks into the dungeon, opens the inventory, saves to IndexedDB and loads it back,
+  character and checks that the bot plays it whatever is pressed (and that no key plays it
+  instead), takes it into the dungeon, opens the inventory, saves to IndexedDB and loads it back,
   exercises the touch controls, draws the hero contact sheet and asserts that no two race/class
   combinations render identically, and asserts the canvas has real content and the page raised no
   errors. It also checks that Chromium would install the page and that, once the service worker has
