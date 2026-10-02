@@ -697,6 +697,47 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
     for (let step = 0; step < 40 && !isAware(g.flavors, 'potion_infravision') && !g.flavors.tried.includes('potion_infravision'); step++) autoplayStep(g, step);
     ok(isAware(g.flavors, 'potion_infravision') || g.flavors.tried.includes('potion_infravision'), 'the bot never tried an unknown potion in a quiet room');
   }
+  // A staff too deep for the hero's device skill fails every time, and a failure teaches nothing,
+  // so the bot used to try an unknown one again every turn: a half-troll warrior stood on one grid
+  // with a Staff of Speed for good. It gives up after a few tries and gets on with the level; a
+  // known one it cannot work it never tries; and a staff it can work it still tries and learns.
+  {
+    const fumbling = (race: string, cls: string, kind: string, known: boolean, extra?: string): { g: Game; fails: number; moved: boolean } => {
+      const g = createGame('Fumbler', race, cls, 'male', 1357);
+      resetAutoplay();
+      quiet(g);
+      const p = g.player, staff = makeItem(kind, 1);
+      if (known) { makeAware(g.flavors, kind); staff.known = true; }
+      p.inven.push(staff);
+      if (extra) p.inven.push(makeItem(extra, 1));
+      passTurn(g);
+      let fails = 0, moved = false;
+      const add = g.msg.add.bind(g.msg);
+      g.msg.add = (text: string, color?: string) => { if (text.includes('failed to use')) fails++; add(text, color); };
+      const x = p.x, y = p.y;
+      for (let step = 0; step < 40; step++) { autoplayStep(g, step); if (p.x !== x || p.y !== y) moved = true; }
+      return { g, fails, moved };
+    };
+    const unknown = fumbling('half_troll', 'warrior', 'staff_speed', false);
+    ok(unknown.fails > 0 && unknown.fails <= 3 && unknown.moved, `the bot failed ${unknown.fails} times with an unknown staff it could not work${unknown.moved ? '' : ', and never left its grid'}`);
+    const known = fumbling('half_troll', 'warrior', 'staff_perception', true, 'ring_protection');
+    ok(known.fails === 0, `the bot failed ${known.fails} times with a known staff it had no chance of working`);
+    const able = fumbling('high_elf', 'mage', 'staff_detect_evil', false);
+    ok(isAware(able.g.flavors, 'staff_detect_evil') || able.g.flavors.tried.includes('staff_detect_evil'), 'the bot never tried an unknown staff it could work');
+    // Deep and out of cures, with a Rod of Recall it cannot work ahead of a Word of Recall in the
+    // pack: the hero zapped the rod every turn and never read the scroll.
+    const g = createGame('Fumbler', 'half_troll', 'warrior', 'male', 2024);
+    resetAutoplay();
+    quiet(g);
+    g.level.depth = 8;
+    const p = g.player, rod = makeItem('rod_recall', 1), word = makeItem('scroll_word_of_recall', 1);
+    makeAware(g.flavors, rod.kind); makeAware(g.flavors, word.kind); rod.known = word.known = true;
+    p.inven = [rod, ...p.inven.filter(it => it.kind !== 'potion_clw'), word];
+    p.gold = 500;
+    passTurn(g);
+    for (let step = 0; step < 10 && !p.timed.recall; step++) autoplayStep(g, step);
+    ok(p.timed.recall > 0, 'the bot deep and out of cures never read its Word of Recall past a Rod of Recall it could not work');
+  }
   // Better gear on; cursed gear never.
   {
     const g = createGame('Dresser', 'human', 'warrior', 'male', 9753);
@@ -727,7 +768,7 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
     ok(!!p.equip.weapon && !!p.equip.body && !!p.equip.light, `a hero woken naked in the town with gold left without a weapon, armour or a light (${SLOTS.filter(s => p.equip[s]).join(', ') || 'nothing'} after ${step} steps)`);
     ok(p.inven.some(it => it.kind === 'potion_clw'), 'a hero woken naked in the town left without a cure');
     ok(!p.inven.some(it => it.kind === 'dagger'), `a hero went down with the daggers it was carrying to sell (${p.inven.map(it => itemName(it, g.flavors)).join(', ')})`);
-    console.log(`kit: respawn naked and whole; an unknown potion tried; a better sword worn, cursed gear left off; a naked hero re-equipped in ${step} steps with ${p.gold} gold left`);
+    console.log(`kit: respawn naked and whole; an unknown potion tried; a staff too deep to work given up; a better sword worn, cursed gear left off; a naked hero re-equipped in ${step} steps with ${p.gold} gold left`);
   }
 }
 
