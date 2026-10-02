@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { transformSync } from 'esbuild';
+import { appFiles } from './pwa.ts';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PORT = Number(process.argv[2] || process.env.PORT || 8080);
@@ -33,10 +34,19 @@ function transformTs(source: Buffer, file: string): Uint8Array {
 }
 
 export function createServer(): http.Server {
+  // The manifest, the icons and the service worker are drawn and written by tools/pwa.ts, not kept
+  // in the repo. The page never registers the worker here, but the smoke test does.
+  const generated = appFiles(fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'));
   return http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://localhost');
     let pathname = decodeURIComponent(url.pathname);
     if (pathname.endsWith('/')) pathname += 'index.html';
+    const made = generated.get(pathname.slice(1));
+    if (made) {
+      res.writeHead(200, { 'Content-Type': made.type, 'Cache-Control': 'no-store', 'Content-Length': made.body.length });
+      res.end(made.body);
+      return;
+    }
     const file = path.normalize(path.join(ROOT, pathname));
     if (!file.startsWith(ROOT)) { res.writeHead(403); res.end('forbidden'); return; }
     fs.readFile(file, (err, onDisk) => {
