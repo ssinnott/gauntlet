@@ -14,7 +14,7 @@ import { type Pos, T, DIR_DX, DIR_DY } from './game/types.ts';
 import { tileAt } from './game/level.ts';
 import { autoplayStep, resetAutoplay } from './game/autoplay.ts';
 import { Input, type KeyEvent, type PointerEvent2 } from './ui/input.ts';
-import { TouchPad } from './ui/touch.ts';
+import { TouchBar } from './ui/touch.ts';
 import { type SaveMeta, type SaveRecord, listSaves, readSave, writeSave, deleteSave, migrateLegacySave, newSlotId, keepSavesSafe } from './ui/storage.ts';
 import { MapRenderer } from './ui/render.ts';
 import { drawHud, drawMessageBar, drawBanner } from './ui/hud.ts';
@@ -44,7 +44,7 @@ class App implements Ui2 {
   target: Pos | null = null;
   frame = 0;
   input: Input;
-  touch = new TouchPad();
+  touch = new TouchBar();
   canvasApi = createCanvas('stage', { width: VIEW_W, height: VIEW_H });
   ctx = this.canvasApi.ctx;
   started = false;
@@ -274,10 +274,13 @@ class App implements Ui2 {
     this.cursor = null;
     this.target = null;
   }
-  /** Are the on-screen controls showing? Either a touch happened, or the option forces them. */
-  touchVisible(): boolean { return this.touch.detected || (this.started && this.g.options.touchControls); }
   /**
-   * Turn taps that landed on the touch layer into the key presses they stand for, and hand back the
+   * Is the touch bar showing? Only under an open screen -- the hero plays itself, so the map has
+   * nothing to press -- and only once a touch has happened, or the option forces it.
+   */
+  touchVisible(): boolean { return this.overlays.length > 0 && (this.touch.detected || (this.started && this.g.options.touchControls)); }
+  /**
+   * Turn taps that landed on the touch bar into the key presses they stand for, and hand back the
    * taps that did not. Buttons never duplicate command logic; they go through the ordinary keymap.
    */
   private consumeTouch(clicks: PointerEvent2[]): PointerEvent2[] {
@@ -285,7 +288,7 @@ class App implements Ui2 {
     const out: PointerEvent2[] = [];
     for (const c of clicks) {
       if (c.kind !== 'down') { out.push(c); continue; }
-      const b = this.touch.hit(c.x, c.y, this.overlays.length > 0, this.topWantsYesNo());
+      const b = this.touch.hit(c.x, c.y, this.topWantsYesNo());
       if (!b) { out.push(c); continue; }
       // code 'touch' marks the press as synthetic.
       this.handleKeyPublic({ key: b.key, shift: !!b.shift, ctrl: !!b.ctrl, alt: false, code: 'touch' });
@@ -330,10 +333,10 @@ class App implements Ui2 {
     const clicks = this.input.drainPointer();
     // Browsers keep audio silent until the player has touched something.
     if (keys.length || clicks.length) unlockAudio();
-    // A real touch turns the on-screen controls on for good.
+    // A real touch turns the touch bar on for good.
     if (!this.touch.detected && clicks.some(c => c.pointerType === 'touch')) this.touch.detected = true;
-    // The touch layer gets first refusal on every tap; what it does not want falls through to the
-    // map and to the overlays, so a mouse keeps behaving exactly as before.
+    // The touch bar gets first refusal on every tap; what it does not want falls through to the map
+    // and to the overlays, so a mouse keeps behaving exactly as before.
     const taps = this.consumeTouch(clicks);
     // An overlay takes the keys and the clicks while it is open; otherwise they go to the keymap.
     const top = this.overlays[this.overlays.length - 1];
@@ -373,7 +376,7 @@ class App implements Ui2 {
       if (this.g.level.depth === 0) this.drawShopLabels(ctx);
     }
     for (const o of this.overlays) o.draw(ctx, this);
-    if (this.touchVisible()) this.touch.draw(ctx, this.overlays.length > 0, this.topWantsYesNo());
+    if (this.touchVisible()) this.touch.draw(ctx, this.topWantsYesNo());
     this.canvasApi.present();
   }
   private drawShopLabels(ctx: CanvasRenderingContext2D): void {

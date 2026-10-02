@@ -27,7 +27,7 @@ export interface Options {
   sound: boolean;
   /** The arcade narrator speaks the shouted banners. */
   voice: boolean;
-  /** Always draw the on-screen touch controls (they appear by themselves on a touch device). */
+  /** Always draw the touch bar under an open screen (it appears by itself on a touch device). */
   touchControls: boolean;
   /** Honour the ignore settings: ignored items are not picked up and not drawn. */
   ignoreItems: boolean;
@@ -48,7 +48,7 @@ export const OPTION_TEXT: Record<keyof Options, [string, string]> = {
   verboseLore: ['Verbose lore', 'Show a monster\'s description the first time you meet it'],
   sound: ['Sound', 'Arcade sound effects'],
   voice: ['Narrator', 'The arcade voice announces what befalls you'],
-  touchControls: ['Touch controls', 'Always show the on-screen buttons (they appear by themselves when you tap)'],
+  touchControls: ['Touch controls', 'Always show the touch bar under menus'],
   ignoreItems: ['Ignore junk', 'Honour the ignore settings from the knowledge browser'],
 };
 export function normalizeOptions(o: Partial<Options> | undefined): Options { return { ...DEFAULT_OPTIONS, ...(o || {}) }; }

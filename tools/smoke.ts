@@ -148,32 +148,45 @@ await page.screenshot({ path: path.join(OUT, 'smoke-charsheet.png') });
 await page.evaluate(() => (window as any).__game.api.key('Escape'));
 const dumpLen = await page.evaluate(() => (window as any).__game.api.dump().length);
 
-// Touch controls: the option draws the on-screen buttons, and the hit testing maps taps to the right
-// keys. There is no thumb pad on the map any more -- nothing steers the hero but the bot -- and
-// every button opens a screen to look at.
-await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = true; });
+// Touch controls, with real touches so the routing in main.ts is what is tested. The hero plays
+// itself, so the map has nothing to press: a tap where the command buttons and the thumb pad used
+// to be opens nothing, and the touch bar stays away. The side panel still opens the pack, the bar
+// comes up under it, and the bar's ESC closes it again.
+const touchMap = await page.evaluate(() => {
+  const api = (window as any).__game.api, app = api.app;
+  const stage = document.getElementById('stage')!, r = stage.getBoundingClientRect();
+  const tap = (x: number, y: number): string | null => {
+    const at = { clientX: r.left + x * r.width / 960, clientY: r.top + y * r.height / 540, button: 0, pointerType: 'touch', bubbles: true };
+    stage.dispatchEvent(new PointerEvent('pointerdown', at));
+    stage.dispatchEvent(new PointerEvent('pointerup', at));
+    api.step();
+    return app.overlays[app.overlays.length - 1]?.constructor.name ?? null;
+  };
+  const onMap = [tap(281, 481), tap(74, 462), tap(400, 200)];
+  return { detected: app.touch.detected, shownOnMap: app.touchVisible(), onMap, panel: tap(900, 300), shownOnScreen: app.touchVisible() };
+});
 await page.waitForTimeout(250);
 await page.screenshot({ path: path.join(OUT, 'smoke-touch.png') });
 const touchColours = await colours();
-const touchHits = await page.evaluate(() => {
-  const app = (window as any).__game.api.app;
-  const btn = app.touch.hit(281, 481, false);       // first button
-  const pad = [app.touch.hit(74, 422, false), app.touch.hit(30, 462, false), app.touch.hit(74, 462, false)]; // where the pad was
-  const map = app.touch.hit(400, 200, false);       // open map: not the touch layer's business
-  const esc = app.touch.hit(app.touch.buttons(true)[0].x + 3, app.touch.buttons(true)[0].y + 3, true);
-  return { btn: btn && btn.key, pad: pad.map((b: any) => b && b.key), map, esc: esc && esc.key, visible: app.touchVisible() };
+const touchBar = await page.evaluate(() => {
+  const api = (window as any).__game.api, app = api.app;
+  const stage = document.getElementById('stage')!, r = stage.getBoundingClientRect();
+  const esc = app.touch.buttons()[0];
+  const at = { clientX: r.left + (esc.x + 3) * r.width / 960, clientY: r.top + (esc.y + 3) * r.height / 540, button: 0, pointerType: 'touch', bubbles: true };
+  stage.dispatchEvent(new PointerEvent('pointerdown', at));
+  stage.dispatchEvent(new PointerEvent('pointerup', at));
+  api.step();
+  const closed = app.overlays.length === 0;
+  // The option forces the bar on with a mouse, and still only under a screen.
+  app.touch.detected = false;
+  api.game.options.touchControls = true;
+  const forcedOnMap = app.touchVisible();
+  api.key('i');
+  const forcedOnScreen = app.touchVisible();
+  api.key('Escape');
+  api.game.options.touchControls = false;
+  return { esc: esc.key, closed, forcedOnMap, forcedOnScreen };
 });
-const touchButtons = await page.evaluate(() => {
-  const app = (window as any).__game.api.app;
-  return app.touch.buttons(false).map((b: any) => {
-    app.handleKeyPublic({ key: b.key, shift: !!b.shift, ctrl: !!b.ctrl, alt: false, code: 'touch' });
-    const top = app.overlays[app.overlays.length - 1];
-    const opened = top ? top.constructor.name : null;
-    for (let n = 0; app.overlays.length && n < 5; n++) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
-    return { label: b.label, opened };
-  });
-});
-await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = false; });
 
 // Every sound recipe runs at least once. The debug API bypasses Input, so audio is never unlocked
 // by the scripted keys above and none of this code would otherwise execute in a browser.
@@ -288,8 +301,8 @@ const hidden = await page.evaluate(async () => {
 // means NEW GAME.
 const yesNo = await page.evaluate(() => {
   const app = (window as any).__game.api.app;
-  const plain = app.touch.buttons(true, false).map((b: any) => b.key);
-  const asking = app.touch.buttons(true, true).map((b: any) => b.key);
+  const plain = app.touch.buttons(false).map((b: any) => b.key);
+  const asking = app.touch.buttons(true).map((b: any) => b.key);
   return { plainHasYesNo: plain.includes('y') || plain.includes('n'), askingHasYesNo: asking.includes('y') && asking.includes('n') };
 });
 
@@ -428,10 +441,10 @@ ok(!yesNo.plainHasYesNo && yesNo.askingHasYesNo, `the touch bar offers YES/NO on
 ok(soundsPlayed >= 30, `every sound recipe synthesised without throwing (${soundsPlayed} played)`);
 ok(hasLore, 'monster memory persisted to localStorage');
 ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);
-ok(touchColours > 30, `touch controls drew (${touchColours} colours)`);
-ok(touchHits.visible === true && touchHits.btn === 'i' && touchHits.pad.every((k: string | null) => k === null) && touchHits.map === null && touchHits.esc === 'Escape',
-  `touch hit testing maps taps to keys, with no pad to steer the hero (${JSON.stringify(touchHits)})`);
-ok(touchButtons.length > 0 && touchButtons.every((b: any) => b.opened), `every touch button opens a screen (${touchButtons.map((b: any) => `${b.label}=${b.opened}`).join(' ')})`);
+ok(touchMap.detected && !touchMap.shownOnMap && touchMap.onMap.every((o: string | null) => o === null) && touchMap.panel === 'InventoryScreen' && touchMap.shownOnScreen,
+  `a tap on the map presses nothing and the touch bar stays off it; the side panel opens the pack, with the bar under it (${JSON.stringify(touchMap)})`);
+ok(touchColours > 30, `the touch bar drew (${touchColours} colours)`);
+ok(touchBar.esc === 'Escape' && touchBar.closed && !touchBar.forcedOnMap && touchBar.forcedOnScreen, `the bar's ESC closes the screen, and the option forces the bar on only under a screen (${JSON.stringify(touchBar)})`);
 ok(dumpLen > 200, `character dump has ${dumpLen} characters`);
 ok(botPlays.turn > start.turn && (botPlays.x !== start.x || botPlays.y !== start.y || botPlays.depth !== 0), `the bot plays a new hero from the start, with nothing switched on (${botPlays.turn - start.turn} game turns)`);
 ok(uninterrupted.turns > 0 && uninterrupted.overlays === 0, `no key press or click stops the bot or opens a prompt (${JSON.stringify(uninterrupted)})`);

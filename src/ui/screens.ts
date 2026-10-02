@@ -551,7 +551,7 @@ const HELP = [
   'SONGS keep going while you act and spend mana every turn; singing one again stops it.',
   'YOUR BLOODLINE and your PATH are chosen at birth: the first is a small twist, the second unlocks at levels 1, 10 and 25.',
   'IGNORE (O): set how choosy you are per kind of gear and stop picking up junk. Nothing unknown is ever ignored.',
-  'TOUCH: tap anywhere on a phone for buttons that open these screens; menus get a navigation bar.',
+  'TOUCH: on a phone nothing covers the map; tap the side panel for the inventory, and menus get a navigation bar.',
   'DEATH is a setback, not the end: you wake in the town naked with an empty pack, but keep your level, spells and gold (at least 100).',
 ];
 /** The lines above the blank one are the keys; the rest are tips. */

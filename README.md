@@ -71,11 +71,11 @@ Auto-pickup is on by default, so the ignore settings (`O`) are worth a look: set
 threshold per kind of gear and the hero stops hoovering up rusty daggers. Nothing unidentified is
 ever ignored and artifacts never are, and `ctrl+O` reveals what is being left behind.
 
-On a phone, touch anywhere: buttons for the screens appear (the inventory, look, the map, the
-hero, knowledge, options, the ignore settings and help), and the menus get a navigation bar. The
-`touchControls` option forces them on with a mouse. The game saves the moment it leaves the
-screen, because a phone closes a game in the background without warning. On an iPhone the
-installed game keeps its own saves, apart from Safari's.
+On a phone nothing covers the map, since there is nothing to press while the hero plays: tap the
+side panel for the inventory, and the menus get a navigation bar along the bottom (the
+`touchControls` option forces it on with a mouse). The game saves the moment it leaves the screen,
+because a phone closes a game in the background without warning. On an iPhone the installed game
+keeps its own saves, apart from Safari's.
 
 The bot shops, walks into the dungeon, and explores it the way a player does --
 it picks a direction and keeps to it, following a corridor to its end and crossing a room to its far
@@ -176,7 +176,7 @@ src/game/                pure game logic: no DOM anywhere below here
 src/ui/                  everything that draws, and everything that touches the browser
   render.ts              the 3/4 map: floors, raised walls, doors, items, monsters, effects
   audio.ts               synthesised sound effects and the arcade narrator
-  touch.ts               the on-screen buttons
+  touch.ts               the touch bar under the menus
   storage.ts             saved heroes in IndexedDB, with a localStorage fallback
   sprites.ts             procedural cel-shaded monster sprites (43 families) and item icons
   hero.ts                the player as the engine's paper-doll rig: the race's body wearing the class's kit
