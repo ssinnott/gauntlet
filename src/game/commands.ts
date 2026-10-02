@@ -492,15 +492,27 @@ export function read(g: Game, it: Item, ctx: EffectCtx = {}): void {
   useConsumable(g, it, ctx, 'read', true);
   endTurn(g);
 }
+/** The hero's device skill against this device: harder the deeper the device, and halved by confusion. */
+function deviceSkill(g: Game, it: Item): number {
+  const k = kindOf(it);
+  let chance = g.bonuses.skills.device;
+  if (g.player.timed.confused) chance = Math.floor(chance / 2);
+  return chance - (k.level > 50 ? 50 : k.level);
+}
 /** Device skill check (wands, staffs, rods). */
 function deviceOk(g: Game, it: Item): boolean {
-  const p = g.player, k = kindOf(it);
-  let chance = g.bonuses.skills.device;
-  if (p.timed.confused) chance = Math.floor(chance / 2);
-  chance -= k.level > 50 ? 50 : k.level;
+  let chance = deviceSkill(g, it);
   if (chance < 3 && oneIn(2)) chance = 3;
   if (chance < 1 || randint0(chance) < 3) { g.msg.add('You failed to use the device properly.', '#ffd040'); return false; }
   return true;
+}
+/**
+ * The chance, out of 100, that deviceOk fails: it fails on a roll of 0, 1 or 2 out of the hero's
+ * skill against the device, so at 3 or less -- even raised to 3 -- it fails every time.
+ */
+export function deviceFail(g: Game, it: Item): number {
+  const chance = deviceSkill(g, it);
+  return chance <= 3 ? 100 : 300 / chance;
 }
 export function aim(g: Game, it: Item, dir: number, target?: Pos | null): void {
   const k = kindOf(it);

@@ -94,7 +94,10 @@ back.
 
 The bot uses its pack the way a player does. It tries unknown potions, scrolls, staffs and rods
 when it is quiet and healthy enough to take the worst the flavour could turn out to be (never one
-that could be a Potion of Death at that depth), and points unknown wands at something weak. It
+that could be a Potion of Death at that depth), and points unknown wands at something weak. A
+staff, wand or rod too deep for its device skill fails in its hands without teaching it anything,
+so it gives an unknown one up after a few failures (a shopkeeper will name it) and never relies on
+a known one that fails it half the time or more. It
 drinks the Potions of Strength it finds and reads the Scrolls of Enchant Weapon, reads Identify on
 rings, amulets and gear that feels good, Magic Mapping and Door/Stair Location on a new level, and
 Remove Curse when something cursed is stuck on it; it drinks Heroism, Berserk Strength or Speed and

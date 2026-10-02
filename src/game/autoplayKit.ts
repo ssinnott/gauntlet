@@ -163,13 +163,45 @@ export function canRead(g: Game): boolean {
   const p = g.player;
   return !p.timed.blind && !p.timed.confused && (g.bonuses.lightRadius > 0 || hasFlag(g.level, p.x, p.y, F.GLOW));
 }
-/** Could the hero use this right now, as far as its own state goes: a staff with charges, a rod that has cooled. */
+/** Could the hero use this right now, as far as its own state goes: a staff with charges, a rod that has cooled, a device it can work. */
 function ready(g: Game, it: Item): boolean {
   const k = kindOf(it);
   if (k.tval === 'scroll') return canRead(g);
-  if (k.tval === 'staff' || k.tval === 'wand') return it.charges > 0 && !g.player.timed.confused;
-  if (k.tval === 'rod') return it.timeout <= 0 && !g.player.timed.confused;
+  if (k.tval === 'staff' || k.tval === 'wand') return it.charges > 0 && !g.player.timed.confused && workable(g, it);
+  if (k.tval === 'rod') return it.timeout <= 0 && !g.player.timed.confused && workable(g, it);
   return k.tval === 'potion' || k.tval === 'food';
+}
+/**
+ * Whether the hero can expect to get a staff, wand or rod to work: a device too deep for its skill
+ * fails, the turn is gone, and nothing has changed, so the bot would choose it again. A known kind
+ * is judged by its fail chance, as a spell is, and a coin toss or worse is not worth the turn; an
+ * unknown one by how the hero's tries with it have gone (see fumbles).
+ */
+export function workable(g: Game, it: Item): boolean {
+  return known(g, it) ? C.deviceFail(g, it) < 50 : !beyond(g, it);
+}
+/**
+ * Unknown devices the hero could not get to work, by kind: the tries in a row that came to
+ * nothing, and its device skill when it made them. A failure teaches nothing -- the flavour is
+ * neither learnt nor tried -- so a half-troll warrior with a Staff of Speed it could never work
+ * stood on one grid trying it every turn, for as long as nothing came to interrupt it. A few
+ * failures and the thing is left for a shopkeeper to name, or for the hero to grow into: once it
+ * is better with devices, it tries again.
+ */
+const fumbles = new Map<string, { n: number; skill: number }>();
+const FUMBLES = 3;
+function beyond(g: Game, it: Item): boolean {
+  const f = fumbles.get(it.kind);
+  return !!f && f.n >= FUMBLES && g.bonuses.skills.device <= f.skill;
+}
+/** Try an unknown device, and count the try if it would not work. */
+function trial(g: Game, it: Item, act: Act): Act {
+  return () => {
+    act();
+    if (isAware(g.flavors, it.kind) || g.flavors.tried.includes(it.kind)) { fumbles.delete(it.kind); return; }
+    const skill = g.bonuses.skills.device, f = fumbles.get(it.kind);
+    fumbles.set(it.kind, { n: f && f.skill >= skill ? f.n + 1 : 1, skill });
+  };
 }
 /** Use a consumable or device on the hero or the level: the one verb for each kind of thing. */
 export function useAct(g: Game, it: Item, target?: Monster | null): Act {
@@ -219,11 +251,11 @@ export function sampleAct(g: Game): Act | null {
     const k = kindOf(it);
     if (!k.flavored || isAware(g.flavors, it.kind) || g.flavors.tried.includes(it.kind)) continue;
     if (k.tval !== 'potion' && (town || (k.tval !== 'scroll' && k.tval !== 'staff' && k.tval !== 'rod'))) continue;
-    if (!ready(g, it) && k.tval !== 'staff') continue;
+    if (k.tval === 'staff' ? !workable(g, it) : !ready(g, it)) continue;
     if (p.chp <= worstUnknown(g, k.tval) + 5) continue;
     // Salt water empties the stomach: only with a meal in the pack to refill it.
     if (k.tval === 'potion' && p.food < FOOD_FULL && !mealItem(g, true)) continue;
-    return useAct(g, it);
+    return k.tval === 'staff' || k.tval === 'rod' ? trial(g, it, useAct(g, it)) : useAct(g, it);
   }
   return null;
 }
@@ -234,8 +266,8 @@ export function aimTestAct(g: Game, m: Monster): Act | null {
   for (const it of p.inven) {
     const k = kindOf(it);
     if ((k.tval !== 'wand' && k.tval !== 'rod') || isAware(g.flavors, it.kind) || g.flavors.tried.includes(it.kind)) continue;
-    if (k.tval === 'rod' && it.timeout > 0) continue;
-    return useAct(g, it, m);
+    if ((k.tval === 'rod' && it.timeout > 0) || !workable(g, it)) continue;
+    return trial(g, it, useAct(g, it, m));
   }
   return null;
 }
@@ -568,7 +600,7 @@ function trusted(g: Game, it: Item, emptySlot: boolean): boolean {
   if (isKnown(it, g.flavors) || it.sense || !senseable(kindOf(it))) return true;
   return (unfelt.get(it.id) || 0) >= (emptySlot ? 1 : 3);
 }
-export function forgetCarried(): void { unfelt.clear(); feltAt = -1; }
+export function forgetCarried(): void { unfelt.clear(); feltAt = -1; fumbles.clear(); }
 
 /** Monster armour about the depth the hero works: what a weapon has to get through. */
 const typicalAcCache = new Map<number, number>();

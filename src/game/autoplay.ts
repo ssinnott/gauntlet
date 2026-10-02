@@ -26,7 +26,7 @@ import { randint0, distance } from './util.ts';
 import {
   type Act, hasEffect, known, findItem, countKind, curesTimed, avgDice, hitChance, effectDamage, roleOf, ownBook, canRead,
   sampleAct, aimTestAct, choreAct, detectAct, junkAct, healPotion, healCount, escapeItem, buffAct, manaAct, crowdItem, massAct,
-  mealItem, gearAct, gearGain, noteCarried, forgetCarried, storesWorthVisiting, shopVisit, useAct, haulValue,
+  mealItem, gearAct, gearGain, noteCarried, forgetCarried, storesWorthVisiting, shopVisit, useAct, haulValue, workable,
   homeDepth, RESTOCK_DEPTH, DISABLE_ONE, DISABLE_ALL,
 } from './autoplayKit.ts';
 import * as C from './commands.ts';
@@ -104,11 +104,11 @@ function fleeDir(g: Game, from: number): number {
   }
   return best;
 }
-/** A Word of Recall the hero could read (or a Rod of Recall it could zap) now. Using one while its word is already spoken cancels it. */
+/** A Word of Recall the hero could read (or a Rod of Recall it could zap and work) now. Using one while its word is already spoken cancels it. */
 function recallScroll(g: Game): Item | null {
   const p = g.player;
   if (g.options.ironman || p.timed.recall || p.timed.blind || p.timed.confused) return null;
-  return findItem(g, it => known(g, it) && hasEffect(kindOf(it).effect, 'recall') && (kindOf(it).tval === 'scroll' ? canRead(g) : kindOf(it).tval === 'rod' && it.timeout <= 0));
+  return findItem(g, it => known(g, it) && hasEffect(kindOf(it).effect, 'recall') && (kindOf(it).tval === 'scroll' ? canRead(g) : kindOf(it).tval === 'rod' && it.timeout <= 0 && workable(g, it)));
 }
 /**
  * Whether resting would do anything at all. Below the weak mark the game cancels a rest the turn
@@ -203,11 +203,11 @@ function studyChoice(g: Game): string | undefined {
   return [...cands].sort((a, b) => rank(a) - rank(b) || C.spellMana(g, a) - C.spellMana(g, b))[0].id;
 }
 
-/** A staff, wand or rod the hero could use now: one it knows, with a charge left or its rod cooled. */
+/** A staff, wand or rod the hero could use now: one it knows and can work, with a charge left or its rod cooled. */
 function readyDevice(g: Game, tval: 'staff' | 'rod' | 'wand', want: (k: ObjectKind) => boolean): Item | null {
   return findItem(g, it => {
     const k = kindOf(it);
-    if (k.tval !== tval || !known(g, it) || !want(k)) return false;
+    if (k.tval !== tval || !known(g, it) || !want(k) || !workable(g, it)) return false;
     return tval === 'rod' ? it.timeout <= 0 : it.charges > 0;
   });
 }
@@ -420,9 +420,11 @@ function bestRanged(g: Game, m: Monster, spare = false): Shot | null {
     }
     if (!spare && !p.timed.blind && !p.timed.confused) for (const it of p.inven) {
       const k = kindOf(it);
-      if (!known(g, it)) continue;
-      if (k.tval === 'wand' && it.charges > 0) offer(effectDamage(k.effect) * 0.8, 0, () => C.aim(g, it, dir, target));
-      else if (k.tval === 'rod' && it.timeout <= 0) offer(effectDamage(k.effect) * 0.8, 0, () => C.zap(g, it, dir, target));
+      if ((k.tval !== 'wand' && k.tval !== 'rod') || !known(g, it) || !workable(g, it)) continue;
+      // One the hero is liable to fumble is worth no more than the odds of it working.
+      const dam = effectDamage(k.effect) * Math.min(0.8, 1 - C.deviceFail(g, it) / 100);
+      if (k.tval === 'wand' && it.charges > 0) offer(dam, 0, () => C.aim(g, it, dir, target));
+      else if (k.tval === 'rod' && it.timeout <= 0) offer(dam, 0, () => C.zap(g, it, dir, target));
     }
   }
   if (!spare && dist <= 8 && !hasMFlag(r, 'IM_FIRE')) {
