@@ -5,7 +5,7 @@ import { drawText, drawTextOutlined, measureText } from '../lib/engine/text.ts';
 import { rrect } from '../lib/art/shapes.ts';
 import type { Game } from '../game/state.ts';
 import { type Item, type SlotName, type Pos, SLOTS, SLOT_LABEL, STATS, T, F, isWall, isShop, STORE_NAMES } from '../game/types.ts';
-import { kindOf, itemName, itemFlags, isKnown, isAware, itemIcon, isWearable, isWeapon, isArmor, isAmmo, tvalLabel, inscriptionTags, inscriptionConfirms } from '../game/items.ts';
+import { kindOf, itemName, itemFlags, isKnown, isAware, itemIcon, isWeapon, tvalLabel, inscriptionTags, inscriptionConfirms } from '../game/items.ts';
 import { statText, title, expToLevel, totalAc, meleeSkill, bowSkill, subraceOf, subclassOf } from '../game/player.ts';
 import { RACES, RACE_BY_ID } from '../game/data/races.ts';
 import { CLASSES, CLASS_BY_ID } from '../game/data/classes.ts';
@@ -257,10 +257,14 @@ export class Confirm implements Overlay {
 // ---------------------------------------------------------------------------------------------
 // Inventory and equipment
 
+/**
+ * The pack and what the hero is wearing. It only looks -- the hero plays itself, its kit included --
+ * so picking a line (the arrows, its letter, a click) just shows what that item is at the foot.
+ */
 export class InventoryScreen implements Overlay {
   tab: 'inven' | 'equip' = 'inven';
   sel = 0;
-  constructor(public onAction: (it: Item, where: ItemWhere, action: string) => void, tab: 'inven' | 'equip' = 'inven') { this.tab = tab; }
+  constructor(tab: 'inven' | 'equip' = 'inven') { this.tab = tab; }
   private lines(g: Game): { it: Item; where: ItemWhere; slot?: SlotName }[] {
     const p = g.player;
     if (this.tab === 'equip') return SLOTS.filter(s => p.equip[s]).map(s => ({ it: p.equip[s]!, where: 'equip' as const, slot: s }));
@@ -291,28 +295,16 @@ export class InventoryScreen implements Overlay {
       ctx.fillStyle = EDGE; ctx.fillRect(x + 8, dy - 6, w - 16, 1);
       drawText(ctx, describeItem(g, cur.it), x + 12, dy, { size: 1, color: '#c0c0d0' });
     }
-    drawText(ctx, 'TAB SWITCH   ENTER ACTIONS   W WIELD   T TAKE OFF   D DROP   Q QUAFF   R READ   E EAT   ESC CLOSE', x + w / 2, y + h - 14, { size: 1, color: DIM, align: 'center' });
+    drawText(ctx, 'TAB SWITCH   UP / DOWN OR A LETTER PICKS AN ITEM   ESC CLOSE', x + w / 2, y + h - 14, { size: 1, color: DIM, align: 'center' });
   }
   key(e: KeyEvent, ui: Ui): boolean {
-    const g = ui.g;
-    const lines = this.lines(g);
+    const lines = this.lines(ui.g);
     if (e.key === 'Escape' || e.key === 'i' && this.tab === 'inven' || e.key === 'e' && this.tab === 'equip') { ui.pop(); return true; }
     if (e.key === 'Tab' || e.key === 'e' && this.tab === 'inven' || e.key === 'i' && this.tab === 'equip') { this.tab = this.tab === 'inven' ? 'equip' : 'inven'; this.sel = 0; return true; }
     if (e.key === 'ArrowDown') { if (lines.length) this.sel = (this.sel + 1) % lines.length; return true; }
     if (e.key === 'ArrowUp') { if (lines.length) this.sel = (this.sel - 1 + lines.length) % lines.length; return true; }
-    const cur = lines[this.sel];
-    if (e.key === 'Enter' || e.key === ' ') { if (cur) this.actions(ui, cur.it, cur.where); return true; }
-    if (e.key.length === 1) {
-      const li = LETTERS.indexOf(e.key.toLowerCase());
-      if (li >= 0 && li < lines.length && !['w', 't', 'd', 'q', 'r', 'e', 'a', 'u', 'z', 'v', 'f', 'k', 'x', 'i'].includes(e.key)) { this.sel = li; this.actions(ui, lines[li].it, lines[li].where); return true; }
-      if (cur) {
-        const map: Record<string, string> = { w: 'wield', t: 'takeoff', d: 'drop', q: 'quaff', r: 'read', E: 'eat', a: 'aim', u: 'use', z: 'zap', v: 'throw', f: 'fire', k: 'destroy', x: 'inspect', A: 'activate', F: 'fuel', '{': 'inscribe' };
-        const act = map[e.key];
-        if (act) { ui.pop(); this.onAction(cur.it, cur.where, act); return true; }
-      }
-      const li2 = LETTERS.indexOf(e.key.toLowerCase());
-      if (li2 >= 0 && li2 < lines.length) { this.sel = li2; this.actions(ui, lines[li2].it, lines[li2].where); return true; }
-    }
+    const li = e.key.length === 1 ? LETTERS.indexOf(e.key.toLowerCase()) : -1;
+    if (li >= 0 && li < lines.length) this.sel = li;
     return true;
   }
   click(x: number, y: number, ui: Ui): boolean {
@@ -321,31 +313,8 @@ export class InventoryScreen implements Overlay {
     if (y < by + 30) { this.tab = x < bx + 175 ? 'inven' : 'equip'; this.sel = 0; return true; }
     const lines = this.lines(ui.g);
     const i = Math.floor((y - by - 32) / 12);
-    if (i >= 0 && i < lines.length) { if (this.sel === i) this.actions(ui, lines[i].it, lines[i].where); else this.sel = i; }
+    if (i >= 0 && i < lines.length) this.sel = i;
     return true;
-  }
-  actions(ui: Ui, it: Item, where: ItemWhere): void {
-    const k = kindOf(it);
-    const acts: [string, string][] = [];
-    if (where === 'equip') acts.push(['takeoff', 'Take off']);
-    else if (isWearable(k) && !isAmmo(k)) acts.push(['wield', k.tval === 'ring' || k.tval === 'amulet' || isArmor(k) ? 'Put on / wear' : 'Wield']);
-    if (k.tval === 'potion') acts.push(['quaff', 'Quaff']);
-    if (k.tval === 'scroll') acts.push(['read', 'Read']);
-    if (k.tval === 'food') acts.push(['eat', 'Eat']);
-    if (k.tval === 'wand') acts.push(['aim', 'Aim']);
-    if (k.tval === 'staff') acts.push(['use', 'Use']);
-    if (k.tval === 'rod') acts.push(['zap', 'Zap']);
-    if (isAmmo(k)) acts.push(['fire', 'Fire']);
-    if (k.tval === 'magic_book' || k.tval === 'prayer_book') acts.push(['browse', 'Browse']);
-    if ((k.flags || []).includes('ACTIVATE') || it.artifact) acts.push(['activate', 'Activate']);
-    if (k.tval === 'flask' || k.tval === 'light' && ui.g.player.equip.light && kindOf(ui.g.player.equip.light).id === 'torch' && k.id === 'torch') acts.push(['fuel', 'Refuel light']);
-    acts.push(['throw', 'Throw']);
-    if (where !== 'equip') acts.push(['drop', 'Drop']);
-    acts.push(['inspect', 'Inspect']);
-    acts.push(['inscribe', 'Inscribe']);
-    if (!it.artifact) acts.push(['ignore', ui.g.ignore.kinds.includes(it.kind) ? 'Stop ignoring these' : 'Ignore these from now on']);
-    if (where !== 'equip') acts.push(['destroy', 'Destroy']);
-    ui.push(new Menu(itemName(it, ui.g.flavors), acts.map(a => ({ text: a[1], value: a[0] })), (l, i, u) => { u.pop(); u.pop(); this.onAction(it, where, l.value as string); }, { width: 360, letters: true }));
   }
 }
 
@@ -560,51 +529,38 @@ export class MapOverlay implements Overlay {
     for (const fi of lv.items) if (flagAt(lv, fi.x, fi.y) & F.MARK) { ctx.fillStyle = kindOf(fi.item).tval === 'gold' ? '#ffd040' : '#80ff80'; ctx.fillRect(ox + fi.x * cell, oy + fi.y * cell, cell, cell); }
     for (const m of lv.monsters) if (m.visible) { ctx.fillStyle = hasMFlag(raceOf(m), 'UNIQUE') ? '#ff40ff' : '#ff4040'; ctx.fillRect(ox + m.x * cell, oy + m.y * cell, cell, cell); }
     ctx.fillStyle = (ui.frame >> 3) % 2 ? '#ffffff' : '#40e0ff'; ctx.fillRect(ox + p.x * cell - 1, oy + p.y * cell - 1, cell + 2, cell + 2);
-    drawText(ctx, 'CLICK A SPOT TO TRAVEL THERE   ESC CLOSES', x + w / 2, y + h - 12, { size: 1, color: DIM, align: 'center' });
+    drawText(ctx, 'ESC CLOSES', x + w / 2, y + h - 12, { size: 1, color: DIM, align: 'center' });
   }
   key(_e: KeyEvent, ui: Ui): boolean { ui.pop(); return true; }
-  click(x: number, y: number, ui: Ui): boolean {
-    const lv = ui.g.level;
-    const cell = Math.max(2, Math.floor(Math.min((VIEW_W - 40) / lv.w, (VIEW_H - 60) / lv.h)));
-    const w = lv.w * cell + 24, h = lv.h * cell + 44, bx = (VIEW_W - w) / 2, by = (VIEW_H - h) / 2;
-    const tx = Math.floor((x - bx - 12) / cell), ty = Math.floor((y - by - 30) / cell);
-    ui.pop();
-    if (tx >= 0 && ty >= 0 && tx < lv.w && ty < lv.h) (ui as unknown as { travel(x: number, y: number): void }).travel(tx, ty);
-    return true;
-  }
+  click(_x: number, _y: number, ui: Ui): boolean { ui.pop(); return true; }
 }
 
 // ---------------------------------------------------------------------------------------------
 // Help, messages
 
 const HELP = [
-  'MOVE     ARROWS / NUMPAD / H J K L Y U B N   (HOLD TO KEEP WALKING)     RUN  SHIFT + DIRECTION',
-  'WALK INTO monsters to attack, doors to open, rubble and veins to dig, a shop door to trade',
-  '<  >     take stairs      ,  g  pick up / hold    R  rest    s  search    o  open    c  close    ctrl+B  bash    ctrl+J  jam (spike)',
-  'i  e     inventory / equipment    w  wield/wear    t  take off    d  drop    k  destroy    x  l  look (r recalls)    D  disarm',
-  'q  quaff potion    r  read scroll    E  eat    a  aim wand    u  use staff    z  zap rod    A  activate    Enter  repeat last',
-  'f  fire missile    v  throw          F  refuel light          m  p  cast / pray / sing     b  browse     G  study     T  tunnel     P  stop singing',
-  'C  character (F dumps)   M  map   ctrl+L  locate   ~  knowledge   /  recall   =  options   O  ignore   V  hall of heroes   {  }  inscribe',
-  'ctrl+P  messages   ctrl+S  save   ctrl+X  save and quit   ctrl+E  export save   ctrl+F  level feeling   ctrl+O  show ignored   Q  retire',
-  'MOUSE   click the map to travel there; while aiming, click a monster to target it; * cycles targets',
+  'THE HERO PLAYS ITSELF. A bot shops, explores, fights and dives; no key or tap takes it over, and it plays on behind every screen.',
+  'i  e     inventory / equipment    C  character (F dumps)    M  map    x  l  look (r recalls)    /  recall    b  browse spells',
+  '~  knowledge    V  hall of heroes    ctrl+P  messages    ctrl+L  locate    ctrl+F  level feeling    =  options    O  ignore',
+  'ctrl+O  show ignored    ctrl+S  save    ctrl+X  save and quit    ctrl+E  export save    Q  retire',
+  'MOUSE   right-click the map to look there; click the side panel for the inventory',
   '',
   'KEYS open locked doors instantly (or pick the lock).  GENERATORS spawn monsters until smashed.',
   'FOOD keeps you alive; your light burns out.  Gold, keys and items are picked up as you walk.',
   'Unknown potions and scrolls are learned by use.  Word of Recall hops between town and your deepest level.',
-  'SONGS keep going while you act and spend mana every turn; sing one again to stop it, or press P.',
+  'SONGS keep going while you act and spend mana every turn; singing one again stops it.',
   'YOUR BLOODLINE and your PATH are chosen at birth: the first is a small twist, the second unlocks at levels 1, 10 and 25.',
-  'INSCRIPTIONS: {@q1} answers 1 at the quaff prompt (@r @f @z ... likewise); {!q} asks before quaffing, {!*} before anything.',
-  'IGNORE (O): set how choosy you are per kind of gear and stop picking up junk. Nothing unknown is ignored; {=g} always picks up.',
-  'TOUCH: tap anywhere on a phone for a thumb pad and command buttons; menus get a navigation bar.',
-  'Before you dive: a lantern, flasks of oil, Cure Light Wounds, Phase Door, and rations.',
-  'AUTOPLAY (ctrl+A, or the option in =) hands the hero to a bot that shops, explores, fights and dives. Any key takes it back.',
+  'IGNORE (O): set how choosy you are per kind of gear and stop picking up junk. Nothing unknown is ever ignored.',
+  'TOUCH: tap anywhere on a phone for buttons that open these screens; menus get a navigation bar.',
   'DEATH is a setback, not the end: you wake in the town naked with an empty pack, but keep your level, spells and gold (at least 100).',
 ];
+/** The lines above the blank one are the keys; the rest are tips. */
+const HELP_KEYS = HELP.indexOf('');
 export class HelpOverlay implements Overlay {
   draw(ctx: CanvasRenderingContext2D): void {
     const w = 900, h = 60 + HELP.length * 12 + 20, x = (VIEW_W - w) / 2, y = (VIEW_H - h) / 2;
     box(ctx, x, y, w, h, 'GAUNTLET OF ANGBAND');
-    for (let i = 0; i < HELP.length; i++) drawText(ctx, HELP[i], x + 16, y + 34 + i * 12, { size: 1, color: i < 9 ? TEXT : '#c0c0ff' });
+    for (let i = 0; i < HELP.length; i++) drawText(ctx, HELP[i], x + 16, y + 34 + i * 12, { size: 1, color: i < HELP_KEYS ? TEXT : '#c0c0ff' });
     drawText(ctx, 'ESC CLOSES', x + w / 2, y + h - 14, { size: 1, color: DIM, align: 'center' });
   }
   key(_e: KeyEvent, ui: Ui): boolean { ui.pop(); return true; }
@@ -718,7 +674,7 @@ export class TitleScreen implements Overlay {
       if (r.id === 'continue') this.drawCard(ctx, ui, r.y + TITLE_ROW - 2);
     });
     const last = rows[rows.length - 1];
-    drawText(ctx, 'ARROWS + ENTER    THE HERO PLAYS ITSELF: ANY KEY TAKES OVER    WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, last.y + last.h + 6, { size: 1, color: '#5a5666', align: 'center' });
+    drawText(ctx, 'ARROWS + ENTER    THE HERO PLAYS ITSELF    WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, last.y + last.h + 6, { size: 1, color: '#5a5666', align: 'center' });
   }
   /** Who the latest hero is and how far it has got, with the hero itself standing beside it. */
   private drawCard(ctx: CanvasRenderingContext2D, ui: Ui, y: number): void {
@@ -755,8 +711,8 @@ export class TitleScreen implements Overlay {
   choose(ui: Ui, id: TitleChoice | undefined): void {
     const u = ui as Ui2;
     switch (id) {
-      case 'continue': { const s = this.latest(ui); if (s) u.loadSlot(s.id, true); break; }
-      // Chance picks everything, the game begins, and the bot takes the hero (see BirthScreen2.start).
+      case 'continue': { const s = this.latest(ui); if (s) u.loadSlot(s.id); break; }
+      // Chance picks everything and the game begins, with the bot playing as it always is.
       case 'new': { const b = new BirthScreen2(); ui.push(b); b.randomStart(ui); break; }
       case 'custom': ui.push(new BirthScreen2()); break;
       case 'saves': ui.push(new SaveSlotsOverlay()); break;

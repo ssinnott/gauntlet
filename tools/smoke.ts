@@ -1,7 +1,8 @@
 // Headless proof the game runs in a browser: serves the repo through tools/server.ts, loads the
-// page, creates a character through the debug API, walks into the dungeon, opens the inventory,
-// and asserts the canvas has real content and the page raised no errors. Also writes screenshots
-// to dist/smoke-*.png so the look can be reviewed.
+// page, creates a character through the debug API and watches the bot play it -- which no key or
+// click may stop -- takes it into the dungeon, opens the screens, and asserts the canvas has real
+// content and the page raised no errors. Also writes screenshots to dist/smoke-*.png so the look
+// can be reviewed.
 import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -46,33 +47,86 @@ const colours = async () => page.evaluate(() => {
 });
 const titleColours = await colours();
 
-// New game through the API, then walk around the town and down the stairs.
-await page.evaluate(() => (window as any).__game.api.newGame('Smoke', 'dwarf', 'warrior', 'male'));
+// New game through the API. The bot has the hero from the first frame: there is nothing to switch on.
+const start = await page.evaluate(() => {
+  const api = (window as any).__game.api;
+  api.newGame('Smoke', 'dwarf', 'warrior', 'male');
+  const g = api.game;
+  return { turn: g.turn, x: g.player.x, y: g.player.y };
+});
 await page.waitForTimeout(500);
 await page.screenshot({ path: path.join(OUT, 'smoke-town.png') });
 const townColours = await colours();
 const state1 = await page.evaluate(() => { const g = (window as any).__game.api.game; return { depth: g.level.depth, hp: g.player.chp, x: g.player.x, y: g.player.y, monsters: g.level.monsters.length }; });
+const botPlays = await page.evaluate(() => {
+  const api = (window as any).__game.api, g = api.game;
+  for (let i = 0; i < 300; i++) api.step();
+  return { turn: g.turn, x: g.player.x, y: g.player.y, depth: g.level.depth };
+});
 
-// Walk onto the stairs (the town start is two tiles south of them) and descend.
-await page.evaluate(() => { const api = (window as any).__game.api; api.key('ArrowUp'); api.key('ArrowUp'); api.key('>'); });
-await page.waitForTimeout(600);
-await page.evaluate(() => { const api = (window as any).__game.api; for (let i = 0; i < 6; i++) api.key(['ArrowLeft', 'ArrowDown', 'ArrowRight', 'ArrowUp'][i % 4]); });
+// Into the dungeon for a look at it. The bot shops first and could take a while to get there, so the
+// stairs are taken for it.
+await page.evaluate(() => { const api = (window as any).__game.api; api.game.levelChange = { depth: 1, by: 'down' }; api.app.afterAction(); });
 await page.waitForTimeout(600);
 await page.screenshot({ path: path.join(OUT, 'smoke-dungeon.png') });
 const dungeonColours = await colours();
 const state2 = await page.evaluate(() => { const g = (window as any).__game.api.game; return { depth: g.level.depth, hp: g.player.chp, monsters: g.level.monsters.length, items: g.level.items.length, turn: g.turn }; });
 
-// Autoplay: ctrl+A hands the hero to the bot, and a real key press takes it back.
-const autoBefore = await page.evaluate(() => { const g = (window as any).__game.api.game; return { turn: g.turn, x: g.player.x, y: g.player.y }; });
-await page.evaluate(() => { const api = (window as any).__game.api; api.key('a', false, true); for (let i = 0; i < 400; i++) api.step(); });
+// Nothing the player does takes the hero back. Real key presses -- space, an arrow, a command
+// letter, the ctrl+A that used to toggle the bot -- and a click on the map go in through Input like
+// any other, the bot plays straight on, and not one of them opens a prompt.
+const uninterrupted = await page.evaluate(() => {
+  const api = (window as any).__game.api, app = api.app, g = api.game;
+  const stage = document.getElementById('stage')!;
+  const turn = g.turn;
+  for (const [key, ctrlKey] of [[' ', false], ['ArrowUp', false], ['q', false], ['a', true]] as const) stage.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey, bubbles: true }));
+  const r = stage.getBoundingClientRect();
+  stage.dispatchEvent(new PointerEvent('pointerdown', { clientX: r.left + r.width * 0.3, clientY: r.top + r.height * 0.5, button: 0, pointerType: 'mouse', bubbles: true }));
+  for (let i = 0; i < 240; i++) api.step();
+  return { turns: g.turn - turn, overlays: app.overlays.length };
+});
 await page.waitForTimeout(200);
 await page.screenshot({ path: path.join(OUT, 'smoke-autoplay.png') });
-const autoState = await page.evaluate(() => { const g = (window as any).__game.api.game; return { turn: g.turn, x: g.player.x, y: g.player.y, on: g.options.autoplay, dead: g.player.dead, depth: g.level.depth }; });
-await page.evaluate(() => {
-  document.getElementById('stage')!.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
-  const api = (window as any).__game.api; for (let i = 0; i < 4; i++) api.step();
+
+// A key that would have played does nothing at all: no step, no prompt, no turn. The arrows, the
+// numpad and the vi keys move nobody, and the command letters, pressed or tapped, command nothing.
+const inert = await page.evaluate(() => {
+  const app = (window as any).__game.api.app, g = app.g, p = g.player;
+  const snap = () => JSON.stringify({ x: p.x, y: p.y, depth: g.level.depth, turn: g.turn, searching: !!p.searching, pack: p.inven.length, overlays: app.overlays.length });
+  const presses: { key: string; shift: boolean; ctrl: boolean; code: string }[] = [];
+  for (const key of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Home', 'PageDown', 'h', 'j', 'k', 'y', 'u', 'n', '1', '5', '9', '.', ',', 'g', 's', 'S', '<', '>', 'R', 'q', 'r', 'E', 'w', 't', 'd', 'a', 'z', 'A', 'F', 'v', 'f', 'm', 'p', 'G', 'o', 'c', 'D', 'T', 'P', 'Enter', '{', '}', '*'])
+    presses.push({ key, shift: false, ctrl: false, code: '' });
+  presses.push({ key: 'ArrowUp', shift: true, ctrl: false, code: '' });
+  for (const key of ['a', 'b', 'j']) presses.push({ key, shift: false, ctrl: true, code: '' });
+  for (const key of ['u', 'q', 'g', '>', 'R', 'ArrowUp']) presses.push({ key, shift: false, ctrl: false, code: 'touch' });
+  const acted: string[] = [];
+  for (const e of presses) {
+    const before = snap();
+    app.handleKeyPublic({ ...e, alt: false });
+    if (snap() !== before) acted.push(`${e.ctrl ? 'ctrl+' : ''}${e.shift ? 'shift+' : ''}${e.key}${e.code ? ' (button)' : ''}`);
+    for (let n = 0; app.overlays.length && n < 5; n++) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
+  }
+  return { tried: presses.length, acted };
 });
-const autoStopped = await page.evaluate(() => !(window as any).__game.api.game.options.autoplay);
+
+// The keys that only look still open their screens, and the bot plays on behind them.
+const behind = await page.evaluate(() => {
+  const api = (window as any).__game.api, app = api.app, g = api.game;
+  const close = () => { for (let n = 0; app.overlays.length && n < 5; n++) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' }); };
+  const screens: Record<string, string | null> = {};
+  for (const key of ['i', 'e', 'C', 'M', 'x', '~', '=', 'O', 'V', '?']) {
+    app.handleKeyPublic({ key, shift: false, ctrl: false, alt: false, code: '' });
+    const top = app.overlays[app.overlays.length - 1];
+    screens[key] = top ? top.constructor.name : null;
+    close();
+  }
+  app.handleKeyPublic({ key: 'C', shift: false, ctrl: false, alt: false, code: '' });
+  const turn = g.turn;
+  for (let i = 0; i < 240; i++) api.step();
+  const open = app.overlays[app.overlays.length - 1]?.constructor.name ?? null;
+  close();
+  return { screens, turns: g.turn - turn, open };
+});
 
 // Inventory screen renders.
 await page.evaluate(() => (window as any).__game.api.key('i'));
@@ -94,29 +148,30 @@ await page.screenshot({ path: path.join(OUT, 'smoke-charsheet.png') });
 await page.evaluate(() => (window as any).__game.api.key('Escape'));
 const dumpLen = await page.evaluate(() => (window as any).__game.api.dump().length);
 
-// Touch controls: the option draws the on-screen pad, and the hit testing maps taps to the right
-// keys. The pad is the only way to play on a phone, so its geometry is worth asserting.
+// Touch controls: the option draws the on-screen buttons, and the hit testing maps taps to the right
+// keys. There is no thumb pad on the map any more -- nothing steers the hero but the bot -- and
+// every button opens a screen to look at.
 await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = true; });
 await page.waitForTimeout(250);
 await page.screenshot({ path: path.join(OUT, 'smoke-touch.png') });
 const touchColours = await colours();
 const touchHits = await page.evaluate(() => {
   const app = (window as any).__game.api.app;
-  const btn = app.touch.hit(281, 481, false);       // first command button
-  const north = app.touch.hit(74, 422, false);      // top of the thumb pad
-  const west = app.touch.hit(30, 462, false);       // left of the thumb pad
-  const hub = app.touch.hit(74, 462, false);        // the pad's centre
-  const map = app.touch.hit(400, 200, false);       // open map: not the pad's business
+  const btn = app.touch.hit(281, 481, false);       // first button
+  const pad = [app.touch.hit(74, 422, false), app.touch.hit(30, 462, false), app.touch.hit(74, 462, false)]; // where the pad was
+  const map = app.touch.hit(400, 200, false);       // open map: not the touch layer's business
   const esc = app.touch.hit(app.touch.buttons(true)[0].x + 3, app.touch.buttons(true)[0].y + 3, true);
-  return { btn: btn && btn.key, north: north && north.key, west: west && west.key, hub: hub && hub.key, map, esc: esc && esc.key, visible: app.touchVisible() };
+  return { btn: btn && btn.key, pad: pad.map((b: any) => b && b.key), map, esc: esc && esc.key, visible: app.touchVisible() };
 });
-const touchOpensInventory = await page.evaluate(() => {
+const touchButtons = await page.evaluate(() => {
   const app = (window as any).__game.api.app;
-  const before = app.overlays.length;
-  app.handleKeyPublic({ key: 'i', shift: false, ctrl: false, alt: false, code: '' });
-  const after = app.overlays.length;
-  app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
-  return after > before;
+  return app.touch.buttons(false).map((b: any) => {
+    app.handleKeyPublic({ key: b.key, shift: !!b.shift, ctrl: !!b.ctrl, alt: false, code: 'touch' });
+    const top = app.overlays[app.overlays.length - 1];
+    const opened = top ? top.constructor.name : null;
+    for (let n = 0; app.overlays.length && n < 5; n++) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
+    return { label: b.label, opened };
+  });
 });
 await page.evaluate(() => { (window as any).__game.api.game.options.touchControls = false; });
 
@@ -126,8 +181,9 @@ const soundsPlayed = await page.evaluate(() => (window as any).__game.api.testAu
 await page.waitForTimeout(200);
 
 // Save round trip: ctrl+S writes a slot to IndexedDB, it lists on the title screen, and reading it
-// back reconstructs the same hero. Nothing is left in the old single localStorage key.
-await page.evaluate(() => (window as any).__game.api.key('s', false, true));
+// back reconstructs the same hero. Nothing is left in the old single localStorage key. The game goes
+// to the title screen straight after the save, so the bot cannot write a newer one meanwhile.
+await page.evaluate(() => { const api = (window as any).__game.api; api.key('s', false, true); api.app.quitToTitle(); });
 await page.waitForTimeout(700);
 const saveInfo = await page.evaluate(async () => {
   const app = (window as any).__game.api.app;
@@ -154,13 +210,13 @@ const saveInfo = await page.evaluate(async () => {
     legacy: !!localStorage.getItem('gauntlet-of-angband.save.v1'),
   };
 });
-// Loading the slot back gives the same hero.
+// Loading the slot back gives the same hero. The bot picks it up the moment it lands, so it is read
+// then, before the bot has had time to take any stairs.
 const reloaded = await page.evaluate(async () => {
   const app = (window as any).__game.api.app;
-  const id = app.currentSlot;
-  app.quitToTitle();
+  const id = app.currentSlot, old = app.g;
   app.loadSlot(id);
-  await new Promise(r => setTimeout(r, 600));
+  for (let i = 0; i < 200 && app.g === old; i++) await new Promise(r => setTimeout(r, 5));
   return { name: app.g?.player?.name, depth: app.g?.player?.depth, started: app.started };
 });
 // A hero saved while IndexedDB was unavailable lands in the localStorage fallback. Both stores must
@@ -202,30 +258,13 @@ const staleness = await page.evaluate(async () => {
   return { ok: true, name: shown?.name, savedAt: shown?.savedAt === older + 60000, restored: app.slots[0]?.name };
 });
 
-// Touch buttons must never be read as movement: the vi movement keys overlap the command letters,
-// so the STAFF button ('u') used to walk the hero north-east instead.
-const buttonKeys = await page.evaluate(() => {
+// The touch bar offers YES and NO only where the screen asks a question: on the title screen 'n'
+// means NEW GAME.
+const yesNo = await page.evaluate(() => {
   const app = (window as any).__game.api.app;
-  const g = app.g;
-  const before = { x: g.player.x, y: g.player.y };
-  app.handleKeyPublic({ key: 'u', shift: false, ctrl: false, alt: false, code: 'touch' });
-  const afterButton = { x: g.player.x, y: g.player.y };
-  while (app.overlays.length) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
-  const msgsBefore = g.msg.list.length;
-  app.handleKeyPublic({ key: 'u', shift: false, ctrl: false, alt: false, code: '' });
-  const afterKey = { x: g.player.x, y: g.player.y };
-  // A real vi key resolves to a direction whether or not the step lands: walking into a wall still
-  // proves dirOfKey read it as north-east.
-  const walled = g.msg.list.slice(msgsBefore).some((m: any) => /wall in the way/i.test(m.text));
-  while (app.overlays.length) app.handleKeyPublic({ key: 'Escape', shift: false, ctrl: false, alt: false, code: '' });
   const plain = app.touch.buttons(true, false).map((b: any) => b.key);
   const asking = app.touch.buttons(true, true).map((b: any) => b.key);
-  return {
-    buttonMoved: afterButton.x !== before.x || afterButton.y !== before.y,
-    viActed: afterKey.x !== afterButton.x || afterKey.y !== afterButton.y || walled,
-    plainHasYesNo: plain.includes('y') || plain.includes('n'),
-    askingHasYesNo: asking.includes('y') && asking.includes('n'),
-  };
+  return { plainHasYesNo: plain.includes('y') || plain.includes('n'), askingHasYesNo: asking.includes('y') && asking.includes('n') };
 });
 
 // The title screen offers CONTINUE with a summary of the latest hero, and continuing hands that
@@ -234,12 +273,15 @@ await page.evaluate(() => (window as any).__game.api.app.quitToTitle());
 await page.waitForTimeout(300);
 await page.screenshot({ path: path.join(OUT, 'smoke-title-continue.png') });
 const continued = await page.evaluate(async () => {
-  const app = (window as any).__game.api.app;
+  const api = (window as any).__game.api, app = api.app;
   const title = app.overlays[app.overlays.length - 1];
   const rows = title.rows(app).map((r: any) => r.id);
+  const old = app.g;
   app.handleKeyPublic({ key: 'c', shift: false, ctrl: false, alt: false, code: '' });
-  await new Promise(r => setTimeout(r, 600));
-  return { rows, started: app.started, name: app.g?.player?.name, autoplay: !!app.g?.options?.autoplay };
+  for (let i = 0; i < 200 && app.g === old; i++) await new Promise(r => setTimeout(r, 5));
+  const turn = app.g.turn;
+  for (let i = 0; i < 240; i++) api.step();
+  return { rows, started: app.started, name: app.g?.player?.name, played: app.g.turn > turn };
 });
 
 // The saved-heroes screen itself renders.
@@ -271,23 +313,27 @@ const heroCombos = sheets.male.races * sheets.male.classes;
 // level, with the bot still playing it.
 const respawn = await page.evaluate(() => {
   const api = (window as any).__game.api, app = api.app, g = api.game;
-  g.options.autoplay = true;
-  const lev = g.player.lev, gold = g.player.gold;
+  const lev = g.player.lev, gold = g.player.gold, deaths = g.player.deaths || 0;
   g.player.dead = true; g.player.deathCause = 'a smoke test';
   // The fall stays on screen for a moment; the state is read the frame the hero wakes, before the
   // bot has had a turn to go shopping.
   for (let i = 0; i < 200 && g.player.dead; i++) api.step();
   const p = g.player;
-  return { dead: p.dead, depth: p.depth, deaths: p.deaths, naked: !p.equip.weapon && !p.equip.body && p.inven.length === 0, lev: p.lev === lev, gold: p.gold >= gold - 50, full: p.chp === p.mhp, autoplay: g.options.autoplay, deathScreen: app.overlays.length > 0 };
+  const woke = { dead: p.dead, depth: p.depth, died: (p.deaths || 0) - deaths, naked: !p.equip.weapon && !p.equip.body && p.inven.length === 0, lev: p.lev === lev, gold: p.gold >= gold - 50, full: p.chp === p.mhp, deathScreen: app.overlays.length > 0 };
+  const turn = g.turn;
+  for (let i = 0; i < 240; i++) api.step();
+  return { ...woke, playsOn: g.turn > turn };
 });
 
 // NEW GAME lets chance build the hero and hands it to the bot at once.
 const fresh = await page.evaluate(async () => {
-  const app = (window as any).__game.api.app;
+  const api = (window as any).__game.api, app = api.app;
   app.quitToTitle();
   app.handleKeyPublic({ key: 'n', shift: false, ctrl: false, alt: false, code: '' });
   await new Promise(r => setTimeout(r, 200));
-  return { started: app.started, overlays: app.overlays.length, autoplay: !!app.g.options.autoplay, depth: app.g.player.depth, name: app.g.player.name };
+  const g = app.g, depth = g.player.depth, turn = g.turn;
+  for (let i = 0; i < 240; i++) api.step();
+  return { started: app.started, overlays: app.overlays.length, depth, name: g.player.name, played: g.turn > turn };
 });
 
 // A second hero made through the full birth API with point-bought stats and birth options.
@@ -304,7 +350,7 @@ ok(errors.length === 0, `no page errors${errors.length ? ' -> ' + errors.join(' 
 ok(titleColours > 12, `title screen drew (${titleColours} colours)`);
 ok(townColours > 30, `town drew (${townColours} colours)`);
 ok(state1.depth === 0 && state1.hp > 0, `character created in town at ${state1.x},${state1.y} with ${state1.monsters} townsfolk`);
-ok(state2.depth === 1, `descended to dungeon level ${state2.depth} (${state2.monsters} monsters, ${state2.items} objects, turn ${state2.turn})`);
+ok(state2.depth >= 1, `taken down to dungeon level ${state2.depth} (${state2.monsters} monsters, ${state2.items} objects, turn ${state2.turn})`);
 ok(dungeonColours > 30, `dungeon drew (${dungeonColours} colours)`);
 ok(saveInfo.rows >= 1 && saveInfo.hasData && saveInfo.name === 'Smoke', `ctrl+S wrote a slot to IndexedDB (${JSON.stringify(saveInfo)})`);
 ok(saveInfo.slots >= 1 && saveInfo.hasSaveFlag, 'the saved hero shows in the slot list');
@@ -315,25 +361,26 @@ ok(savesScreen.overlay === 'SaveSlotsOverlay' && savesScreen.listed >= 1 && save
 ok(fallback.listed && fallback.alongside, `a hero in the localStorage fallback is listed beside the IndexedDB ones (${JSON.stringify(fallback)})`);
 ok(!fallback.leftBehind && !fallback.stillListed, 'deleting a fallback hero clears it from both stores');
 ok(staleness.ok && staleness.name === 'Newer' && staleness.savedAt && staleness.restored === 'Smoke', `the newer of two copies of a slot wins (${JSON.stringify(staleness)})`);
-ok(!buttonKeys.buttonMoved, `a touch command button moved the hero instead of running its command (${JSON.stringify(buttonKeys)})`);
-ok(buttonKeys.viActed, `the vi movement keys stopped working for real key presses (${JSON.stringify(buttonKeys)})`);
-ok(!buttonKeys.plainHasYesNo && buttonKeys.askingHasYesNo, `the touch bar offers YES/NO only where the screen asks (${JSON.stringify(buttonKeys)})`);
+ok(!yesNo.plainHasYesNo && yesNo.askingHasYesNo, `the touch bar offers YES/NO only where the screen asks (${JSON.stringify(yesNo)})`);
 ok(soundsPlayed >= 30, `every sound recipe synthesised without throwing (${soundsPlayed} played)`);
 ok(hasLore, 'monster memory persisted to localStorage');
 ok(knowledgeColours > 12, `knowledge browser drew (${knowledgeColours} colours)`);
 ok(touchColours > 30, `touch controls drew (${touchColours} colours)`);
-ok(touchHits.visible === true && touchHits.btn === 'i' && touchHits.north === 'ArrowUp' && touchHits.west === 'ArrowLeft' && touchHits.hub === 'g' && touchHits.map === null && touchHits.esc === 'Escape',
-  `touch hit testing maps taps to keys (${JSON.stringify(touchHits)})`);
-ok(touchOpensInventory, 'a touch button opens the screen it names');
+ok(touchHits.visible === true && touchHits.btn === 'i' && touchHits.pad.every((k: string | null) => k === null) && touchHits.map === null && touchHits.esc === 'Escape',
+  `touch hit testing maps taps to keys, with no pad to steer the hero (${JSON.stringify(touchHits)})`);
+ok(touchButtons.length > 0 && touchButtons.every((b: any) => b.opened), `every touch button opens a screen (${touchButtons.map((b: any) => `${b.label}=${b.opened}`).join(' ')})`);
 ok(dumpLen > 200, `character dump has ${dumpLen} characters`);
-ok(autoState.turn > autoBefore.turn && (autoState.x !== autoBefore.x || autoState.y !== autoBefore.y || autoState.depth > 1), `autoplay played the hero (${autoState.turn - autoBefore.turn} game turns, depth ${autoState.depth})`);
-ok(autoState.on || autoState.dead, 'autoplay stayed on while the bot played');
-ok(autoStopped, 'a key press took control back from autoplay');
+ok(botPlays.turn > start.turn && (botPlays.x !== start.x || botPlays.y !== start.y || botPlays.depth !== 0), `the bot plays a new hero from the start, with nothing switched on (${botPlays.turn - start.turn} game turns)`);
+ok(uninterrupted.turns > 0 && uninterrupted.overlays === 0, `no key press or click stops the bot or opens a prompt (${JSON.stringify(uninterrupted)})`);
+ok(inert.acted.length === 0, `no key plays the hero (${inert.tried} tried${inert.acted.length ? '; these acted: ' + inert.acted.join(', ') : ''})`);
+const LOOKS: Record<string, string> = { i: 'InventoryScreen', e: 'InventoryScreen', C: 'CharSheet', M: 'MapOverlay', x: 'LookMode', '~': 'KnowledgeOverlay', '=': 'OptionsOverlay', O: 'IgnoreOverlay', V: 'HighScoresOverlay', '?': 'HelpOverlay' };
+ok(Object.entries(LOOKS).every(([k, v]) => behind.screens[k] === v), `the keys that look still open their screens (${JSON.stringify(behind.screens)})`);
+ok(behind.turns > 0 && behind.open === 'CharSheet', `the bot plays on behind an open screen (${behind.turns} game turns behind ${behind.open})`);
 ok(heroCombos === 187 && heroDupes.length === 0, `every race and class combination has distinct art (${heroCombos} combinations x 2 sexes${heroDupes.length ? '; same: ' + heroDupes.slice(0, 5).join(', ') + (heroDupes.length > 5 ? ` and ${heroDupes.length - 5} more` : '') : ''})`);
 ok(state3.cls === 'necromancer' && state3.ironman === true && state3.int >= 17 && state3.hp > 0, `birth with point-buy and birth options works (${JSON.stringify(state3)})`);
-ok(continued.rows[0] === 'continue' && continued.started && continued.name === 'Smoke' && continued.autoplay, `CONTINUE heads the title screen and resumes the latest hero with the bot playing (${JSON.stringify(continued)})`);
-ok(!respawn.dead && respawn.depth === 0 && respawn.deaths === 1 && respawn.naked && respawn.lev && respawn.gold && respawn.full && respawn.autoplay && !respawn.deathScreen,
+ok(continued.rows[0] === 'continue' && continued.started && continued.name === 'Smoke' && continued.played, `CONTINUE heads the title screen and resumes the latest hero with the bot playing (${JSON.stringify(continued)})`);
+ok(!respawn.dead && respawn.depth === 0 && respawn.died === 1 && respawn.naked && respawn.lev && respawn.gold && respawn.full && respawn.playsOn && !respawn.deathScreen,
   `a hero that dies wakes in the town naked, keeping its level and gold, and the bot plays on (${JSON.stringify(respawn)})`);
-ok(fresh.started && fresh.overlays === 0 && fresh.autoplay && fresh.depth === 0 && !!fresh.name, `NEW GAME starts a random hero with the bot playing (${JSON.stringify(fresh)})`);
+ok(fresh.started && fresh.overlays === 0 && fresh.played && fresh.depth === 0 && !!fresh.name, `NEW GAME starts a random hero with the bot playing (${JSON.stringify(fresh)})`);
 console.log(bad ? '\nSMOKE FAILED' : '\nSMOKE OK: the game runs in a browser with no build step. Screenshots in dist/.');
 process.exit(bad ? 1 : 0);

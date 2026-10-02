@@ -21,10 +21,6 @@ export interface Options {
   damageNumbers: boolean;
   /** A monster coming into view interrupts running and resting. */
   disturbNear: boolean;
-  /** Ask before quaffing or reading an unknown item. */
-  confirmUnknown: boolean;
-  /** Ask before walking onto a known trap. */
-  confirmTraps: boolean;
   /** Hit a monster's flavour text in the message bar when it dies. */
   verboseLore: boolean;
   /** Arcade sound effects. */
@@ -35,12 +31,10 @@ export interface Options {
   touchControls: boolean;
   /** Honour the ignore settings: ignored items are not picked up and not drawn. */
   ignoreItems: boolean;
-  /** The bot plays the hero: it fights, explores, shops and dives on its own. */
-  autoplay: boolean;
 }
-export const DEFAULT_OPTIONS: Options = { connectedStairs: true, ironman: false, noSelling: false, smartMonsters: false, persistentLevels: false, randarts: false, autoPickup: true, damageNumbers: true, disturbNear: true, confirmUnknown: false, confirmTraps: true, verboseLore: false, sound: true, voice: true, touchControls: false, ignoreItems: true, autoplay: false };
+export const DEFAULT_OPTIONS: Options = { connectedStairs: true, ironman: false, noSelling: false, smartMonsters: false, persistentLevels: false, randarts: false, autoPickup: true, damageNumbers: true, disturbNear: true, verboseLore: false, sound: true, voice: true, touchControls: false, ignoreItems: true };
 export const BIRTH_OPTIONS: (keyof Options)[] = ['connectedStairs', 'ironman', 'noSelling', 'smartMonsters', 'persistentLevels', 'randarts'];
-export const GAME_OPTIONS: (keyof Options)[] = ['autoPickup', 'damageNumbers', 'disturbNear', 'confirmUnknown', 'confirmTraps', 'verboseLore', 'sound', 'voice', 'touchControls', 'ignoreItems', 'autoplay'];
+export const GAME_OPTIONS: (keyof Options)[] = ['autoPickup', 'damageNumbers', 'disturbNear', 'verboseLore', 'sound', 'voice', 'touchControls', 'ignoreItems'];
 export const OPTION_TEXT: Record<keyof Options, [string, string]> = {
   connectedStairs: ['Connected stairs', 'Arrive on a staircase of the kind you took'],
   ironman: ['Ironman', 'No up staircases and no recall to town; the only way is down'],
@@ -51,13 +45,10 @@ export const OPTION_TEXT: Record<keyof Options, [string, string]> = {
   autoPickup: ['Auto pickup', 'Pick up items as you walk over them'],
   damageNumbers: ['Damage numbers', 'Show floating numbers when things get hit'],
   disturbNear: ['Disturb on sight', 'Stop running and resting when a monster appears'],
-  confirmUnknown: ['Confirm unknown items', 'Ask before quaffing or reading something unidentified'],
-  confirmTraps: ['Confirm traps', 'Ask before stepping onto a visible trap'],
-  autoplay: ['Autoplay', 'Let the bot play your hero; any key takes back control (ctrl+A)'],
   verboseLore: ['Verbose lore', 'Show a monster\'s description the first time you meet it'],
   sound: ['Sound', 'Arcade sound effects'],
   voice: ['Narrator', 'The arcade voice announces what befalls you'],
-  touchControls: ['Touch controls', 'Always show the on-screen pad (it appears by itself when you tap)'],
+  touchControls: ['Touch controls', 'Always show the on-screen buttons (they appear by themselves when you tap)'],
   ignoreItems: ['Ignore junk', 'Honour the ignore settings from the knowledge browser'],
 };
 export function normalizeOptions(o: Partial<Options> | undefined): Options { return { ...DEFAULT_OPTIONS, ...(o || {}) }; }

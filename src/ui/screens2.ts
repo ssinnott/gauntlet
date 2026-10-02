@@ -44,12 +44,12 @@ export interface Ui2 extends Ui {
   slots: SaveMeta[];
   /** A line for the saved-heroes screen when something went wrong. */
   notice: string;
-  loadSlot(id: string, autoplay?: boolean): void;
+  loadSlot(id: string): void;
   deleteSlot(id: string): void;
   dumpCharacter(): void;
   exportSave(): void;
   importSave(): void;
-  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string; autoplay?: boolean }): void;
+  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string }): void;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -293,8 +293,8 @@ export class BirthScreen2 implements Overlay {
     const u = ui as Ui2;
     const name = this.name.trim() || randomName((a, b) => a + Math.floor(Math.random() * (b - a + 1)));
     const stats = this.stats();
-    // Every hero starts in the bot's hands, the random one and the built one alike; a key takes it back.
-    const extra = { stats, options: this.options, history: this.history, subrace: this.subraceId(), subclass: this.subclassId(), autoplay: true };
+    // The bot plays every hero, the random one and the built one alike.
+    const extra = { stats, options: this.options, history: this.history, subrace: this.subraceId(), subclass: this.subclassId() };
     ui.pop();
     if (u.newGame2) u.newGame2(name, RACES[this.race].id, CLASSES[this.cls].id, this.sex, extra); else ui.newGame(name, RACES[this.race].id, CLASSES[this.cls].id, this.sex);
     // Unspent points become gold.
@@ -687,7 +687,7 @@ export class SaveSlotsOverlay implements Overlay {
     if (!slots.length) return true;
     if (e.key === 'ArrowDown' || e.key === 'j') { this.sel = (this.sel + 1) % slots.length; return true; }
     if (e.key === 'ArrowUp' || e.key === 'k') { this.sel = (this.sel - 1 + slots.length) % slots.length; return true; }
-    if (e.key === 'Enter' || e.key === ' ') { const s = slots[this.sel]; if (s) u.loadSlot(s.id, true); return true; }
+    if (e.key === 'Enter' || e.key === ' ') { const s = slots[this.sel]; if (s) u.loadSlot(s.id); return true; }
     if (e.key === 'd' || e.key === 'D') { this.confirmDelete = true; return true; }
     return true;
   }
@@ -695,7 +695,7 @@ export class SaveSlotsOverlay implements Overlay {
     const u = ui as Ui2;
     const i = Math.floor((y - 104) / 30);
     if (i >= 0 && i < u.slots.length) {
-      if (this.sel === i) { const s = u.slots[i]; if (s) u.loadSlot(s.id, true); }
+      if (this.sel === i) { const s = u.slots[i]; if (s) u.loadSlot(s.id); }
       else this.sel = i;
       return true;
     }
