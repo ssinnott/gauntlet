@@ -37,7 +37,7 @@ await page.waitForFunction(() => (window as any).__game?.ready === true, null, {
 await page.waitForTimeout(400);
 await page.screenshot({ path: path.join(OUT, 'smoke-title.png') });
 
-const colours = async () => page.evaluate(() => {
+const colours = async (on: any = page): Promise<number> => on.evaluate(() => {
   const c = document.getElementById('stage') as HTMLCanvasElement;
   const d = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
   const seen = new Set<number>();
@@ -202,6 +202,28 @@ const staleness = await page.evaluate(async () => {
   return { ok: true, name: shown?.name, savedAt: shown?.savedAt === older + 60000, restored: app.slots[0]?.name };
 });
 
+// Leaving the screen saves at once: a phone closes a game it has sent to the background without a
+// word, and waiting for the minute's autosave would lose whatever happened since the last one.
+const hidden = await page.evaluate(async () => {
+  const api = (window as any).__game.api, app = api.app;
+  const row = (): Promise<any> => new Promise(resolve => {
+    const req = indexedDB.open('gauntlet-of-angband', 1);
+    req.onsuccess = () => {
+      const get = req.result.transaction('saves', 'readonly').objectStore('saves').get(app.currentSlot);
+      get.onsuccess = () => resolve(get.result);
+      get.onerror = () => resolve(null);
+    };
+    req.onerror = () => resolve(null);
+  });
+  api.key(',');   // a turn passes that no save has seen
+  const turn = app.g.turn, before = await row();
+  Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+  document.dispatchEvent(new Event('visibilitychange'));
+  delete (document as any).hidden;
+  await new Promise(r => setTimeout(r, 500));
+  return { turn, before: before?.turn, after: (await row())?.turn };
+});
+
 // Touch buttons must never be read as movement: the vi movement keys overlap the command letters,
 // so the STAFF button ('u') used to walk the hero north-east instead.
 const buttonKeys = await page.evaluate(() => {
@@ -295,8 +317,44 @@ await page.evaluate(() => (window as any).__game.api.newGame2('Smoke2', 'ent', '
 await page.waitForTimeout(300);
 const state3 = await page.evaluate(() => { const g = (window as any).__game.api.game; return { cls: g.player.cls, ironman: g.options.ironman, int: g.player.statBase.INT, hp: g.player.chp }; });
 
-await browser.close();
+// Installing to a phone: the manifest the page links parses, its icons are the sizes it says, and
+// Chromium objects to nothing but the private window the test runs in.
+const install = await page.evaluate(async () => {
+  const link = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+  const touch = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
+  if (!link || !touch) return null;
+  const size = async (href: string): Promise<string> => { const img = new Image(); img.src = href; await img.decode(); return `${img.naturalWidth}x${img.naturalHeight}`; };
+  const m = await (await fetch(link.href)).json();
+  const sized = await Promise.all(m.icons.map(async (i: { src: string; sizes: string }) => await size(new URL(i.src, link.href).href) === i.sizes));
+  return { display: m.display, icons: sized.length, sized: sized.every(Boolean), touchIcon: await size(touch.href) };
+});
+const cdp = await page.context().newCDPSession(page);
+const installErrors = ((await cdp.send('Page.getInstallabilityErrors')).installabilityErrors as { errorId: string }[])
+  .map(e => e.errorId).filter(id => id !== 'in-incognito');
+await page.close();
+
+// Offline: once the service worker has seen the game, it starts with the server gone. Only the
+// published build registers the worker, so the test does it here, and a second visit under it keeps
+// every module the dev page loads. Last, because it stops the server.
+const offlinePage = await browser.newPage({ viewport: { width: 960, height: 540 } });
+offlinePage.on('pageerror', (e: Error) => errors.push('offline pageerror: ' + e.message));
+offlinePage.on('console', (m: any) => { if (m.type() === 'error') errors.push('offline console: ' + m.text()); });
+const booted = () => offlinePage.waitForFunction(() => (window as any).__game?.ready === true, null, { timeout: 20000 });
+await offlinePage.goto(`http://localhost:${port}/`, { waitUntil: 'load' });
+await booted();
+await offlinePage.evaluate(() => navigator.serviceWorker.register('sw.js').then(() => navigator.serviceWorker.ready));
+await offlinePage.waitForFunction(() => !!navigator.serviceWorker.controller, null, { timeout: 10000 });
+await offlinePage.reload({ waitUntil: 'load' });
+await booted();
 server.close();
+server.closeAllConnections();
+await offlinePage.reload({ waitUntil: 'load' }).catch(() => { /* judged by whether the game boots */ });
+const offline = await booted().then(async () => {
+  await offlinePage.waitForTimeout(400);
+  return { colours: await colours(offlinePage), controlled: await offlinePage.evaluate(() => !!navigator.serviceWorker.controller) };
+}, () => null);
+
+await browser.close();
 
 let bad = 0;
 const ok = (cond: boolean, msg: string) => { console.log((cond ? '  ok:   ' : '  FAIL: ') + msg); if (!cond) bad++; };
@@ -315,6 +373,7 @@ ok(savesScreen.overlay === 'SaveSlotsOverlay' && savesScreen.listed >= 1 && save
 ok(fallback.listed && fallback.alongside, `a hero in the localStorage fallback is listed beside the IndexedDB ones (${JSON.stringify(fallback)})`);
 ok(!fallback.leftBehind && !fallback.stillListed, 'deleting a fallback hero clears it from both stores');
 ok(staleness.ok && staleness.name === 'Newer' && staleness.savedAt && staleness.restored === 'Smoke', `the newer of two copies of a slot wins (${JSON.stringify(staleness)})`);
+ok(hidden.after === hidden.turn && hidden.before !== hidden.turn, `leaving the screen saves the hero at once (${JSON.stringify(hidden)})`);
 ok(!buttonKeys.buttonMoved, `a touch command button moved the hero instead of running its command (${JSON.stringify(buttonKeys)})`);
 ok(buttonKeys.viActed, `the vi movement keys stopped working for real key presses (${JSON.stringify(buttonKeys)})`);
 ok(!buttonKeys.plainHasYesNo && buttonKeys.askingHasYesNo, `the touch bar offers YES/NO only where the screen asks (${JSON.stringify(buttonKeys)})`);
@@ -335,5 +394,8 @@ ok(continued.rows[0] === 'continue' && continued.started && continued.name === '
 ok(!respawn.dead && respawn.depth === 0 && respawn.deaths === 1 && respawn.naked && respawn.lev && respawn.gold && respawn.full && respawn.autoplay && !respawn.deathScreen,
   `a hero that dies wakes in the town naked, keeping its level and gold, and the bot plays on (${JSON.stringify(respawn)})`);
 ok(fresh.started && fresh.overlays === 0 && fresh.autoplay && fresh.depth === 0 && !!fresh.name, `NEW GAME starts a random hero with the bot playing (${JSON.stringify(fresh)})`);
+ok(!!install && install.display === 'fullscreen' && install.icons >= 2 && install.sized && install.touchIcon === '180x180', `the manifest and icons a phone installs from are right (${JSON.stringify(install)})`);
+ok(installErrors.length === 0, `Chromium would install the page${installErrors.length ? ' -> ' + installErrors.join(', ') : ''}`);
+ok(!!offline && offline.controlled && offline.colours > 12, `the service worker starts the game with the server gone (${JSON.stringify(offline)})`);
 console.log(bad ? '\nSMOKE FAILED' : '\nSMOKE OK: the game runs in a browser with no build step. Screenshots in dist/.');
 process.exit(bad ? 1 : 0);
