@@ -193,6 +193,8 @@ export function pickSubclass(cls: string, rnd: (a: number, b: number) => number 
   return list.length ? list[rnd(0, list.length - 1)].id : '';
 }
 
+/** The least gold a new hero starts with, however good its stats; and what a hero who dies broke wakes with. */
+export const MIN_START_GOLD = 100;
 export function createPlayer(name: string, race: string, cls: string, sex: 'male' | 'female', chosenStats?: Record<Stat, number>, subrace?: string, subclass?: string): Player {
   // An unknown id is dropped rather than carried: the character sheet, the bonus refresh and the
   // save all read these through lookups that must not find a dangling name.
@@ -209,7 +211,7 @@ export function createPlayer(name: string, race: string, cls: string, sex: 'male
     learned: [], cast: [], keys: 0, searching: false, dead: false, deathCause: '', turns: 0, kills: 0, recallDepth: 0, facing: 1,
   };
   p.gold = 600 - Math.max(0, (Object.values(stats).reduce((a, b) => a + b, 0) - 60)) * 10 + rng.int(0, 100);
-  p.gold = Math.max(100, p.gold);
+  p.gold = Math.max(MIN_START_GOLD, p.gold);
   return p;
 }
 

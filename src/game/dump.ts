@@ -26,6 +26,7 @@ export function characterDump(g: Game): string {
   L.push(` Armour [${b.ac},${b.toAc >= 0 ? '+' : ''}${b.toAc}] (${totalAc(b)})  To-hit ${b.toHit >= 0 ? '+' : ''}${b.toHit}  To-dam ${b.toDam >= 0 ? '+' : ''}${b.toDam}  Blows ${b.blows}/turn  Shots ${b.shots}/turn x${b.might}  Speed ${b.speed >= 0 ? '+' : ''}${b.speed}`);
   L.push(` Fighting ${meleeSkill(p, b)}  Shooting ${bowSkill(p, b)}  Saving ${b.skills.save}  Stealth ${b.skills.stealth}  Perception ${b.skills.perception}  Searching ${b.skills.search}  Disarming ${b.skills.disarm}  Devices ${b.skills.device}  Infravision ${(r.infra + b.infra) * 10} ft  Food ${foodState(p.food)}`);
   L.push(` Kills ${p.kills}  Score ${score(g)}${g.totalWinner ? '  *** WINNER ***' : ''}${p.dead ? '  Killed by ' + p.deathCause : ''}`);
+  if (p.deaths) L.push(` Deaths ${p.deaths} (last: ${p.lastDeath ? `${p.lastDeath.cause}${p.lastDeath.depth ? ` at ${p.lastDeath.depth * 50} ft` : ' in the town'}` : 'unknown'})`);
   L.push('');
   // What the bloodline and the path have actually granted so far, which the flag list below cannot
   // show on its own: a feature may be a stat, a skill or a rule rather than a resistance.

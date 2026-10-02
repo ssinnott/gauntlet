@@ -2,10 +2,10 @@
 // dungeon with a simple bot for thousands of turns, exercises every store, and checks invariants.
 // No DOM: this proves the game logic stands on its own, and it catches crashes long before a
 // browser would. Usage: node tools/sim.ts [seeds] [turns]
-import { createGame, enterLevel, score } from '../src/game/game.ts';
+import { createGame, enterLevel, score, respawnInTown, isDaytime } from '../src/game/game.ts';
 import { moveDir, goDown, goUp, pickupHere, quaff, read, eat, wield, dropItem, rest, restStep, cast, study, spellsAvailable, newSpellCount, fire, throwItem, aim, useStaff, zap, searchAround, travelTo, travelStep, run, runStep, openChest } from '../src/game/commands.ts';
 import { maintainStore, storeBuy, storeSell, buyPrice, storeWants } from '../src/game/stores.ts';
-import { kindOf, itemName, inscriptionTags, inscriptionConfirms, makeItem, makeAware } from '../src/game/items.ts';
+import { kindOf, itemName, inscriptionTags, inscriptionConfirms, makeItem, makeAware, isAware } from '../src/game/items.ts';
 import { isIgnored, itemQuality, toggleIgnoreKind } from '../src/game/ignore.ts';
 import { needsDir, needsItem } from '../src/game/effects.ts';
 import { serialize, deserialize } from '../src/game/save.ts';
@@ -14,8 +14,8 @@ import { generateLevel } from '../src/game/gen/level.ts';
 import { generateCavern } from '../src/game/gen/cavern.ts';
 import { generateLabyrinth } from '../src/game/gen/labyrinth.ts';
 import { tileAt, monsterAt, passable, createLevel } from '../src/game/level.ts';
-import { T, isPassable, STATS } from '../src/game/types.ts';
-import { randomBuy, randomHero, statCost, POINT_BUDGET, boughtStats } from '../src/game/player.ts';
+import { T, isPassable, STATS, SLOTS } from '../src/game/types.ts';
+import { randomBuy, randomHero, statCost, POINT_BUDGET, boughtStats, MIN_START_GOLD } from '../src/game/player.ts';
 import { CLASSES } from '../src/game/data/classes.ts';
 import { SUBRACES, subracesOf } from '../src/game/data/subraces.ts';
 import { SUBCLASSES, subclassesOf } from '../src/game/data/subclasses.ts';
@@ -656,6 +656,81 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
   console.log(`rooted: ${runs.join(', ')}`);
 }
 
+// 2h. Death and the bot's kit. A hero that dies wakes in the town naked but whole, keeping what it
+// has learnt and its purse. The bot tries an unknown potion when it is safe to (it used to carry
+// every unknown flavour to the grave), puts on what is better and never what feels cursed (it used
+// to wear anything that fitted an empty slot, cursed gloves included), and a hero woken naked with
+// gold buys a weapon, armour and a light, and sells what it was carrying for sale.
+{
+  const quiet = (g: Game): void => {
+    const w = 41, h = 31, lv = createLevel(w, h, 3);
+    lv.depth = 3;
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) { lv.tiles[y * w + x] = T.FLOOR; if (x < w - 4) lv.flags[y * w + x] |= 1 | 2; }
+    g.level = lv;
+    g.flow = null; g.noise = null; g.scent = null; g.scentStamp = 0; g.flowDirty = true;
+    g.player.x = 20; g.player.y = 15;
+  };
+  // Death.
+  {
+    const g = createGame('Fallen', 'human', 'warrior', 'male', 2468);
+    enterLevel(g, 2, 'down');
+    const p = g.player;
+    p.gold = 777; p.statCur.CON = Math.max(3, p.statBase.CON - 3); p.maxExp = 300; p.exp = 100;
+    p.dead = true; p.deathCause = 'a test';
+    respawnInTown(g);
+    ok(!p.dead && p.depth === 0 && g.level.depth === 0 && p.chp === p.mhp, `respawn: the hero is not whole and in the town (${JSON.stringify({ dead: p.dead, depth: p.depth, hp: p.chp, mhp: p.mhp })})`);
+    ok(SLOTS.every(s => !p.equip[s]) && !p.inven.length && !p.quiver.length, 'respawn: the hero woke with something on it');
+    ok(p.gold === 777 && p.exp === 300 && p.statCur.CON === p.statBase.CON, `respawn: the hero lost its gold or its drained stats and experience stayed drained (${p.gold}, ${p.exp}, CON ${p.statCur.CON}/${p.statBase.CON})`);
+    ok(p.deaths === 1 && p.lastDeath?.cause === 'a test' && p.lastDeath.depth === 2 && isDaytime(g.turn), `respawn: the death was not recorded, or the hero woke in the dark (${JSON.stringify(p.lastDeath)})`);
+    // Dying broke: the purse is made up to a new hero's least, enough for a torch and a blade.
+    p.gold = 3; p.dead = true; p.deathCause = 'poverty';
+    respawnInTown(g);
+    ok(p.gold === MIN_START_GOLD && p.deaths === 2, `respawn: a hero that died broke woke with ${p.gold} gold (want ${MIN_START_GOLD})`);
+  }
+  // An unknown potion, in a quiet room.
+  {
+    const g = createGame('Taster', 'human', 'warrior', 'male', 1357);
+    resetAutoplay();
+    quiet(g);
+    g.player.inven.push(makeItem('potion_infravision', 1));
+    passTurn(g);
+    for (let step = 0; step < 40 && !isAware(g.flavors, 'potion_infravision') && !g.flavors.tried.includes('potion_infravision'); step++) autoplayStep(g, step);
+    ok(isAware(g.flavors, 'potion_infravision') || g.flavors.tried.includes('potion_infravision'), 'the bot never tried an unknown potion in a quiet room');
+  }
+  // Better gear on; cursed gear never.
+  {
+    const g = createGame('Dresser', 'human', 'warrior', 'male', 9753);
+    resetAutoplay();
+    quiet(g);
+    const p = g.player, body = p.equip.body;
+    const sword = makeItem('long_sword', 1); sword.toHit = 6; sword.toDam = 6; sword.known = true;
+    const mail = makeItem('metal_brigandine', 1); mail.toAc = -3; mail.cursed = true; mail.flags.push('CURSED'); mail.known = true;
+    const boots = makeItem('hard_leather_boots', 1); boots.sense = 'cursed';
+    p.inven.push(sword, mail, boots);
+    passTurn(g);
+    for (let step = 0; step < 30; step++) autoplayStep(g, step);
+    ok(p.equip.weapon === sword, `the bot did not wield a better sword it was carrying (wielding ${p.equip.weapon && itemName(p.equip.weapon, g.flavors)})`);
+    ok(p.equip.body === body && !p.equip.boots, 'the bot put on gear it knew or felt to be cursed');
+  }
+  // Woken naked in the town, with gold, and junk to sell.
+  {
+    const g = createGame('Pauper', 'human', 'warrior', 'male', 8642);
+    resetAutoplay();
+    g.player.dead = true;
+    respawnInTown(g);
+    g.level.monsters = [];
+    const p = g.player;
+    p.gold = 800;
+    for (let i = 0; i < 2; i++) { const d = makeItem('dagger', 1); d.known = true; p.inven.push(d); }
+    let step = 0;
+    for (; step < 1000 && g.level.depth === 0 && !p.dead && !g.levelChange; step++) autoplayStep(g, step);
+    ok(!!p.equip.weapon && !!p.equip.body && !!p.equip.light, `a hero woken naked in the town with gold left without a weapon, armour or a light (${SLOTS.filter(s => p.equip[s]).join(', ') || 'nothing'} after ${step} steps)`);
+    ok(p.inven.some(it => it.kind === 'potion_clw'), 'a hero woken naked in the town left without a cure');
+    ok(!p.inven.some(it => it.kind === 'dagger'), `a hero went down with the daggers it was carrying to sell (${p.inven.map(it => itemName(it, g.flavors)).join(', ')})`);
+    console.log(`kit: respawn naked and whole; an unknown potion tried; a better sword worn, cursed gear left off; a naked hero re-equipped in ${step} steps with ${p.gold} gold left`);
+  }
+}
+
 // 3. Autoplay: the bot the `=` menu (and ctrl+A) turns on, playing honestly with no cheats.
 {
   let botDeaths = 0, botDepth = 0, botKills = 0, botGold = 0;
@@ -667,16 +742,24 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
     let g: Game;
     try { g = createGame('Bot' + seed, race.id, cls.id, seed % 2 ? 'female' : 'male', seed * 104729); }
     catch (e) { failures++; console.log(`  FAIL: autoplay createGame seed ${seed}: ${(e as Error).stack}`); continue; }
-    let step = 0, idle = 0, worstIdle = 0;
+    let step = 0, idle = 0, worstIdle = 0, deaths = 0;
     // How often the hero walked off each staircase on the level without taking it. Crossing one
     // in a corridor now and then is nothing; the old stairs-and-back pacing did it hundreds of times.
     let walkedOff = new Map<number, number>(), worstPacing = 0, level = g.stats.levelsVisited;
     try {
-      for (step = 0; step < TURNS && !g.player.dead; step++) {
+      for (step = 0; step < TURNS; step++) {
+        // Death is not the end: the hero wakes in the town, naked, and the bot plays on, as in the game.
+        if (g.player.dead) {
+          deaths++;
+          const lev = g.player.lev;
+          respawnInTown(g);
+          ok(!g.player.dead && g.level.depth === 0 && g.player.lev >= lev && g.player.chp === g.player.mhp && !g.player.inven.length && !g.player.equip.weapon, `autoplay seed ${seed}: a respawn left the hero ${JSON.stringify({ dead: g.player.dead, depth: g.level.depth, lev: g.player.lev, hp: g.player.chp })}`);
+          walkedOff = new Map(); level = g.stats.levelsVisited;
+        }
         const turn = g.turn, x = g.player.x, y = g.player.y, depth = g.level.depth;
         const stairs = tileAt(g.level, x, y) === T.STAIRS_DOWN || tileAt(g.level, x, y) === T.STAIRS_UP;
         autoplayStep(g, step);
-        if (g.levelChange) enterLevel(g, g.levelChange.depth, g.levelChange.by);
+        if (g.levelChange && !g.player.dead) enterLevel(g, g.levelChange.depth, g.levelChange.by);
         if (g.stats.levelsVisited !== level) { level = g.stats.levelsVisited; walkedOff = new Map(); }
         else if (stairs && depth > 0 && (g.player.x !== x || g.player.y !== y)) {
           const n = (walkedOff.get(y * g.level.w + x) || 0) + 1;
@@ -696,11 +779,11 @@ ok(maxDepth > 0, 'nobody entered the dungeon');
       console.log(`  FAIL: autoplay seed ${seed} (${cls.id}) crashed at step ${step} depth ${g.level.depth}: ${(e as Error).stack}`);
       continue;
     }
-    if (g.player.dead) botDeaths++;
+    botDeaths += deaths;
     botDepth = Math.max(botDepth, g.player.maxDepth);
     botKills += g.player.kills;
     botGold += g.player.gold;
-    console.log(`  bot ${seed}: ${race.name} ${cls.name} lv ${g.player.lev}, depth ${g.level.depth} (max ${g.player.maxDepth}), ${g.player.kills} kills, ${g.player.gold} gold, ${g.player.dead ? 'died: ' + g.player.deathCause : 'alive'}`);
+    console.log(`  bot ${seed}: ${race.name} ${cls.name} lv ${g.player.lev}, depth ${g.level.depth} (max ${g.player.maxDepth}), ${g.player.kills} kills, ${g.player.gold} gold, ${deaths} death${deaths === 1 ? '' : 's'}`);
   }
   console.log(`autoplay: ${runs} runs, ${botDeaths} deaths, deepest ${botDepth}, ${botKills} kills, ${botGold} gold in hand`);
   ok(botDepth > 0, 'autoplay never found the way into the dungeon');

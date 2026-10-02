@@ -1,10 +1,10 @@
 // The game: creation, level changes, and the turn loop that runs the world between the player's
 // actions. Player commands live in commands.ts.
 import { rng, freshSeed } from '../lib/engine/rng.ts';
-import { type Player, type Level, type Item, type Pos, T, F, SLOTS, DIR_DX, DIR_DY, isPassable } from './types.ts';
+import { type Player, type Level, type Item, type Pos, type Timed, T, F, SLOTS, STATS, DIR_DX, DIR_DY, isPassable } from './types.ts';
 import type { Game } from './state.ts';
 import { MessageLog } from './messages.ts';
-import { createPlayer, computeBonuses, recomputeHp, recomputeMana, adj, makeHistory, subraceOf, subclassOf, hasQuirk } from './player.ts';
+import { createPlayer, computeBonuses, recomputeHp, recomputeMana, adj, makeHistory, subraceOf, subclassOf, hasQuirk, checkLevel, MIN_START_GOLD } from './player.ts';
 import { assignFlavors, makeItem, makeAware, kindOf, itemFlags, senseItem, makeGold, makeObject, itemName, wieldSlot, isWeapon, isArmor, isWearable, getNextItemId, setNextItemId, setArtifactsMade, artifactsMadeList } from './items.ts';
 import { createStores, maintainStore } from './stores.ts';
 import { type GenHooks } from './gen/dungeon.ts';
@@ -348,6 +348,52 @@ function levelFeeling(g: Game): number {
 function feelingText(f: number): string {
   return ['', 'You feel there is something special about this level!', 'Omens of death haunt this place!', 'This place seems murderous.', 'This place seems terribly dangerous.',
     'You feel anxious about this place.', 'You feel nervous about this place.', 'This place does not seem too risky.', 'This place seems reasonably safe.', 'This seems a quiet, peaceful place.', 'What a boring place...'][f] || '';
+}
+
+// ---------------------------------------------------------------------------------------------
+// Death, and getting up again
+
+/**
+ * Death takes what the hero carried, not who the hero is. They wake in the town at full strength,
+ * naked and with an empty pack -- equipment, quiver, keys and every potion gone -- but keep their
+ * level, experience, stats, spells, gold, the depth they reached and everything they have learnt.
+ * A dart trap on the second floor costs a kit, not a career. What the monsters had worked out
+ * about the hero's defences dies with the gear that provided them.
+ *
+ * A hero who falls at night wakes at the next dawn. Naked in the dark town, with the night's
+ * cutpurses and veterans about and only the shop doors lit, a fresh corpse was the likeliest
+ * outcome; by daylight there are fewer of them and they can be seen coming.
+ *
+ * A hero who dies broke has its purse made up to what the poorest new hero starts with. With
+ * nothing at all it woke with no torch and no blade, could not see the dungeon it had to earn
+ * them in, and died again to the first fruit fly, and again after that.
+ */
+export function respawnInTown(g: Game): void {
+  const p = g.player;
+  p.deaths = (p.deaths || 0) + 1;
+  p.lastDeath = { cause: p.deathCause || 'misadventure', depth: p.depth, turn: g.turn };
+  const night = !isDaytime(g.turn);
+  if (night) g.turn = Math.ceil(g.turn / (2 * TOWN_DAWN)) * 2 * TOWN_DAWN + 10;
+  for (const s of SLOTS) p.equip[s] = null;
+  p.inven = []; p.quiver = []; p.keys = 0; p.songs = [];
+  for (const t of Object.keys(p.timed) as Timed[]) p.timed[t] = 0;
+  p.dead = false; p.deathCause = '';
+  // Whole again, which a drained stat is not: ten dart traps had taken a priest from forty-two hit
+  // points to twelve, and every life after that was shorter than the one before.
+  for (const s of STATS) p.statCur[s] = Math.max(p.statCur[s], p.statBase[s]);
+  if (p.exp < p.maxExp) { p.exp = p.maxExp; checkLevel(p); }
+  p.food = Math.max(p.food, Math.floor(FOOD_MAX * 0.6));
+  p.energy = 100;
+  g.monsterKnows = {};
+  g.running = null; g.resting = 0; g.travel = null; g.repeating = null; g.levelChange = null; g.inStore = -1;
+  refreshBonuses(g);
+  p.chp = p.mhp; p.csp = p.msp;
+  const alms = Math.max(0, MIN_START_GOLD - p.gold);
+  p.gold += alms;
+  enterLevel(g, 0, 'none');
+  g.msg.add(`You wake in the town${night ? ' at dawn' : ''} with nothing but your purse. (Death ${p.deaths}: ${p.lastDeath.cause}${p.lastDeath.depth ? ` at ${p.lastDeath.depth * 50} ft` : ''}.)`, '#ffd040');
+  if (alms) g.msg.add(`A priest of the temple presses ${alms} gold into your hand.`, '#ffd040');
+  g.msg.shout(`${CLASS_BY_ID[p.cls].hero.toUpperCase()} RISES AGAIN`, '#ffd040');
 }
 
 /** Spend the player's energy and let the world run until it is the player's turn again. */

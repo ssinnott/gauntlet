@@ -1,8 +1,9 @@
 // Headless: play several random heroes with the same bot `ctrl+A` turns on, logging every action
 // (as the message log records it) turn by turn, so a run can be read back afterwards to see what
-// killed the hero or where it stalled. Prints a depth-reached summary across all runs.
+// killed the hero or where it stalled. A hero who dies wakes in the town, as in the game, and plays
+// on; the summary counts the deaths and reports how deep and how far each hero got regardless.
 // Usage: node tools/autoplayRuns.ts [runs] [turns] [seed]
-import { createGame, enterLevel, score } from '../src/game/game.ts';
+import { createGame, enterLevel, score, respawnInTown } from '../src/game/game.ts';
 import { randomHero } from '../src/game/player.ts';
 import { autoplayStep, resetAutoplay } from '../src/game/autoplay.ts';
 import { makeRng, freshSeed } from '../src/lib/engine/rng.ts';
@@ -26,6 +27,10 @@ interface Summary {
   lev: number; depth: number; maxDepth: number; kills: number; gold: number;
   steps: number; turns: number; dead: boolean; cause: string; score: number; log: string;
   attackers: string[]; swarmed: boolean; maxAttacksInOneStep: number;
+  /** Deaths the hero woke up from, and what caused each. */
+  deaths: number; causes: string[];
+  /** Steps it took to die the first time, or the whole run if it never did. */
+  firstDeathStep: number;
 }
 const summaries: Summary[] = [];
 
@@ -56,11 +61,12 @@ for (let run = 1; run <= RUNS; run++) {
   lines.push(hero.history);
   lines.push('-'.repeat(80));
 
-  let step = 0, lastDepth = -1;
+  let step = 0, lastDepth = -1, firstDeathStep = -1, firstDeathLine = -1;
+  const causes: string[] = [];
   try {
-    for (step = 0; step < TURNS && !g.player.dead; step++) {
+    for (step = 0; step < TURNS; step++) {
       autoplayStep(g, step);
-      if (g.levelChange) { enterLevel(g, g.levelChange.depth, g.levelChange.by); }
+      if (g.levelChange && !g.player.dead) { enterLevel(g, g.levelChange.depth, g.levelChange.by); }
       const msgs = captured.splice(0, captured.length);
       if (g.level.depth !== lastDepth) {
         lines.push(`--- depth ${g.level.depth} (${g.level.depth * 50} ft), turn ${g.turn} ---`);
@@ -69,19 +75,27 @@ for (let run = 1; run <= RUNS; run++) {
       if (msgs.length) {
         lines.push(`[step ${step}] turn ${g.turn} hp ${g.player.chp}/${g.player.mhp} lv ${g.player.lev} @ ${g.player.x},${g.player.y}: ${msgs.join(' ')}`);
       }
+      // The hero wakes in the town, naked, as the game has them do, and the bot plays on.
+      if (g.player.dead) {
+        causes.push(`${g.player.deathCause} (depth ${g.level.depth}, lv ${g.player.lev})`);
+        lines.push(`--- died at turn ${g.turn}, depth ${g.level.depth}: ${g.player.deathCause} ---`);
+        if (firstDeathStep < 0) { firstDeathStep = step; firstDeathLine = lines.length; }
+        respawnInTown(g);
+        lines.push(...captured.splice(0, captured.length).map(t => `[respawn] ${t}`));
+      }
     }
   } catch (e) {
     lines.push(`CRASHED at step ${step}: ${(e as Error).stack}`);
   }
-  if (g.player.dead) lines.push(`--- died at turn ${g.turn}, depth ${g.level.depth}: ${g.player.deathCause} ---`);
-  else lines.push(`--- stopped after ${step} steps, still alive ---`);
+  lines.push(`--- stopped after ${step} steps, ${causes.length} death${causes.length === 1 ? '' : 's'} ---`);
 
   fs.writeFileSync(logPath, lines.join('\n') + '\n');
 
-  // A rough triage of the final fight: every distinct attacker named in the messages logged for
-  // the last 400 turns before death, so a swarm (several names) reads differently from one killer.
+  // A rough triage of the first fatal fight: every distinct attacker named in the messages logged
+  // for the last 40 actions before the first death, so a swarm (several names) reads differently
+  // from one killer.
   const ATTACK = /(The [^.!]+?) (?:hits|misses|crushes|bites|claws|stings|touches|kicks|punches|butts|engulfs|gazes at|casts[^.]*at|breathes[^.]*at|slashes|bashes) you/gi;
-  const tailLines = lines.filter(l => l.startsWith('[step')).slice(-40);
+  const tailLines = firstDeathLine < 0 ? [] : lines.slice(0, firstDeathLine).filter(l => l.startsWith('[step')).slice(-40);
   const attackers = new Set<string>();
   let maxAttacksInOneStep = 0;
   for (const l of tailLines) {
@@ -97,27 +111,31 @@ for (let run = 1; run <= RUNS; run++) {
     run, seed, race: raceName, cls: clsName, sex: hero.sex,
     lev: g.player.lev, depth: g.level.depth, maxDepth: g.player.maxDepth,
     kills: g.player.kills, gold: g.player.gold, steps: step, turns: g.turn,
-    dead: g.player.dead, cause: g.player.deathCause || '', score: score(g), log: logPath,
+    dead: causes.length > 0, cause: causes[0] || '', score: score(g), log: logPath,
     attackers: [...attackers], swarmed, maxAttacksInOneStep,
+    deaths: causes.length, causes, firstDeathStep: firstDeathStep < 0 ? step : firstDeathStep,
   };
   summaries.push(summary);
   const swarmNote = summary.swarmed ? ` [swarm: ${summary.attackers.join(', ') || '(same name, up to ' + summary.maxAttacksInOneStep + ' hits/step)'}]` : '';
-  console.log(`run ${run}: ${summary.race} ${summary.cls} lv ${summary.lev}, depth ${summary.depth} (max ${summary.maxDepth}, ${summary.maxDepth * 50} ft), ${summary.kills} kills, ${summary.gold} gold, ${summary.steps} steps/${summary.turns} turns, ${summary.dead ? 'died: ' + summary.cause : 'alive'}${swarmNote}, score ${summary.score} -> ${summary.log}`);
+  console.log(`run ${run}: ${summary.race} ${summary.cls} lv ${summary.lev}, depth ${summary.depth} (max ${summary.maxDepth}, ${summary.maxDepth * 50} ft), ${summary.kills} kills, ${summary.gold} gold, ${summary.steps} steps/${summary.turns} turns, ${summary.deaths} death${summary.deaths === 1 ? '' : 's'}${summary.deaths ? ' (first: ' + summary.cause + ' at step ' + summary.firstDeathStep + ')' : ''}${swarmNote}, score ${summary.score} -> ${summary.log}`);
 }
 
 console.log('\n' + '='.repeat(80));
-console.log(`${RUNS} runs, seed base ${SEED0}, up to ${TURNS} steps each`);
-const deaths = summaries.filter(s => s.dead).length;
+console.log(`${RUNS} runs, seed base ${SEED0}, ${TURNS} steps each`);
+const died = summaries.filter(s => s.dead).length;
+const deaths = summaries.reduce((n, s) => n + s.deaths, 0);
 const deepest = summaries.reduce((m, s) => Math.max(m, s.maxDepth), 0);
 const highestLev = summaries.reduce((m, s) => Math.max(m, s.lev), 0);
-console.log(`${deaths}/${RUNS} died, deepest reached: ${deepest} (${deepest * 50} ft), highest level: ${highestLev}`);
+const mean = (f: (s: Summary) => number) => (summaries.reduce((n, s) => n + f(s), 0) / Math.max(1, summaries.length)).toFixed(1);
+console.log(`${died}/${RUNS} ever died, ${deaths} deaths in all; deepest reached: ${deepest} (${deepest * 50} ft), highest level: ${highestLev}`);
+console.log(`means: level ${mean(s => s.lev)}, max depth ${mean(s => s.maxDepth)}, deaths ${mean(s => s.deaths)}, steps to first death ${mean(s => s.firstDeathStep)}, kills ${mean(s => s.kills)}`);
 console.log('by depth reached:');
 for (const s of [...summaries].sort((a, b) => b.maxDepth - a.maxDepth)) {
   const swarmNote = s.swarmed ? ` [swarm: ${s.attackers.join(', ') || '(same name)'}]` : s.attackers.length === 1 ? ` [solo: ${s.attackers[0]}]` : '';
-  console.log(`  #${s.run} ${s.race} ${s.cls}: max depth ${s.maxDepth} (${s.maxDepth * 50} ft), lv ${s.lev}, ${s.dead ? 'died: ' + s.cause : 'alive'} after ${s.turns} turns${swarmNote}`);
+  console.log(`  #${s.run} ${s.race} ${s.cls}: max depth ${s.maxDepth} (${s.maxDepth * 50} ft), lv ${s.lev}, ${s.deaths} death${s.deaths === 1 ? '' : 's'}${s.deaths ? ': ' + s.causes.join('; ') : ''}${swarmNote}`);
 }
 const swarmed = summaries.filter(s => s.dead && s.swarmed).length;
 const solo = summaries.filter(s => s.dead && !s.swarmed).length;
-console.log(`\ndeath pattern: ${swarmed}/${deaths} deaths were a pack/pit swarm (several attackers landing hits in the same action), ${solo}/${deaths} look like a single steady attacker`);
+console.log(`\nfirst-death pattern: ${swarmed}/${died} were a pack/pit swarm (several attackers landing hits in the same action), ${solo}/${died} look like a single steady attacker`);
 
 fs.writeFileSync(path.join(outDir, 'summary.json'), JSON.stringify(summaries, null, 2));

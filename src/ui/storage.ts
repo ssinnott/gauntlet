@@ -31,6 +31,11 @@ export interface SaveMeta {
   turn: number;
   savedAt: number;
   dead?: boolean;
+  /** For the title screen's summary of the hero to continue. Absent on slots written before it had one. */
+  sex?: 'male' | 'female';
+  gold?: number;
+  kills?: number;
+  deaths?: number;
 }
 export interface SaveRecord extends SaveMeta { data: string; }
 

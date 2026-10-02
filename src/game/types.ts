@@ -704,6 +704,12 @@ export interface Player extends Pos {
   searching: boolean;
   dead: boolean;
   deathCause: string;
+  /**
+   * How many times the hero has died and woken in the town (see game.ts respawnInTown), and the
+   * last of them. Absent on heroes saved before death stopped being the end.
+   */
+  deaths?: number;
+  lastDeath?: { cause: string; depth: number; turn: number };
   turns: number;
   kills: number;
   /** Word of recall target depth. */

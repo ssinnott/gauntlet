@@ -6,7 +6,7 @@ import { createLoop } from './lib/engine/loop.ts';
 import { setTextDefaults, drawText } from './lib/engine/text.ts';
 import { VIEW_W, VIEW_H, MAP_X, MAP_Y, MAP_W, MAP_H } from './constants.ts';
 import type { Game } from './game/state.ts';
-import { createGame, enterLevel, setAutosaveHook } from './game/game.ts';
+import { createGame, enterLevel, setAutosaveHook, respawnInTown } from './game/game.ts';
 import { serialize, deserialize } from './game/save.ts';
 import * as C from './game/commands.ts';
 import { kindOf, itemName, isAmmo, isWearable, identify, inscriptionConfirms } from './game/items.ts';
@@ -36,6 +36,8 @@ import { MONSTER_BY_ID } from './game/data/monsters.ts';
 import { raceOf } from './game/monster.ts';
 import { playQueuedSounds, playEverySound, speak, unlockAudio, resetNarrator, stopSpeaking } from './ui/audio.ts';
 const LORE_KEY = 'gauntlet-of-angband.lore.v1';
+/** Frames the hero lies fallen before waking in the town: long enough to see what happened. */
+const RESPAWN_DELAY = 100;
 
 setTextDefaults({ shadowColor: '#0a0810', outline: '#0a0810' });
 
@@ -68,6 +70,8 @@ class App implements Ui2 {
   private saveErrorShown = false;
   /** Slots removed this session. A write already in flight for one must not bring it back. */
   private deletedSlots = new Set<string>();
+  /** The frame the hero fell on, while the fall is on screen before they wake in the town; -1 otherwise. */
+  private fallenAt = -1;
 
   constructor() {
     this.input = new Input(this.canvasApi.canvas, (x, y) => this.canvasApi.toInternal(x, y));
@@ -118,17 +122,28 @@ class App implements Ui2 {
       input.onchange = () => {
         const f = input.files && input.files[0]; if (!f) return;
         f.text().then(json => {
-          try { this.g = deserialize(json); this.currentSlot = newSlotId(); this.begin(); this.save(); this.g.msg.add('Save imported.', '#a0ffa0'); }
+          try { this.g = deserialize(json); this.currentSlot = newSlotId(); this.begin(); this.save(); this.g.msg.add('Save imported.', '#a0ffa0'); this.startAutoplay(); }
           catch (e) { console.error(e); alert('That file is not a Gauntlet of Angband save.'); }
         });
       };
       input.click();
     } catch (e) { console.warn('import failed', e); }
   }
-  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string }): void {
+  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string; autoplay?: boolean }): void {
     this.g = createGame(name, race, cls, sex, undefined, { ...extra, lore: this.loadLore() });
     this.currentSlot = newSlotId();
     this.begin();
+    if (extra.autoplay) this.startAutoplay();
+  }
+  /**
+   * Hand the hero to the bot, as the title screen does for every new hero and every hero continued:
+   * the game is played away from the keyboard first, and any key takes it back.
+   */
+  startAutoplay(): void {
+    if (!this.started || this.g.player.dead || this.g.options.autoplay) return;
+    this.g.options.autoplay = true;
+    this.autoStep = 0;
+    this.g.msg.add('The hero takes over. (any key to stop)', '#ffd040');
   }
   push(o: Overlay): void { this.overlays.push(o); }
   pop(): void { this.overlays.pop(); }
@@ -147,6 +162,7 @@ class App implements Ui2 {
     this.queueSave({
       id: this.currentSlot, name: p.name, race: p.race, cls: p.cls, subrace: p.subrace, subclass: p.subclass, lev: p.lev,
       depth: p.depth, maxDepth: p.maxDepth, turn: g.turn, savedAt: Date.now(), dead: p.dead,
+      sex: p.sex, gold: p.gold, kills: p.kills, deaths: p.deaths || 0,
       data: serialize(g),
     });
     this.saveLore();
@@ -185,7 +201,8 @@ class App implements Ui2 {
     this.loadSlot(s.id);
     return true;
   }
-  loadSlot(id: string): void {
+  /** Load a saved hero; `autoplay` hands it straight to the bot, as CONTINUE on the title screen does. */
+  loadSlot(id: string, autoplay = false): void {
     readSave(id).then(json => {
       if (!json) { this.notice = 'That hero could not be read back.'; return; }
       try {
@@ -194,6 +211,7 @@ class App implements Ui2 {
         this.notice = '';
         this.begin();
         this.g.msg.add('Welcome back.', '#ffd040');
+        if (autoplay) this.startAutoplay();
       } catch (e) { console.warn('load failed', e); this.notice = 'That hero could not be read back.'; }
     });
   }
@@ -215,6 +233,7 @@ class App implements Ui2 {
     resetAutoplay();
     this.scoreRecorded = false;
     this.saveErrorShown = false;
+    this.fallenAt = -1;
     if (this.currentSlot) this.deletedSlots.delete(this.currentSlot);
     this.lastAction = null;
     this.renderer.camLock = null;
@@ -232,6 +251,20 @@ class App implements Ui2 {
   /** Bookkeeping after any game action: level change, store entry, death, hero sync, autosave. */
   afterAction(): void {
     const g = this.g;
+    // Death is not the end unless the hero retired: the fall stays on screen for a moment (the
+    // narrator has something to say about it), then they wake in the town with nothing but their
+    // purse, and the autoplay -- if it was playing -- carries on from there.
+    if (g.player.dead && g.player.deathCause !== 'retirement') {
+      g.levelChange = null;
+      if (this.fallenAt < 0) { this.fallenAt = this.frame; g.running = null; g.resting = 0; g.travel = null; g.repeating = null; return; }
+      if (this.frame - this.fallenAt < RESPAWN_DELAY) return;
+      this.fallenAt = -1;
+      respawnInTown(g);
+      this.renderer.active.length = 0;
+      this.renderer.camX = g.player.x * 24 - MAP_W / 2; this.renderer.camY = g.player.y * 24 - MAP_H / 2;
+      this.target = null;
+      this.lastAction = null;
+    }
     if (g.levelChange) {
       const lc = g.levelChange;
       enterLevel(g, lc.depth, lc.by);
@@ -241,6 +274,7 @@ class App implements Ui2 {
     }
     if (g.inStore >= 0 && !g.options.autoplay && !this.overlays.some(o => o instanceof StoreScreen)) this.push(new StoreScreen(g.inStore));
     this.renderer.hero = syncHero(this.renderer.hero!, g.player);
+    // Only retirement reaches here dead: the hero's story is over, the slot goes and the score is kept.
     if (g.player.dead) g.options.autoplay = false;
     if (g.player.dead && !this.overlays.some(o => o instanceof DeathScreen)) {
       if (this.currentSlot) { const id = this.currentSlot; this.currentSlot = null; this.deleteSlot(id); }
@@ -333,7 +367,7 @@ class App implements Ui2 {
     }
     if (!this.started) return;
     const g = this.g;
-    if (g.player.dead) { this.afterAction(); return; }
+    if (g.player.dead) { this.afterAction(); this.renderer.update(g); this.pumpAudio(); return; }
     // Continuous actions run on a timer so the player can watch (and interrupt with any key).
     if (keys.length && (g.running || g.resting || g.travel || g.repeating)) { g.running = null; g.resting = 0; g.travel = null; g.repeating = null; }
     // Autoplay hands the hero back the moment the player touches anything (ctrl+A toggles instead).
@@ -636,7 +670,7 @@ window.__game.api = {
   get game() { return app.g; },
   app,
   newGame: (name: string, race: string, cls: string, sex: 'male' | 'female') => app.newGame(name, race, cls, sex),
-  newGame2: (name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string }) => app.newGame2(name, race, cls, sex, extra),
+  newGame2: (name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string; autoplay?: boolean }) => app.newGame2(name, race, cls, sex, extra),
   dump: () => characterDump(app.g),
   key: (key: string, shift = false, ctrl = false) => { app.handleKeyPublic({ key, shift, ctrl, alt: false, code: '' }); },
   step: () => { app.update(); app.render(); },
@@ -647,7 +681,7 @@ export type GameApi = {
   readonly game: Game;
   app: unknown;
   newGame(name: string, race: string, cls: string, sex: 'male' | 'female'): void;
-  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string }): void;
+  newGame2(name: string, race: string, cls: string, sex: 'male' | 'female', extra: { stats?: Record<Stat, number>; options?: Partial<Options>; history?: string; subrace?: string; subclass?: string; autoplay?: boolean }): void;
   dump(): string;
   key(key: string, shift?: boolean, ctrl?: boolean): void;
   step(): void;
