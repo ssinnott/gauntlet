@@ -626,7 +626,7 @@ export class LookMode implements Overlay {
 // Title, birth and death
 
 /** A line of the title menu: what it does, what it says, its shortcut keys, and where it sits. */
-type TitleChoice = 'continue' | 'new' | 'custom' | 'saves' | 'hall' | 'import' | 'help';
+type TitleChoice = 'continue' | 'new' | 'more' | 'custom' | 'saves' | 'hall' | 'import' | 'help';
 interface TitleRow { id: TitleChoice; label: string; keys: string; y: number; h: number }
 const TITLE_TOP = 222, TITLE_ROW = 22, TITLE_CARD = 40;
 
@@ -634,8 +634,8 @@ const TITLE_TOP = 222, TITLE_ROW = 22, TITLE_CARD = 40;
  * The title screen. The game is meant to be left playing itself, so the two lines that matter are
  * CONTINUE -- the latest hero, summed up underneath so you can see how it is getting on, handed
  * straight back to the bot -- and NEW GAME, which lets chance build a hero and sets the bot to
- * playing it at once. A hero built by hand is still a line further down, and so is the list of
- * every saved hero.
+ * playing it at once. Everything else (building a hero by hand, saved heroes, the hall, import,
+ * help) sits behind the single MORE line.
  */
 export class TitleScreen implements Overlay {
   opaque = true;
@@ -649,11 +649,7 @@ export class TitleScreen implements Overlay {
     const add = (id: TitleChoice, label: string, keys: string, h = TITLE_ROW) => { out.push({ id, label, keys, y, h }); y += h; };
     if (this.latest(ui)) add('continue', 'CONTINUE', 'cC', TITLE_ROW + TITLE_CARD);
     add('new', 'NEW GAME', 'nNrR*');
-    add('custom', 'BUILD A HERO', 'bB');
-    if ((ui as Ui2).slots?.length) add('saves', 'SAVED HEROES', 'sS');
-    add('hall', 'HALL OF HEROES', 'hH');
-    add('import', 'IMPORT SAVE', 'iI');
-    add('help', 'HELP', '?');
+    add('more', 'MORE...', 'mM?bBsShHiI');
     return out;
   }
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
@@ -714,12 +710,19 @@ export class TitleScreen implements Overlay {
       case 'continue': { const s = this.latest(ui); if (s) u.loadSlot(s.id); break; }
       // Chance picks everything and the game begins, with the bot playing as it always is.
       case 'new': { const b = new BirthScreen2(); ui.push(b); b.randomStart(ui); break; }
+      case 'more': this.more(ui); break;
       case 'custom': ui.push(new BirthScreen2()); break;
       case 'saves': ui.push(new SaveSlotsOverlay()); break;
       case 'hall': ui.push(new HighScoresOverlay()); break;
       case 'import': u.importSave(); break;
       case 'help': ui.push(new HelpOverlay()); break;
     }
+  }
+  /** The rarely wanted title options, one level down. */
+  private more(ui: Ui): void {
+    const items: [TitleChoice, string][] = [['custom', 'BUILD A HERO'], ['saves', 'SAVED HEROES'], ['hall', 'HALL OF HEROES'], ['import', 'IMPORT SAVE'], ['help', 'HELP']];
+    const lines = items.filter(([id]) => id !== 'saves' || (ui as Ui2).slots?.length).map(([id, text]) => ({ text, value: id }));
+    ui.push(new Menu('MORE', lines, (l, _i, u) => { u.pop(); this.choose(u, l.value as TitleChoice); }, { width: 360 }));
   }
   click(x: number, y: number, ui: Ui): boolean {
     const rows = this.rows(ui);
