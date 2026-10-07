@@ -70,6 +70,11 @@ function box(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: 
 // ---------------------------------------------------------------------------------------------
 // Generic menu
 
+/** Set by the app each frame: true once the player is using touch, so screens draw bigger targets. */
+export const touchMode = { on: false };
+/** The bottom strip the touch bar covers; menus stay clear of it. */
+const TOUCH_BAR_H = 64;
+
 export interface MenuLine { text: string; color?: string; value?: unknown; disabled?: boolean; right?: string; icon?: string; iconColor?: string; }
 export class Menu implements Overlay {
   sel = 0; scroll = 0;
@@ -77,10 +82,19 @@ export class Menu implements Overlay {
     while (this.sel < lines.length && lines[this.sel].disabled) this.sel++;
     if (this.sel >= lines.length) this.sel = 0;
   }
+  /** Where the box and its rows sit. On touch the rows are tall enough to hit with a finger. */
+  private geom(): { w: number; rows: number; rowH: number; h: number; x: number; y: number; top: number; size: 1 | 2 } {
+    const big = touchMode.on, rowH = big ? 26 : 12, size = big ? 2 : 1;
+    const w = Math.min(VIEW_W - 16, big ? Math.max(this.opts.width || 520, 480) : this.opts.width || 520);
+    const extra = (this.opts.footer ? 16 : 0) + 12, head = big ? 50 : 40;
+    const room = VIEW_H - (big ? TOUCH_BAR_H : 0) - head - extra - 8;
+    const rows = Math.max(1, Math.min(this.lines.length, 22, Math.floor(room / rowH)));
+    const h = head + rows * rowH + extra;
+    const x = Math.round((VIEW_W - w) / 2), y = Math.round(((VIEW_H - (big ? TOUCH_BAR_H : 0)) - h) / 2);
+    return { w, rows, rowH, h, x, y, top: y + (big ? 42 : 34), size };
+  }
   draw(ctx: CanvasRenderingContext2D): void {
-    const w = this.opts.width || 520, rows = Math.min(this.lines.length, 22);
-    const h = 40 + rows * 12 + (this.opts.footer ? 16 : 0) + 12;
-    const x = Math.round((VIEW_W - w) / 2), y = Math.round((VIEW_H - h) / 2);
+    const { w, rows, rowH, h, x, y, top, size } = this.geom();
     box(ctx, x, y, w, h, this.titleText);
     if (this.sel < this.scroll) this.scroll = this.sel;
     if (this.sel >= this.scroll + rows) this.scroll = this.sel - rows + 1;
@@ -88,13 +102,13 @@ export class Menu implements Overlay {
       const li = i + this.scroll;
       if (li >= this.lines.length) break;
       const l = this.lines[li];
-      const ly = y + 34 + i * 12;
-      if (li === this.sel) { ctx.fillStyle = 'rgba(255,224,96,0.15)'; ctx.fillRect(x + 6, ly - 2, w - 12, 11); }
+      const ly = top + i * rowH;
+      if (li === this.sel) { ctx.fillStyle = 'rgba(255,224,96,0.15)'; ctx.fillRect(x + 6, ly - 2, w - 12, rowH - 1); }
       const letter = this.opts.letters === false ? '' : LETTERS[li] + ') ';
       let tx = x + 12;
-      if (l.icon) { drawItemIcon(ctx, l.icon, tx + 6, ly + 3, l.iconColor || TEXT, 0.6); tx += 14; }
-      drawText(ctx, letter + l.text, tx, ly, { size: 1, color: l.disabled ? '#5a5666' : l.color || TEXT });
-      if (l.right) drawText(ctx, l.right, x + w - 12, ly, { size: 1, color: l.disabled ? '#5a5666' : DIM, align: 'right' });
+      if (l.icon) { drawItemIcon(ctx, l.icon, tx + 6, ly + rowH / 4, l.iconColor || TEXT, 0.6); tx += 14; }
+      drawText(ctx, letter + l.text, tx, ly + (rowH - 12) / 2 * (size - 1), { size, color: l.disabled ? '#5a5666' : l.color || TEXT });
+      if (l.right) drawText(ctx, l.right, x + w - 12, ly + (rowH - 12) / 2 * (size - 1), { size, color: l.disabled ? '#5a5666' : DIM, align: 'right' });
     }
     if (this.lines.length > rows) drawText(ctx, `${this.scroll + 1}-${Math.min(this.lines.length, this.scroll + rows)} OF ${this.lines.length}`, x + w - 12, y + 10, { size: 1, color: DIM, align: 'right' });
     if (this.opts.footer) drawText(ctx, this.opts.footer, x + w / 2, y + h - 14, { size: 1, color: DIM, align: 'center' });
@@ -120,12 +134,10 @@ export class Menu implements Overlay {
     this.sel = s;
   }
   click(x: number, y: number, ui: Ui): boolean {
-    const w = this.opts.width || 520, rows = Math.min(this.lines.length, 22);
-    const h = 40 + rows * 12 + (this.opts.footer ? 16 : 0) + 12;
-    const bx = Math.round((VIEW_W - w) / 2), by = Math.round((VIEW_H - h) / 2);
+    const { w, rowH, h, x: bx, y: by, top } = this.geom();
     if (x < bx || x > bx + w || y < by || y > by + h) { ui.pop(); this.opts.onCancel?.(ui); return true; }
-    const i = Math.floor((y - by - 32) / 12) + this.scroll;
-    if (i >= 0 && i < this.lines.length && !this.lines[i].disabled) { this.sel = i; this.onPick(this.lines[i], i, ui); }
+    const i = Math.floor((y - top + 2) / rowH) + this.scroll;
+    if (y >= top - 2 && i >= 0 && i < this.lines.length && !this.lines[i].disabled) { this.sel = i; this.onPick(this.lines[i], i, ui); }
     return true;
   }
 }
@@ -626,16 +638,20 @@ export class LookMode implements Overlay {
 // Title, birth and death
 
 /** A line of the title menu: what it does, what it says, its shortcut keys, and where it sits. */
-type TitleChoice = 'continue' | 'new' | 'custom' | 'saves' | 'hall' | 'import' | 'help';
+type TitleChoice = 'continue' | 'new' | 'more' | 'custom' | 'saves' | 'hall' | 'import' | 'help';
+/** Shortcut keys for the options behind MORE. */
+const MORE_KEYS: [string, TitleChoice][] = [['bB', 'custom'], ['sS', 'saves'], ['hH', 'hall'], ['iI', 'import'], ['?', 'help']];
 interface TitleRow { id: TitleChoice; label: string; keys: string; y: number; h: number }
-const TITLE_TOP = 222, TITLE_ROW = 22, TITLE_CARD = 40;
+const TITLE_TOP = 222, TITLE_CARD = 40;
+/** Row height on the title screen: roomy under a finger. */
+const titleRow = (): number => touchMode.on ? 44 : 22;
 
 /**
  * The title screen. The game is meant to be left playing itself, so the two lines that matter are
  * CONTINUE -- the latest hero, summed up underneath so you can see how it is getting on, handed
  * straight back to the bot -- and NEW GAME, which lets chance build a hero and sets the bot to
- * playing it at once. A hero built by hand is still a line further down, and so is the list of
- * every saved hero.
+ * playing it at once. Everything else (building a hero by hand, saved heroes, the hall, import,
+ * help) sits behind the single MORE line.
  */
 export class TitleScreen implements Overlay {
   opaque = true;
@@ -646,14 +662,10 @@ export class TitleScreen implements Overlay {
   rows(ui: Ui): TitleRow[] {
     const out: TitleRow[] = [];
     let y = TITLE_TOP;
-    const add = (id: TitleChoice, label: string, keys: string, h = TITLE_ROW) => { out.push({ id, label, keys, y, h }); y += h; };
-    if (this.latest(ui)) add('continue', 'CONTINUE', 'cC', TITLE_ROW + TITLE_CARD);
+    const add = (id: TitleChoice, label: string, keys: string, h = titleRow()) => { out.push({ id, label, keys, y, h }); y += h; };
+    if (this.latest(ui)) add('continue', 'CONTINUE', 'cC', titleRow() + TITLE_CARD);
     add('new', 'NEW GAME', 'nNrR*');
-    add('custom', 'BUILD A HERO', 'bB');
-    if ((ui as Ui2).slots?.length) add('saves', 'SAVED HEROES', 'sS');
-    add('hall', 'HALL OF HEROES', 'hH');
-    add('import', 'IMPORT SAVE', 'iI');
-    add('help', 'HELP', '?');
+    add('more', 'MORE...', 'mM');
     return out;
   }
   draw(ctx: CanvasRenderingContext2D, ui: Ui): void {
@@ -670,11 +682,13 @@ export class TitleScreen implements Overlay {
     const rows = this.rows(ui);
     if (this.sel >= rows.length) this.sel = 0;
     rows.forEach((r, i) => {
-      drawText(ctx, (this.sel === i ? '> ' : '  ') + r.label, VIEW_W / 2, r.y, { size: 2, color: this.sel === i ? HI : TEXT, align: 'center' });
-      if (r.id === 'continue') this.drawCard(ctx, ui, r.y + TITLE_ROW - 2);
+      drawText(ctx, (this.sel === i ? '> ' : '  ') + r.label, VIEW_W / 2, r.y + (touchMode.on ? 6 : 0), { size: touchMode.on ? 3 : 2, color: this.sel === i ? HI : TEXT, align: 'center' });
+      if (r.id === 'continue') this.drawCard(ctx, ui, r.y + titleRow() - 2 + (touchMode.on ? 6 : 0));
     });
     const last = rows[rows.length - 1];
-    drawText(ctx, 'ARROWS + ENTER    THE HERO PLAYS ITSELF    WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, last.y + last.h + 6, { size: 1, color: '#5a5666', align: 'center' });
+    drawText(ctx, touchMode.on ? 'TAP A LINE    THE HERO PLAYS ITSELF' : 'ARROWS + ENTER    THE HERO PLAYS ITSELF    WARRIOR NEEDS FOOD BADLY', VIEW_W / 2, last.y + last.h + 6, { size: 1, color: '#5a5666', align: 'center' });
+    // Held upright, a phone shrinks the whole screen to a sliver: ask for the wide view.
+    if (touchMode.on && typeof window !== 'undefined' && window.innerHeight > window.innerWidth) drawText(ctx, 'TURN YOUR PHONE SIDEWAYS FOR BIGGER BUTTONS', VIEW_W / 2, 12, { size: 2, color: HI, align: 'center' });
   }
   /** Who the latest hero is and how far it has got, with the hero itself standing beside it. */
   private drawCard(ctx: CanvasRenderingContext2D, ui: Ui, y: number): void {
@@ -705,6 +719,8 @@ export class TitleScreen implements Overlay {
     else {
       const i = rows.findIndex(r => r.keys.includes(e.key));
       if (i >= 0) { this.sel = i; this.choose(ui, rows[i].id); }
+      // The options behind MORE keep their own keys, so they stay one press away.
+      else { const hidden = MORE_KEYS.find(([keys]) => keys.includes(e.key)); if (hidden) this.choose(ui, hidden[1]); }
     }
     return true;
   }
@@ -714,6 +730,7 @@ export class TitleScreen implements Overlay {
       case 'continue': { const s = this.latest(ui); if (s) u.loadSlot(s.id); break; }
       // Chance picks everything and the game begins, with the bot playing as it always is.
       case 'new': { const b = new BirthScreen2(); ui.push(b); b.randomStart(ui); break; }
+      case 'more': this.more(ui); break;
       case 'custom': ui.push(new BirthScreen2()); break;
       case 'saves': ui.push(new SaveSlotsOverlay()); break;
       case 'hall': ui.push(new HighScoresOverlay()); break;
@@ -721,10 +738,16 @@ export class TitleScreen implements Overlay {
       case 'help': ui.push(new HelpOverlay()); break;
     }
   }
+  /** The rarely wanted title options, one level down. */
+  private more(ui: Ui): void {
+    const items: [TitleChoice, string][] = [['custom', 'BUILD A HERO'], ['saves', 'SAVED HEROES'], ['hall', 'HALL OF HEROES'], ['import', 'IMPORT SAVE'], ['help', 'HELP']];
+    const lines = items.filter(([id]) => id !== 'saves' || (ui as Ui2).slots?.length).map(([id, text]) => ({ text, value: id }));
+    ui.push(new Menu('MORE', lines, (l, _i, u) => { u.pop(); this.choose(u, l.value as TitleChoice); }, { width: 360 }));
+  }
   click(x: number, y: number, ui: Ui): boolean {
     const rows = this.rows(ui);
     const i = rows.findIndex(r => y >= r.y - 6 && y < r.y - 6 + r.h);
-    if (i >= 0 && Math.abs(x - VIEW_W / 2) < (rows[i].id === 'continue' ? 330 : 140)) { this.sel = i; this.choose(ui, rows[i].id); }
+    if (i >= 0 && Math.abs(x - VIEW_W / 2) < (touchMode.on ? 400 : rows[i].id === 'continue' ? 330 : 140)) { this.sel = i; this.choose(ui, rows[i].id); }
     return true;
   }
 }
