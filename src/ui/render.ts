@@ -1,7 +1,7 @@
 // The map view: a 3/4 top-down dungeon in Gauntlet colours. Floors are flat, walls are raised blocks
 // with a lit top and a shaded front face, and everything on a tile is drawn in row order so a body
 // south of a wall overlaps it. Effects (bolts, balls, hit numbers, shakes) animate here too.
-import { TILE, WALL_H, MAP_X, MAP_Y, MAP_W, MAP_H, MAP_COLS, MAP_ROWS } from '../constants.ts';
+import { TILE, WALL_H, MAP_X, MAP_Y, MAP_W, MAP_H } from '../constants.ts';
 import { type Level, type Monster, type Pos, T, F, isShop, isWall } from '../game/types.ts';
 import { tileAt, flagAt, auxAt } from '../game/level.ts';
 import { raceOf, hasMFlag } from '../game/monster.ts';
@@ -40,6 +40,11 @@ export class MapRenderer {
   hilite: Pos[] = [];
   /** Locate mode: the camera centres on this tile instead of the player. */
   camLock: Pos | null = null;
+  /** Magnification of the map: 1 on a desktop, 2 on a phone, where fewer, bigger squares read better. */
+  zoom = 1;
+  /** The map's size in world pixels at the current zoom: what the camera actually has to cover. */
+  get viewW(): number { return MAP_W / this.zoom; }
+  get viewH(): number { return MAP_H / this.zoom; }
 
   /** Per-frame update: interpolate positions, tick effects. */
   update(g: Game, dtFrames = 1): void {
@@ -57,11 +62,12 @@ export class MapRenderer {
     // Camera follows the visual position and clamps to the level.
     const lv = g.level;
     const cx = this.camLock ? this.camLock.x : p.vx!, cy = this.camLock ? this.camLock.y : p.vy!;
-    const wx = (cx + 0.5) * TILE - MAP_W / 2, wy = (cy + 0.5) * TILE - MAP_H / 2;
-    const maxX = Math.max(0, lv.w * TILE - MAP_W), maxY = Math.max(0, lv.h * TILE - MAP_H);
+    const vw = this.viewW, vh = this.viewH;
+    const wx = (cx + 0.5) * TILE - vw / 2, wy = (cy + 0.5) * TILE - vh / 2;
+    const maxX = Math.max(0, lv.w * TILE - vw), maxY = Math.max(0, lv.h * TILE - vh);
     const tx = clamp(wx, 0, maxX), ty = clamp(wy, 0, maxY);
-    this.camX = lv.w * TILE < MAP_W ? (lv.w * TILE - MAP_W) / 2 : lerp(this.camX, tx, 0.25);
-    this.camY = lv.h * TILE < MAP_H ? (lv.h * TILE - MAP_H) / 2 : lerp(this.camY, ty, 0.25);
+    this.camX = lv.w * TILE < vw ? (lv.w * TILE - vw) / 2 : lerp(this.camX, tx, 0.25);
+    this.camY = lv.h * TILE < vh ? (lv.h * TILE - vh) / 2 : lerp(this.camY, ty, 0.25);
     // Drain new effects.
     for (const fx of g.fx) {
       const life = fx.type === 'bolt' ? Math.max(6, fx.path.length * 1.5) : fx.type === 'ball' ? 16 : fx.type === 'hit' ? 40 : fx.type === 'flash' ? 12 : fx.type === 'shake' ? 1 : fx.type === 'missile' ? Math.max(6, fx.path.length * 2) : 10;
@@ -86,19 +92,22 @@ export class MapRenderer {
   busy(): boolean { return this.active.some(a => a.fx.type === 'bolt' || a.fx.type === 'ball' || a.fx.type === 'missile'); }
 
   /** Screen position (internal px) of a tile's top-left. */
-  tileToScreen(x: number, y: number): Pos { return { x: MAP_X + Math.round(x * TILE - this.camX), y: MAP_Y + Math.round(y * TILE - this.camY) }; }
-  screenToTile(sx: number, sy: number): Pos { return { x: Math.floor((sx - MAP_X + this.camX) / TILE), y: Math.floor((sy - MAP_Y + this.camY) / TILE) }; }
+  tileToScreen(x: number, y: number): Pos { return { x: MAP_X + Math.round((x * TILE - this.camX) * this.zoom), y: MAP_Y + Math.round((y * TILE - this.camY) * this.zoom) }; }
+  screenToTile(sx: number, sy: number): Pos { return { x: Math.floor(((sx - MAP_X) / this.zoom + this.camX) / TILE), y: Math.floor(((sy - MAP_Y) / this.zoom + this.camY) / TILE) }; }
 
   draw(ctx: CanvasRenderingContext2D, g: Game): void {
     const lv = g.level, p = g.player;
     ctx.save();
     ctx.beginPath(); ctx.rect(MAP_X, MAP_Y, MAP_W, MAP_H); ctx.clip();
     ctx.fillStyle = COL.void; ctx.fillRect(MAP_X, MAP_Y, MAP_W, MAP_H);
+    // Zoom about the map's top-left; everything below draws in unzoomed world pixels.
+    const vw = this.viewW, vh = this.viewH;
+    if (this.zoom !== 1) { ctx.translate(MAP_X, MAP_Y); ctx.scale(this.zoom, this.zoom); ctx.translate(-MAP_X, -MAP_Y); }
     let ox = 0, oy = 0;
     if (this.shake > 0) { ox = Math.round((Math.random() - 0.5) * this.shake * 2); oy = Math.round((Math.random() - 0.5) * this.shake * 2); }
     const camX = Math.round(this.camX) - ox, camY = Math.round(this.camY) - oy;
     const x0 = Math.max(0, Math.floor(camX / TILE) - 1), y0 = Math.max(0, Math.floor(camY / TILE) - 2);
-    const x1 = Math.min(lv.w - 1, x0 + MAP_COLS + 2), y1 = Math.min(lv.h - 1, y0 + MAP_ROWS + 3);
+    const x1 = Math.min(lv.w - 1, x0 + Math.ceil(vw / TILE) + 2), y1 = Math.min(lv.h - 1, y0 + Math.ceil(vh / TILE) + 3);
     const sx = (x: number) => MAP_X + x * TILE - camX;
     const sy = (y: number) => MAP_Y + y * TILE - camY;
     const halluc = p.timed.image > 0;
@@ -188,8 +197,8 @@ export class MapRenderer {
     // Cursor.
     if (this.cursor) { const c = this.cursor; ctx.strokeStyle = '#ffe060'; ctx.lineWidth = 2; ctx.strokeRect(sx(c.x) + 1, sy(c.y) + 1, TILE - 2, TILE - 2); }
     // Blindness / hallucination overlays.
-    if (p.timed.blind) { ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(MAP_X, MAP_Y, MAP_W, MAP_H); }
-    if (halluc) { ctx.fillStyle = `hsla(${(this.phase * 720) % 360},80%,50%,0.12)`; ctx.fillRect(MAP_X, MAP_Y, MAP_W, MAP_H); }
+    if (p.timed.blind) { ctx.fillStyle = 'rgba(0,0,0,0.75)'; ctx.fillRect(MAP_X, MAP_Y, vw, vh); }
+    if (halluc) { ctx.fillStyle = `hsla(${(this.phase * 720) % 360},80%,50%,0.12)`; ctx.fillRect(MAP_X, MAP_Y, vw, vh); }
     ctx.restore();
   }
 

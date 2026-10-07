@@ -6,6 +6,7 @@
 import { createCanvas } from './lib/engine/canvas.ts';
 import { createLoop } from './lib/engine/loop.ts';
 import { setTextDefaults, drawText } from './lib/engine/text.ts';
+import { rrect } from './lib/art/shapes.ts';
 import { VIEW_W, VIEW_H, MAP_X, MAP_Y, MAP_W, MAP_H } from './constants.ts';
 import type { Game } from './game/state.ts';
 import { createGame, enterLevel, setAutosaveHook, respawnInTown } from './game/game.ts';
@@ -19,7 +20,7 @@ import { type SaveMeta, type SaveRecord, listSaves, readSave, writeSave, deleteS
 import { MapRenderer } from './ui/render.ts';
 import { drawHud, drawMessageBar, drawBanner } from './ui/hud.ts';
 import { buildHero, syncHero } from './ui/hero.ts';
-import { type Overlay, Confirm, InventoryScreen, spellMenu, CharSheet, MapOverlay, HelpOverlay, MessagesOverlay, LookMode, TitleScreen, DeathScreen } from './ui/screens.ts';
+import { type Overlay, Menu, touchMode, Confirm, InventoryScreen, spellMenu, CharSheet, MapOverlay, HelpOverlay, MessagesOverlay, LookMode, TitleScreen, DeathScreen } from './ui/screens.ts';
 import { KnowledgeOverlay, OptionsOverlay, HighScoresOverlay, LocateMode, RecallOverlay, IgnoreOverlay, type Ui2 } from './ui/screens2.ts';
 import { characterDump } from './game/dump.ts';
 import { type ScoreEntry, SCORES_KEY, scoreEntry, addScore } from './game/scores.ts';
@@ -268,7 +269,7 @@ class App implements Ui2 {
   private arrived(): void {
     const p = this.g.player;
     this.renderer.active.length = 0;
-    this.renderer.camX = p.x * 24 - MAP_W / 2; this.renderer.camY = p.y * 24 - MAP_H / 2;
+    this.renderer.camX = p.x * 24 - this.renderer.viewW / 2; this.renderer.camY = p.y * 24 - this.renderer.viewH / 2;
     this.renderer.camLock = null;
     this.overlays = this.overlays.filter(o => !(o instanceof LookMode || o instanceof LocateMode));
     this.cursor = null;
@@ -278,6 +279,8 @@ class App implements Ui2 {
    * Is the touch bar showing? Only under an open screen -- the hero plays itself, so the map has
    * nothing to press -- and only once a touch has happened, or the option forces it.
    */
+  /** Is the player on touch (or has asked for the touch controls)? Bigger targets and a closer map. */
+  private touchActive(): boolean { return this.touch.detected || (this.started && this.g.options.touchControls); }
   touchVisible(): boolean { return this.overlays.length > 0 && (this.touch.detected || (this.started && this.g.options.touchControls)); }
   /**
    * Turn taps that landed on the touch bar into the key presses they stand for, and hand back the
@@ -335,6 +338,8 @@ class App implements Ui2 {
     if (keys.length || clicks.length) unlockAudio();
     // A real touch turns the touch bar on for good.
     if (!this.touch.detected && clicks.some(c => c.pointerType === 'touch')) this.touch.detected = true;
+    touchMode.on = this.touchActive();
+    this.renderer.zoom = touchMode.on ? 2 : 1;
     // The touch bar gets first refusal on every tap; what it does not want falls through to the map
     // and to the overlays, so a mouse keeps behaving exactly as before.
     const taps = this.consumeTouch(clicks);
@@ -374,10 +379,35 @@ class App implements Ui2 {
       drawBanner(ctx, this.g);
       // Store name when standing next to a door.
       if (this.g.level.depth === 0) this.drawShopLabels(ctx);
+      if (!top && touchMode.on) this.drawMenuButton(ctx);
     }
     for (const o of this.overlays) o.draw(ctx, this);
     if (this.touchVisible()) this.touch.draw(ctx, this.topWantsYesNo());
     this.canvasApi.present();
+  }
+  /** The way back out, for a phone: the map has no buttons, so one small MENU sits in its corner. */
+  private menuButton(): { x: number; y: number; w: number; h: number } { return { x: MAP_X + MAP_W - 112, y: MAP_Y + 8, w: 104, h: 44 }; }
+  private drawMenuButton(ctx: CanvasRenderingContext2D): void {
+    const b = this.menuButton();
+    ctx.save(); ctx.globalAlpha = 0.85;
+    rrect(ctx, b.x, b.y, b.w, b.h, 6, 'rgba(24,20,36,0.9)', '#7a7490', 2);
+    drawText(ctx, 'MENU', b.x + b.w / 2, b.y + b.h / 2 - 7, { size: 2, color: '#ffe060', align: 'center' });
+    ctx.restore();
+  }
+  /** Resume, the screens worth reaching by touch, and the way back to the title (saving first). */
+  openGameMenu(): void {
+    const items: [string, () => void][] = [
+      ['RESUME', () => {}],
+      ['INVENTORY', () => this.push(new InventoryScreen('inven'))],
+      ['EQUIPMENT', () => this.push(new InventoryScreen('equip'))],
+      ['CHARACTER', () => this.push(new CharSheet())],
+      ['MAP', () => this.push(new MapOverlay())],
+      ['MESSAGES', () => this.push(new MessagesOverlay())],
+      ['OPTIONS', () => this.push(new OptionsOverlay())],
+      ['HELP', () => this.push(new HelpOverlay())],
+      ['SAVE AND MAIN MENU', () => { this.save(); this.quitToTitle(); }],
+    ];
+    this.push(new Menu('MENU', items.map(([text]) => ({ text })), (_l, i, u) => { u.pop(); items[i][1](); }, { letters: false, width: 360 }));
   }
   private drawShopLabels(ctx: CanvasRenderingContext2D): void {
     const g = this.g, p = g.player;
@@ -418,6 +448,7 @@ class App implements Ui2 {
       return;
     }
     switch (e.key) {
+      case 'Escape': this.openGameMenu(); break;
       case '~': case '|': this.push(new KnowledgeOverlay()); break;
       case '=': this.push(new OptionsOverlay()); break;
       case 'V': this.push(new HighScoresOverlay()); break;
@@ -435,6 +466,8 @@ class App implements Ui2 {
   }
   /** The mouse only looks too: right-click the map to look there, or click the side panel for the pack. */
   handleClick(x: number, y: number, button: number): void {
+    const mb = this.menuButton();
+    if (touchMode.on && x >= mb.x - 4 && x <= mb.x + mb.w + 4 && y >= mb.y - 4 && y <= mb.y + mb.h + 8) { this.openGameMenu(); return; }
     if (x >= MAP_X && x < MAP_X + MAP_W && y >= MAP_Y && y < MAP_Y + MAP_H) {
       if (button === 2) { this.cursor = this.renderer.screenToTile(x, y); this.push(new LookMode()); }
     } else if (x >= VIEW_W - 216) {
